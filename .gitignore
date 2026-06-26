@@ -1,4 +1,5 @@
 secrets.txt
+git_credentials.txt
 .env
 *.env
 
