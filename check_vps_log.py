@@ -12,7 +12,7 @@ with open(secrets_path, encoding="utf-8") as f:
             k, v = line.split("=", 1)
             secrets[k.strip()] = v.strip()
 
-VPS_IP       = secrets.get("VPS_IP",       "46.224.133.16")
+VPS_IP       = secrets.get("VPS_IP",       "5.75.250.104")
 VPS_USER     = secrets.get("VPS_USER",     "root")
 VPS_PASSWORD = secrets.get("VPS_PASSWORD", "")
 

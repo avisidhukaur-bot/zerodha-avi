@@ -73,9 +73,9 @@ def _follow_to_request_token(sess, start_url: str) -> str:
     # Build a set of IPs/hosts that are OUR redirect targets — don't connect to these
     try:
         import db as _db
-        vps_ip = _db.get("VPS_IP", "46.224.133.16").strip()
+        vps_ip = _db.get("VPS_IP", "5.75.250.104").strip()
     except Exception:
-        vps_ip = "46.224.133.16"
+        vps_ip = "5.75.250.104"
     intercept_hosts = {"127.0.0.1", "localhost", vps_ip}
 
     current_url = start_url

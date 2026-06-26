@@ -24,7 +24,7 @@ with open(secrets_path, encoding="utf-8") as f:
             k, v = line.split("=", 1)
             secrets[k.strip()] = v.strip()
 
-VPS_IP       = secrets.get("VPS_IP",       "46.224.133.16")
+VPS_IP       = secrets.get("VPS_IP",       "5.75.250.104")
 VPS_USER     = secrets.get("VPS_USER",     "root")
 VPS_PASSWORD = secrets.get("VPS_PASSWORD", "")
 
@@ -78,7 +78,7 @@ run("systemctl status zerodha_engine.service zerodha_dashboard.service 2>/dev/nu
 run("ss -tlnp | grep -E '900[0-9]'", "PORTS 9000-9009 STATUS (Including 9007)")
 
 # 6. Check VPN / current public IP
-run("curl -s https://api.ipify.org", "CURRENT PUBLIC IP (Must be 46.224.133.16)")
+run("curl -s https://api.ipify.org", "CURRENT PUBLIC IP (Must be 5.75.250.104)")
 
 # 7. Last 30 lines of Zerodha engine log
 run("tail -30 /root/BHARAT-SYSTEMS/ZERODHA-OS/zerodha_engine.log 2>/dev/null || echo 'Log file not found yet'", "ZERODHA ENGINE LOG (Last 30 lines)")

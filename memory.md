@@ -2,9 +2,9 @@
 _Last updated: 17-Jun-2026_
 
 ## 🖥️ VPN & IP Settings
-- **Whitelisted IP (PERMANENT — NEVER CHANGE)**: `46.224.133.16` (VPN IP)
-- **VPS Real IP**: `157.49.182.222` (do NOT use as trading IP)
-- **IP Guard**: Engine checks public IP before each cycle. If not `46.224.133.16`, trading pauses + Telegram & ntfy alert.
+- **Whitelisted IP (PERMANENT — NEVER CHANGE)**: `5.75.250.104`
+- **VPS Real IP**: `5.75.250.104`
+- **IP Guard**: Engine checks public IP before each cycle. If not `5.75.250.104`, trading pauses + Telegram & ntfy alert.
 
 ## 🧱 Lego System Convention
 - **lego0_diagnose.py**: VPS diagnostics (logs, status, connections, port checks).
@@ -12,7 +12,7 @@ _Last updated: 17-Jun-2026_
 
 ## ⚙️ Ports and Services
 - **Dashboard Port**: `9007` (PERMANENT — reserved strictly for Zerodha OS. Do not change!)
-- **Dashboard URL**: http://46.224.133.16:9007
+- **Dashboard URL**: http://5.75.250.104:9007
 - **Systemd Services**: `zerodha_engine.service`, `zerodha_dashboard.service`
 - **VPS Remote Path**: `/root/BHARAT-SYSTEMS/ZERODHA-OS`
 - **⚠️ CRITICAL PORT RULE (DO NOT TOUCH PORT 9004):** Port `9004` is strictly reserved for the operator's stable HDFC option selling system (`hdfc_dashboard.service` and `hdfc_engine.service` located in `/root/BHARAT-SYSTEMS/HDFC-OPTIONSELLING`). Never stop, disable, modify, or host anything on port 9004, and never touch the HDFC system running outside the current Zerodha OS directory!

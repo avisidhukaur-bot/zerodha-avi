@@ -24,7 +24,7 @@ with open(secrets_path, encoding="utf-8") as f:
             k, v = line.split("=", 1)
             secrets[k.strip()] = v.strip()
 
-VPS_IP       = secrets.get("VPS_IP",       "46.224.133.16")
+VPS_IP       = secrets.get("VPS_IP",       "5.75.250.104")
 VPS_USER     = secrets.get("VPS_USER",     "root")
 VPS_PASSWORD = secrets.get("VPS_PASSWORD", "")
 
@@ -172,5 +172,5 @@ run_ssh("ss -tlnp | grep 9007", "Port 9007 listening check")
 client.close()
 print("\n" + "=" * 60)
 print("  ZERODHA OS DEPLOYMENT SUCCESSFUL!")
-print("  Dashboard: http://46.224.133.16:9007")
+print("  Dashboard: http://5.75.250.104:9007")
 print("=" * 60)

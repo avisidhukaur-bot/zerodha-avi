@@ -771,7 +771,7 @@ def render_sidebar():
         st.divider()
         st.markdown(
             '<div style="text-align:center;font-size:0.65rem;color:#374151;">'
-            'v1.01 BASE MODEL | NIFTY Only<br/>VPS 46.224.133.16:9007'
+            'v1.01 BASE MODEL | NIFTY Only<br/>VPS 5.75.250.104:9007'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -797,7 +797,7 @@ def render_header(portfolio: dict):
         <div>
             <div class="zerodha-title">📈 Zerodha OptionSelling Engine</div>
             <div class="zerodha-subtitle">
-                NIFTY Options SELL | Port 9007 | VPS 46.224.133.16 &nbsp;
+                NIFTY Options SELL | Port 9007 | VPS 5.75.250.104 &nbsp;
                 {mode_pill} &nbsp; {algo_pill}
             </div>
         </div>

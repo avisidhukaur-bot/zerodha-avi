@@ -40,11 +40,11 @@ IST = pytz.timezone("Asia/Kolkata")
 def check_ip_guard() -> bool:
     """
     Enforces IP Whitelisting. Returns True if IP is correct or in paper mode.
-    PERMANENT RULE: Whitelisted IP = 46.224.133.16
+    PERMANENT RULE: Whitelisted IP = 5.75.250.104
     """
     # Paper mode bypass removed
 
-    allowed_ip = db.get("ALLOWED_TRADING_IP", "46.224.133.16").strip()
+    allowed_ip = db.get("ALLOWED_TRADING_IP", "5.75.250.104").strip()
 
     # ANY = disable IP guard (for dynamic home broadband testing/override)
     if allowed_ip.upper() == "ANY":
