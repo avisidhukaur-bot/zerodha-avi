@@ -17,3 +17,7 @@ __pycache__/
 *.log
 .DS_Store
 Thumbs.db
+
+# Instruments csv
+zerodha_instruments.csv
+

@@ -872,14 +872,38 @@ class KiteExecutor:
         expiry_yyyy_mm_dd = None
         expiry_yyyymmdd = None
 
-        for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        # Robust, locale-independent parser for DD-Mon-YYYY or DD-Month-YYYY
+        parts = expiry_str.split("-")
+        if len(parts) == 3 and parts[0].isdigit() and parts[2].isdigit():
             try:
-                dt = datetime.strptime(expiry_str, fmt)
-                expiry_yyyy_mm_dd = dt.strftime("%Y-%m-%d")
-                expiry_yyyymmdd = dt.strftime("%Y%m%d")
-                break
-            except ValueError:
-                continue
+                day = int(parts[0])
+                mon_str = parts[1].upper()
+                year = int(parts[2])
+                months = {
+                    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+                    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+                    "JANUARY": 1, "FEBRUARY": 2, "MARCH": 3, "APRIL": 4, "JUNE": 6,
+                    "JULY": 7, "AUGUST": 8, "SEPTEMBER": 9, "OCTOBER": 10, "NOVEMBER": 11, "DECEMBER": 12
+                }
+                if mon_str in months:
+                    month = months[mon_str]
+                    from datetime import datetime as dt_class
+                    dt = dt_class(year, month, day)
+                    expiry_yyyy_mm_dd = dt.strftime("%Y-%m-%d")
+                    expiry_yyyymmdd = dt.strftime("%Y%m%d")
+            except Exception:
+                pass
+
+        if not expiry_yyyy_mm_dd:
+            for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+                try:
+                    dt = datetime.strptime(expiry_str, fmt)
+                    expiry_yyyy_mm_dd = dt.strftime("%Y-%m-%d")
+                    expiry_yyyymmdd = dt.strftime("%Y%m%d")
+                    break
+                except ValueError:
+                    continue
+
 
         if not expiry_yyyy_mm_dd:
             expiry_yyyy_mm_dd = expiry_str

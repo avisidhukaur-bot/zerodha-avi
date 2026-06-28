@@ -187,7 +187,7 @@ def fetch_ltp(strike: dict, force_refresh: bool = False) -> float:
 
 def fetch_all_ltps(block_id: int = None, force_refresh: bool = False) -> dict:
     """
-    Fetches LTP for all OPEN strikes.
+    Fetches LTP for all OPEN and PENDING strikes.
     block_id=None fetches for all active blocks.
 
     Returns: {strike_id: ltp_float}
@@ -195,20 +195,22 @@ def fetch_all_ltps(block_id: int = None, force_refresh: bool = False) -> dict:
     # Paper mode check removed
 
     if block_id is not None:
-        strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
+        all_s = db.get_strikes_by_block(block_id)
+        strikes = [s for s in all_s if s["status"] in ("OPEN", "PENDING", "PENDING_CLOSE")]
     else:
         # All active blocks
         active_blocks = db.get_all_blocks(status_filter="ACTIVE")
         strikes       = []
         for b in active_blocks:
-            strikes.extend(db.get_strikes_by_block(b["block_id"], status_filter="OPEN"))
+            all_s = db.get_strikes_by_block(b["block_id"])
+            strikes.extend([s for s in all_s if s["status"] in ("OPEN", "PENDING", "PENDING_CLOSE")])
 
     ltp_map = {}
     for s in strikes:
         ltp = fetch_ltp(s, force_refresh=force_refresh)
         ltp_map[s["strike_id"]] = ltp
 
-    _log(f"LTP fetched for {len(ltp_map)} open strike(s).", "LTP")
+    _log(f"LTP fetched for {len(ltp_map)} open/pending strike(s).", "LTP")
     return ltp_map
 
 
@@ -296,9 +298,9 @@ def calc_strike_pnl(strike: dict, ltp: float) -> dict:
                 break  # take the most recent closed leg
 
     # ltp shown in dashboard:
-    #   OPEN   → live LTP from Zerodha API
-    #   CLOSED → actual exit_price (what we sold/bought at close)
-    display_ltp = ltp if status == "OPEN" else exit_price
+    #   OPEN or PENDING → live LTP from Zerodha API
+    #   CLOSED          → actual exit_price (what we sold/bought at close)
+    display_ltp = ltp if status in ("OPEN", "PENDING", "PENDING_CLOSE") else exit_price
     is_exit_price = (status == "CLOSED")
 
     return {
@@ -317,7 +319,7 @@ def calc_strike_pnl(strike: dict, ltp: float) -> dict:
         "unrealized_pnl": round(unrealized_pnl, 2),
         "realized_pnl": round(realized_pnl, 2),
         "pnl_pct"      : round(pnl_pct, 2),
-        "ltp_available": ltp_avail if status == "OPEN" else (exit_price > 0),
+        "ltp_available": ltp_avail if status in ("OPEN", "PENDING", "PENDING_CLOSE") else (exit_price > 0),
     }
 
 
@@ -351,11 +353,11 @@ def calc_block_pnl(block_id: int, ltp_map: dict = None) -> dict:
     # Fetch all strikes for the block (PENDING, OPEN, CLOSED)
     all_strikes = db.get_strikes_by_block(block_id)
 
-    # Auto-fetch LTPs only for OPEN strikes if not provided
+    # Auto-fetch LTPs only for OPEN/PENDING strikes if not provided
     if ltp_map is None:
         ltp_map = {}
         for s in all_strikes:
-            if s["status"] in ("OPEN", "PENDING_CLOSE"):
+            if s["status"] in ("OPEN", "PENDING", "PENDING_CLOSE"):
                 ltp_map[s["strike_id"]] = fetch_ltp(s)
 
     total_pnl    = 0.0

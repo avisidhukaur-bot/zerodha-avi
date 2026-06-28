@@ -22,6 +22,7 @@ SECTIONS:
 import sys
 import time
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 from datetime import date, datetime
 import pytz
@@ -1709,6 +1710,9 @@ def render_block_management():
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
+    # Auto-refresh dashboard every 30 seconds
+    st_autorefresh(interval=30000, key="pnl_auto_refresh")
+
     # ── Check for Redirect request_token from Zerodha Kite Login ──
     if "request_token" in st.query_params:
         req_token = st.query_params["request_token"]
