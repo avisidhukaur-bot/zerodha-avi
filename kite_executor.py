@@ -311,12 +311,58 @@ class KiteExecutor:
         return db.get("KITE_API_SECRET", "")
 
     def _is_token_fresh(self) -> bool:
-        """Access token lasts 24 hours. Check if still valid."""
+        """Access token lasts 24 hours. Check if still valid under 7:30 AM daily boundary."""
         self.load_session_from_db()
         if not self.login_time or not self.is_logged_in or not self.access_token:
             return False
+
+        # 1. Check elapsed hours (maximum 23.5 hours)
         elapsed_hrs = (time.time() - self.login_time) / 3600
-        return elapsed_hrs < 23.5  # 30-min buffer
+        if elapsed_hrs >= 23.5:
+            return False
+
+        # 2. Daily 7:30 AM IST reset boundary enforcement
+        try:
+            now_ist = datetime.now(IST)
+            reset_today = now_ist.replace(hour=7, minute=30, second=0, microsecond=0)
+            if now_ist >= reset_today:
+                last_reset_ist = reset_today
+            else:
+                import datetime as dt_module
+                last_reset_ist = reset_today - dt_module.timedelta(days=1)
+
+            token_time_ist = datetime.fromtimestamp(self.login_time, IST)
+            if token_time_ist < last_reset_ist:
+                print(f"[EXECUTOR] Token created at {token_time_ist.strftime('%Y-%m-%d %H:%M:%S')} is older than last daily reset {last_reset_ist.strftime('%Y-%m-%d %H:%M:%S')}. Marking stale.")
+                return False
+        except Exception as e:
+            print(f"[EXECUTOR] Error checking daily reset boundary: {e}")
+
+        return True
+
+    def _handle_api_exception(self, e: Exception, context: str = "") -> None:
+        """
+        Handles exception from Kite Connect API calls.
+        If it's an authentication or invalid token error, resets local state
+        and db settings to force a fresh login in the next cycle.
+        """
+        print(f"[EXECUTOR] Exception in {context}: {e}")
+        
+        is_token_error = False
+        if isinstance(e, exceptions.TokenException):
+            is_token_error = True
+        else:
+            err_str = str(e).lower()
+            if "api_key" in err_str or "access_token" in err_str or "token" in err_str:
+                is_token_error = True
+                
+        if is_token_error:
+            print(f"[EXECUTOR] Invalid/Expired token detected. Invalidate session to force re-login.")
+            self.access_token = None
+            self.is_logged_in = False
+            db.set("kite_access_token", "")
+            db.set("kite_is_logged_in", "False")
+            db.set("kite_login_status", "TOKEN_EXPIRED")
 
     def ensure_logged_in(self) -> bool:
         """Ensures session is active. Re-logs if token is stale."""
@@ -665,7 +711,7 @@ class KiteExecutor:
             print(f"[EXECUTOR] ✅ Zerodha order placed: {order_id} | {transaction_type} {qty} {trading_symbol}")
             return str(order_id)
         except Exception as e:
-            print(f"[EXECUTOR] ❌ Place order failed for {trading_symbol}: {e}")
+            self._handle_api_exception(e, f"place_order for {trading_symbol}")
             return None
 
     def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
@@ -676,7 +722,7 @@ class KiteExecutor:
             print(f"[EXECUTOR] Order {order_id} cancelled successfully.")
             return True
         except Exception as e:
-            print(f"[EXECUTOR] Cancel order {order_id} failed: {e}")
+            self._handle_api_exception(e, f"cancel_order for {order_id}")
             return False
 
     def get_order_status(self, order_id: str) -> str:
@@ -698,7 +744,7 @@ class KiteExecutor:
             else:
                 return "PENDING"
         except Exception as e:
-            print(f"[EXECUTOR] Exception in get_order_status for {order_id}: {e}")
+            self._handle_api_exception(e, f"get_order_status for {order_id}")
             return "FAILED"
 
     def poll_order_fill(self, order_id: str, max_attempts: int = 10, delay_sec: float = 3.0) -> bool:
@@ -719,7 +765,7 @@ class KiteExecutor:
         try:
             return self.kite.orders()
         except Exception as e:
-            print(f"[EXECUTOR] Exception in get_all_orders: {e}")
+            self._handle_api_exception(e, "get_all_orders")
             return []
 
     def get_trade_book(self) -> list:
@@ -728,7 +774,7 @@ class KiteExecutor:
         try:
             return self.kite.trades()
         except Exception as e:
-            print(f"[EXECUTOR] Exception in get_trade_book: {e}")
+            self._handle_api_exception(e, "get_trade_book")
             return []
 
     def get_positions(self) -> list:
@@ -738,7 +784,7 @@ class KiteExecutor:
             # positions() returns {"net": [...], "day": [...]}
             return self.kite.positions().get("net", [])
         except Exception as e:
-            print(f"[EXECUTOR] Exception in get_positions: {e}")
+            self._handle_api_exception(e, "get_positions")
             return []
 
     def get_live_ltp(self, symbol_token: str, trading_symbol: str = "") -> float:
@@ -751,7 +797,7 @@ class KiteExecutor:
             if query in res:
                 return float(res[query].get("last_price", 0.0))
         except Exception as e:
-            print(f"[EXECUTOR] Exception in get_live_ltp for {trading_symbol or symbol_token}: {e}")
+            self._handle_api_exception(e, f"get_live_ltp for {trading_symbol or symbol_token}")
         return 0.0
 
     def get_ltp(self, symbol_token: str, trading_symbol: str = "") -> float:
@@ -774,7 +820,7 @@ class KiteExecutor:
                 ):
                     return float(pos.get("last_price", 0.0))
         except Exception as e:
-            print(f"[EXECUTOR] Fallback positions lookup failed: {e}")
+            self._handle_api_exception(e, "get_ltp fallback")
 
         return 0.0
 
@@ -986,7 +1032,7 @@ class KiteExecutor:
                 if str(o.get("order_id")) == str(order_id):
                     return float(o.get("average_price") or o.get("price") or 0.0)
         except Exception as e:
-            print(f"[EXECUTOR] Error getting fill price for order {order_id}: {e}")
+            self._handle_api_exception(e, f"get_order_fill_price for {order_id}")
         return 0.0
 
     def execute_sell_and_confirm(self, trading_symbol: str, symbol_token: str, qty: int, limit_price: float = 0.0) -> tuple:
