@@ -1081,8 +1081,7 @@ def render_block_card(block_pnl: dict):
 
             st.markdown(
                 "<div style='background:#fff3e0;border-left:3px solid #ff5722;padding:8px 12px;border-radius:4px;font-size:0.8rem;margin:8px 0;'>"
-                "⚠️ <b>Order sequence:</b> Old hedge closes first → New hedge bought immediately. "
-                "If new hedge buy fails, URGENT Telegram alert fires and sell will be temporarily unhedged."
+                "⚠️ <b>Order sequence:</b> New hedge bought first → Old hedge closed immediately to prevent margin spikes."
                 "</div>",
                 unsafe_allow_html=True
             )
@@ -1450,7 +1449,6 @@ def render_add_strike_form(block_id: int):
                 # Add Hedge strike if requested
                 hedge_sym_info = kite_executor.search_option_symbol(st.session_state.get(f"hedge_exp_{block_id}"), st.session_state.get(f"hedge_sp_{block_id}"), option_type)
                 hedge_ltp = kite_executor.get_ltp(hedge_sym_info["token"], hedge_sym_info["trading_symbol"]) if hedge_sym_info else 0.0
-                eff_hedge_anchor = hedge_ltp if hedge_ltp > 0 else 1.0
                 h_sp = st.session_state.get(f"hedge_sp_{block_id}", 0)
                 h_exp = st.session_state.get(f"hedge_exp_{block_id}", None)
                 
@@ -1459,7 +1457,7 @@ def render_add_strike_form(block_id: int):
                     strike_price = int(h_sp),
                     option_type  = option_type,
                     leg_type     = "HEDGE_BUY",
-                    anchor_price = eff_hedge_anchor,
+                    anchor_price = 0.0,
                     lots         = int(lots),
                     expiry_date  = h_exp
                 )
@@ -1519,7 +1517,7 @@ def render_add_strike_form(block_id: int):
                 h_exp = st.session_state.get(f"hedge_exp_{block_id}", None)
                 hedge_sym_info = kite_executor.search_option_symbol(h_exp, h_sp, option_type)
                 hedge_ltp = kite_executor.get_ltp(hedge_sym_info["token"], hedge_sym_info["trading_symbol"]) if hedge_sym_info else 0.0
-                eff_hedge_anchor = hedge_ltp if hedge_ltp > 0 else 1.0
+                eff_hedge_anchor = 0.0
                 
                 hedge_res = bm.add_strike_to_block(
                     block_id     = block_id,

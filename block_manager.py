@@ -947,6 +947,206 @@ def close_strike(strike_id: int, close_hedge: bool = True) -> dict:
     }
 
 
+def close_hedge_strike_only(strike_id: int) -> dict:
+    """
+    Closes a HEDGE_BUY strike immediately and synchronously.
+    Places a SELL order to exit the long position, updates DB leg and status.
+    """
+    strike = db.get_strike(strike_id)
+    if not strike:
+        return {"ok": False, "message": f"Hedge strike {strike_id} not found."}
+
+    if strike["status"] not in ("OPEN", "PENDING_CLOSE"):
+        return {"ok": False, "message": f"Hedge strike {strike_id} status is {strike['status']} -- only OPEN/PENDING_CLOSE strikes can be closed."}
+
+    if strike["leg_type"] != "HEDGE_BUY":
+        return {"ok": False, "message": "Use close_hedge_strike_only() only on HEDGE_BUY strikes."}
+
+    lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
+    qty      = strike["lots"] * lot_size
+
+    block = db.get_block(strike["block_id"])
+    block_num = block["block_number"] if block else "?"
+
+    _log(f"Closing Hedge Strike {strike_id} immediately: Block {block_num} | {strike['strike_price']} {strike['option_type']} HEDGE_BUY | Qty={qty}", "EXIT")
+
+    hedge_symbol = _resolve_symbol(strike)
+    if not hedge_symbol:
+        return {"ok": False, "message": f"Cannot resolve symbol for hedge strike {strike_id}."}
+
+    # Reconciliation Guard: Check if matching order exists on broker first
+    order_id = _find_existing_broker_order(
+        token=hedge_symbol["token"],
+        trading_symbol=hedge_symbol["trading_symbol"],
+        transaction_type="SELL",
+        qty=qty
+    )
+    if order_id:
+        _log(f"Reconciliation: Close order {order_id} already exists on broker. Reusing it.", "INFO")
+        filled = True
+    else:
+        order_id, filled = kite_executor.execute_sell_and_confirm(
+            trading_symbol = hedge_symbol["trading_symbol"],
+            symbol_token   = hedge_symbol["token"],
+            qty            = qty,
+        )
+
+    if not filled or not order_id:
+        return {
+            "ok":     False,
+            "message": f"Hedge close order for strike {strike_id} FAILED on broker. Position may still be open!",
+        }
+
+    _log(f"Hedge close confirmed: {hedge_symbol['trading_symbol']} | Order: {order_id}", "OK")
+
+    open_leg = db.get_open_leg(strike_id)
+    entry_price = open_leg.get("entry_price", strike["anchor_price"]) if open_leg else strike["anchor_price"]
+    
+    hedge_close_price = kite_executor.get_order_fill_price(order_id)
+    if hedge_close_price <= 0:
+        hedge_close_price = kite_executor.get_ltp(hedge_symbol["token"], hedge_symbol["trading_symbol"])
+    if hedge_close_price <= 0:
+        hedge_close_price = entry_price
+
+    hedge_pnl = (hedge_close_price - entry_price) * strike["lots"] * lot_size
+
+    # Close leg in DB
+    if open_leg:
+        db.close_leg(open_leg["leg_id"], hedge_close_price, hedge_pnl)
+
+    # Update strike status
+    db.update_strike_status(strike_id, "CLOSED")
+
+    # Clean up pending settings if any
+    conn = db._conn()
+    conn.execute("DELETE FROM settings WHERE key=?", (f"pending_close_time_{strike_id}",))
+    conn.commit()
+    conn.close()
+
+    # Log trade
+    db.log_trade(
+        block_id     = strike["block_id"],
+        strike_id    = strike_id,
+        action       = "HEDGE_EXIT",
+        price        = hedge_close_price,
+        lots         = strike["lots"],
+        order_status = "SUCCESS",
+    )
+
+    return {
+        "ok":               True,
+        "hedge_close_price": hedge_close_price,
+        "pnl":              round(hedge_pnl, 2),
+        "message":          f"Hedge strike {strike['strike_price']} {strike['option_type']} closed successfully. P&L: Rs {hedge_pnl:+.2f}",
+    }
+
+
+def rollover_hedge(
+    sell_strike_id: int,
+    new_hedge_strike_price: int,
+    new_hedge_expiry: str,
+    new_hedge_lots: int,
+    new_hedge_option_type: str,
+) -> dict:
+    """
+    Executes a weekly hedge rollover for a SELL strike.
+    
+    Sequence (continuous hedging):
+      1. Create a new HEDGE_BUY strike for new strike + new expiry.
+      2. Execute the new HEDGE_BUY leg (BUY order on broker) and confirm.
+      3. Close the old HEDGE_BUY leg immediately (SELL order on broker) and confirm.
+      4. Unlink old HEDGE_BUY from SELL strike.
+      5. Link new HEDGE_BUY to SELL strike.
+    """
+    sell = db.get_strike(sell_strike_id)
+    if not sell:
+        return {"ok": False, "message": f"Sell strike {sell_strike_id} not found."}
+        
+    if sell["status"] != "OPEN":
+        return {"ok": False, "message": f"Sell strike {sell_strike_id} must be OPEN to roll over its hedge."}
+        
+    old_hedge_id = sell.get("hedge_strike_id")
+    old_hedge = db.get_strike(old_hedge_id) if old_hedge_id else None
+    
+    if not old_hedge or old_hedge["status"] != "OPEN":
+        return {"ok": False, "message": f"No open linked hedge found for Sell strike {sell_strike_id}."}
+        
+    block_id = sell["block_id"]
+    block = db.get_block(block_id)
+    
+    lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
+    qty      = new_hedge_lots * lot_size
+    
+    _log(f"Rolling over hedge for Sell Strike {sell_strike_id}: Old Hedge={old_hedge_id} | New Strike={new_hedge_strike_price} | New Expiry={new_hedge_expiry} | Lots={new_hedge_lots}", "ROLLOVER")
+    
+    # ── Step 1: Create a new HEDGE_BUY strike ──
+    # Note: anchor_price is set to 0.0 as hedges do not use anchor prices.
+    new_hedge_res = add_strike_to_block(
+        block_id     = block_id,
+        strike_price = new_hedge_strike_price,
+        option_type  = new_hedge_option_type,
+        leg_type     = "HEDGE_BUY",
+        anchor_price = 0.0,
+        lots         = new_hedge_lots,
+        expiry_date  = new_hedge_expiry
+    )
+    
+    if not new_hedge_res["ok"]:
+        return {"ok": False, "message": f"Failed to create new hedge strike: {new_hedge_res['message']}"}
+        
+    new_hedge_id = new_hedge_res["strike_id"]
+    new_hedge = db.get_strike(new_hedge_id)
+    
+    # Set status to EXECUTING to prevent double-execution
+    db.update_strike_status(new_hedge_id, "EXECUTING")
+    
+    # ── Step 2: Execute the new HEDGE_BUY leg ──
+    new_exec_res = _execute_buy_leg(new_hedge, qty)
+    if not new_exec_res["ok"]:
+        # Clean up the pending new strike
+        db.delete_strike(new_hedge_id)
+        return {"ok": False, "message": f"New hedge BUY order failed: {new_exec_res['message']}. Aborting rollover."}
+        
+    _log(f"New hedge BUY confirmed: Strike {new_hedge_id} | Order: {new_exec_res.get('order_id')}", "OK")
+    
+    # ── Step 3: Close the old HEDGE_BUY leg immediately ──
+    old_close_res = close_hedge_strike_only(old_hedge_id)
+    if not old_close_res["ok"]:
+        # URGENT warning: New hedge was bought, but old hedge failed to sell.
+        # Link the new hedge anyway to keep the system correct, but alert operator.
+        db.unlink_hedge(sell_strike_id)
+        db.unlink_hedge(old_hedge_id)
+        db.link_hedge(sell_strike_id, new_hedge_id)
+        return {
+            "ok": False,
+            "message": (
+                f"WARNING: New hedge bought successfully, but OLD hedge failed to close: {old_close_res['message']}. "
+                f"Database updated to link new hedge. Please manually close the old hedge strike {old_hedge_id} on Zerodha!"
+            )
+        }
+        
+    # ── Step 4 & 5: Update links ──
+    db.unlink_hedge(sell_strike_id)
+    db.unlink_hedge(old_hedge_id)
+    db.link_hedge(sell_strike_id, new_hedge_id)
+    
+    # Log trade
+    db.log_trade(
+        block_id     = block_id,
+        strike_id    = sell_strike_id,
+        action       = "ROLLOVER",
+        price        = 0.0,
+        lots         = new_hedge_lots,
+        order_status = "SUCCESS",
+    )
+    
+    return {
+        "ok": True,
+        "message": f"Hedge rolled over successfully! Old hedge {old_hedge['strike_price']} closed, new hedge {new_hedge_strike_price} ({new_hedge_expiry}) opened and linked.",
+        "new_hedge_id": new_hedge_id
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EXPIRY MANAGEMENT
 # ─────────────────────────────────────────────────────────────────────────────

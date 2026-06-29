@@ -473,7 +473,7 @@ def get_strike_display_row(s_pnl: dict) -> dict:
         "Strike"    : s_pnl["strike_price"],
         "Type"      : s_pnl["option_type"],
         "Leg"       : leg_type,
-        "Anchor Rs" : f"Rs{anchor:.2f}",
+        "Anchor Rs" : f"Rs{anchor:.2f}" if leg_type == "SELL" else "--",
         "LTP Rs"    : f"Rs{ltp:.2f}" if ltp_avail else "--",
         "Lots"      : s_pnl["lots"],
         "Qty"       : s_pnl["qty"],

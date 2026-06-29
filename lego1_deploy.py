@@ -42,6 +42,7 @@ FILES = [
     "main.py",
     "utils.py",
     "app.py",
+    "lego2_rollover.py",
     "requirements.txt",
     "secrets.txt",
     "ZERODHA_SETUP_GUIDE.md",
