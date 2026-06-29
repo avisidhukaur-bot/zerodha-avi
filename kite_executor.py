@@ -13,6 +13,19 @@ Responsibilities:
 import sys
 import os
 import time
+
+# ── Force IPv4 Monkey Patch (avoids Zerodha IP authorization issues on VPS) ──
+import socket
+_orig_getaddrinfo = socket.getaddrinfo
+def _forced_getaddrinfo(*args, **kwargs):
+    args = list(args)
+    if len(args) >= 3:
+        args[2] = socket.AF_INET
+    else:
+        kwargs['family'] = socket.AF_INET
+    return _orig_getaddrinfo(*args, **kwargs)
+socket.getaddrinfo = _forced_getaddrinfo
+
 import requests
 import pyotp
 import pandas as pd
