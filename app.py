@@ -1169,6 +1169,143 @@ def render_block_card(block_pnl: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# WEEKLY HEDGE ROLLOVER CENTER
+# ─────────────────────────────────────────────────────────────────────────────
+def render_rollover_center():
+    with st.expander("🔄 WEEKLY HEDGE ROLLOVER CENTER", expanded=False):
+        st.markdown(
+            '<p class="section-title">Centralized Weekly Hedge Rollover Control</p>',
+            unsafe_allow_html=True
+        )
+
+        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+        rollover_candidates = []
+        for b in active_blocks:
+            strikes = db.get_strikes_by_block(b["block_id"], status_filter="OPEN")
+            for s in strikes:
+                if s["leg_type"] == "SELL" and s.get("hedge_strike_id"):
+                    h = db.get_strike(s["hedge_strike_id"])
+                    if h and h["status"] == "OPEN":
+                        rollover_candidates.append({
+                            "block_id": b["block_id"],
+                            "block_num": b["block_number"],
+                            "sell_strike": s,
+                            "hedge_strike": h,
+                        })
+
+        if not rollover_candidates:
+            st.info("ℹ️ **No active weekly hedges found to roll over.**\n\nRollover is only available when you have active SELL positions with linked open HEDGE positions.")
+            return
+
+        # Prepare option label mapping
+        candidate_options = {}
+        for rc in rollover_candidates:
+            sell_s = rc["sell_strike"]
+            hedge_s = rc["hedge_strike"]
+            label = (
+                f"Block {rc['block_num']} | "
+                f"SELL: {sell_s['strike_price']} {sell_s['option_type']} "
+                f"(Lots: {sell_s['lots']}) ↔ "
+                f"Hedge: {hedge_s['strike_price']} {hedge_s['option_type']} "
+                f"(exp: {hedge_s.get('expiry_date') or 'N/A'})"
+            )
+            candidate_options[label] = rc
+
+        st.markdown("##### 1. Select Active Position to Roll Over")
+        selected_label = st.selectbox(
+            "Select Position",
+            options=list(candidate_options.keys()),
+            key="rv_center_select_candidate",
+            label_visibility="collapsed"
+        )
+        selected_rc = candidate_options[selected_label]
+        sell_s = selected_rc["sell_strike"]
+        hedge_s = selected_rc["hedge_strike"]
+        sell_sid = sell_s["strike_id"]
+
+        st.markdown("<br/>", unsafe_allow_html=True)
+        st.markdown("##### 2. Customize New Hedge Parameters")
+
+        rv_col1, rv_col2, rv_col3 = st.columns([2, 2, 1])
+
+        with rv_col1:
+            rv_strike = st.number_input(
+                "New Hedge Strike Price",
+                min_value=10000,
+                max_value=50000,
+                value=int(hedge_s["strike_price"]),
+                step=50,
+                key=f"rv_center_strike_{sell_sid}",
+                help="Target strike price for the new weekly hedge."
+            )
+
+        with rv_col2:
+            rv_expiries = get_sorted_nifty_expiries()
+            current_exp = hedge_s.get("expiry_date", "")
+            # Find index of the next weekly expiry (first expiry that is not the current one)
+            default_rv_exp_idx = 0
+            for i, e in enumerate(rv_expiries):
+                if e != current_exp:
+                    default_rv_exp_idx = i
+                    break
+            rv_expiry = st.selectbox(
+                "New Expiry Date",
+                options=rv_expiries,
+                index=default_rv_exp_idx,
+                key=f"rv_center_expiry_{sell_sid}",
+                help="Select the new weekly expiry date for the rolled hedge."
+            )
+
+        with rv_col3:
+            rv_lots = st.number_input(
+                "Lots",
+                min_value=1,
+                max_value=100,
+                value=int(sell_s["lots"]),
+                key=f"rv_center_lots_{sell_sid}",
+                help="Number of lots for the new hedge (defaults to Sell lots)."
+            )
+
+        # Show live LTP for the selected new hedge symbol
+        from kite_executor import kite_executor as _kex_rv
+        rv_sym_info = _kex_rv.search_option_symbol(rv_expiry, rv_strike, sell_s["option_type"])
+        if rv_sym_info:
+            rv_ltp = _kex_rv.get_ltp(rv_sym_info["token"], rv_sym_info["trading_symbol"])
+            st.info(
+                f"🛡️ **New Hedge Live LTP**: ₹{rv_ltp:.2f} — `{rv_sym_info['trading_symbol']}`"
+            )
+        else:
+            st.warning("⚠️ New hedge symbol not found in Security Master.")
+
+        st.markdown(
+            "<div style='background:#fff3e0;border-left:3px solid #ff5722;padding:8px 12px;border-radius:4px;font-size:0.8rem;margin:8px 0;'>"
+            "⚠️ <b>Order sequence:</b> New hedge bought first → Old hedge closed immediately to prevent margin spikes."
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+        if st.button(
+            "🔄 Confirm & Execute Rollover",
+            key=f"rv_center_btn_execute_{sell_sid}",
+            use_container_width=True,
+            type="primary"
+        ):
+            with st.spinner("Rolling over weekly hedge... please wait"):
+                rv_res = bm.rollover_hedge(
+                    sell_strike_id=sell_sid,
+                    new_hedge_strike_price=int(rv_strike),
+                    new_hedge_expiry=rv_expiry,
+                    new_hedge_lots=int(rv_lots),
+                    new_hedge_option_type=sell_s["option_type"],
+                )
+            if rv_res["ok"]:
+                _flash(rv_res["message"], "success")
+            else:
+                _flash(rv_res["message"], "error")
+            st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # NEW BLOCK FORM
 # ─────────────────────────────────────────────────────────────────────────────
 def render_new_block_form():
@@ -1746,6 +1883,11 @@ def main():
 
     # Metrics row
     render_metrics(portfolio)
+
+    st.markdown("<br/>", unsafe_allow_html=True)
+
+    # Weekly hedge rollover center (always visible at top)
+    render_rollover_center()
 
     st.markdown("<br/>", unsafe_allow_html=True)
 

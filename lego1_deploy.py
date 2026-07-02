@@ -47,6 +47,7 @@ FILES = [
     "secrets.txt",
     "ZERODHA_SETUP_GUIDE.md",
     "memory.md",
+    "product_development_rollover.md",
 ]
 
 print("=" * 60)

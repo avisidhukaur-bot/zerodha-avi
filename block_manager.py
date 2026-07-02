@@ -1041,110 +1041,7 @@ def close_hedge_strike_only(strike_id: int) -> dict:
     }
 
 
-def rollover_hedge(
-    sell_strike_id: int,
-    new_hedge_strike_price: int,
-    new_hedge_expiry: str,
-    new_hedge_lots: int,
-    new_hedge_option_type: str,
-) -> dict:
-    """
-    Executes a weekly hedge rollover for a SELL strike.
-    
-    Sequence (continuous hedging):
-      1. Create a new HEDGE_BUY strike for new strike + new expiry.
-      2. Execute the new HEDGE_BUY leg (BUY order on broker) and confirm.
-      3. Close the old HEDGE_BUY leg immediately (SELL order on broker) and confirm.
-      4. Unlink old HEDGE_BUY from SELL strike.
-      5. Link new HEDGE_BUY to SELL strike.
-    """
-    sell = db.get_strike(sell_strike_id)
-    if not sell:
-        return {"ok": False, "message": f"Sell strike {sell_strike_id} not found."}
-        
-    if sell["status"] != "OPEN":
-        return {"ok": False, "message": f"Sell strike {sell_strike_id} must be OPEN to roll over its hedge."}
-        
-    old_hedge_id = sell.get("hedge_strike_id")
-    old_hedge = db.get_strike(old_hedge_id) if old_hedge_id else None
-    
-    if not old_hedge or old_hedge["status"] != "OPEN":
-        return {"ok": False, "message": f"No open linked hedge found for Sell strike {sell_strike_id}."}
-        
-    block_id = sell["block_id"]
-    block = db.get_block(block_id)
-    
-    lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
-    qty      = new_hedge_lots * lot_size
-    
-    _log(f"Rolling over hedge for Sell Strike {sell_strike_id}: Old Hedge={old_hedge_id} | New Strike={new_hedge_strike_price} | New Expiry={new_hedge_expiry} | Lots={new_hedge_lots}", "ROLLOVER")
-    
-    # ── Step 1: Create a new HEDGE_BUY strike ──
-    # Note: anchor_price is set to 0.0 as hedges do not use anchor prices.
-    new_hedge_res = add_strike_to_block(
-        block_id     = block_id,
-        strike_price = new_hedge_strike_price,
-        option_type  = new_hedge_option_type,
-        leg_type     = "HEDGE_BUY",
-        anchor_price = 0.0,
-        lots         = new_hedge_lots,
-        expiry_date  = new_hedge_expiry
-    )
-    
-    if not new_hedge_res["ok"]:
-        return {"ok": False, "message": f"Failed to create new hedge strike: {new_hedge_res['message']}"}
-        
-    new_hedge_id = new_hedge_res["strike_id"]
-    new_hedge = db.get_strike(new_hedge_id)
-    
-    # Set status to EXECUTING to prevent double-execution
-    db.update_strike_status(new_hedge_id, "EXECUTING")
-    
-    # ── Step 2: Execute the new HEDGE_BUY leg ──
-    new_exec_res = _execute_buy_leg(new_hedge, qty)
-    if not new_exec_res["ok"]:
-        # Clean up the pending new strike
-        db.delete_strike(new_hedge_id)
-        return {"ok": False, "message": f"New hedge BUY order failed: {new_exec_res['message']}. Aborting rollover."}
-        
-    _log(f"New hedge BUY confirmed: Strike {new_hedge_id} | Order: {new_exec_res.get('order_id')}", "OK")
-    
-    # ── Step 3: Close the old HEDGE_BUY leg immediately ──
-    old_close_res = close_hedge_strike_only(old_hedge_id)
-    if not old_close_res["ok"]:
-        # URGENT warning: New hedge was bought, but old hedge failed to sell.
-        # Link the new hedge anyway to keep the system correct, but alert operator.
-        db.unlink_hedge(sell_strike_id)
-        db.unlink_hedge(old_hedge_id)
-        db.link_hedge(sell_strike_id, new_hedge_id)
-        return {
-            "ok": False,
-            "message": (
-                f"WARNING: New hedge bought successfully, but OLD hedge failed to close: {old_close_res['message']}. "
-                f"Database updated to link new hedge. Please manually close the old hedge strike {old_hedge_id} on Zerodha!"
-            )
-        }
-        
-    # ── Step 4 & 5: Update links ──
-    db.unlink_hedge(sell_strike_id)
-    db.unlink_hedge(old_hedge_id)
-    db.link_hedge(sell_strike_id, new_hedge_id)
-    
-    # Log trade
-    db.log_trade(
-        block_id     = block_id,
-        strike_id    = sell_strike_id,
-        action       = "ROLLOVER",
-        price        = 0.0,
-        lots         = new_hedge_lots,
-        order_status = "SUCCESS",
-    )
-    
-    return {
-        "ok": True,
-        "message": f"Hedge rolled over successfully! Old hedge {old_hedge['strike_price']} closed, new hedge {new_hedge_strike_price} ({new_hedge_expiry}) opened and linked.",
-        "new_hedge_id": new_hedge_id
-    }
+# Duplicate rollover_hedge implementation removed to prevent conflicts.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1220,12 +1117,12 @@ def rollover_hedge(
     """
     Rolls over the hedge linked to a SELL strike.
 
-    Sequence:
+    SAFE Sequence (Continuous Hedging to avoid margin spikes):
       Step 1 - Validate sell + old hedge are OPEN.
-      Step 2 - Close old hedge immediately on broker.
-      Step 3 - Create new HEDGE_BUY strike in DB.
-      Step 4 - Buy new hedge on broker.
-      Step 5 - Re-link sell strike to new hedge.
+      Step 2 - Create new HEDGE_BUY strike in DB.
+      Step 3 - Buy new hedge on broker first.
+      Step 4 - If new hedge purchase succeeds, close the old hedge immediately on broker.
+      Step 5 - Re-link sell strike to new hedge and unlink old hedge.
       Step 6 - Send Telegram alerts.
 
     Returns: {"ok": bool, "message": str, "new_hedge_strike_id": int or None}
@@ -1262,12 +1159,68 @@ def rollover_hedge(
     tg.alert_rollover_started(block_number=block_num, old_hedge=old_hedge_symbol, new_expiry=new_hedge_expiry)
     _log(f"[ROLLOVER] Block {block_num}: rolling hedge for sell {sell_strike_id}. Old: {old_hedge_symbol}", "ORDER")
 
-    # Step 2 - Close old hedge on broker
+    # Step 2 - Create new HEDGE_BUY in DB
+    new_hedge_res = add_strike_to_block(
+        block_id     = sell_strike["block_id"],
+        strike_price = new_hedge_strike_price,
+        option_type  = new_hedge_option_type,
+        leg_type     = "HEDGE_BUY",
+        anchor_price = 0.0,
+        lots         = new_hedge_lots,
+        expiry_date  = new_hedge_expiry,
+    )
+    if not new_hedge_res["ok"]:
+        tg.alert_rollover_failed(block_num, f"New hedge DB creation failed: {new_hedge_res['message']}")
+        return {"ok": False, "message": f"New hedge DB failed: {new_hedge_res['message']}. Rollover aborted."}
+
+    new_hedge_strike_id = new_hedge_res["strike_id"]
+    _log(f"[ROLLOVER] New hedge in DB: id={new_hedge_strike_id} {new_hedge_strike_price} {new_hedge_option_type} exp={new_hedge_expiry}", "ORDER")
+
+    # Step 3 - Buy new hedge on broker first
+    new_qty = new_hedge_lots * lot_size
+    db.try_set_strike_executing(new_hedge_strike_id)
+    new_hedge_rec = db.get_strike(new_hedge_strike_id)
+    buy_result    = _execute_buy_leg(new_hedge_rec, new_qty)
+
+    if not buy_result["ok"]:
+        # Clean up the new strike from DB as it failed to execute
+        db.delete_strike(new_hedge_strike_id)
+        tg.alert_rollover_failed(block_num, f"NEW HEDGE BUY FAILED. Rollover aborted. SELL is still hedged by {old_hedge_symbol}.")
+        return {
+            "ok": False,
+            "message": f"New hedge BUY failed: {buy_result['message']}. Rollover aborted. Old hedge remains active.",
+            "new_hedge_strike_id": None
+        }
+
+    # New hedge bought successfully!
+    db.update_strike_anchor_price(new_hedge_strike_id, buy_result["fill_price"])
+    _log(f"[ROLLOVER] New hedge bought @ Rs{buy_result['fill_price']:.2f} | Order: {buy_result['order_id']}", "OK")
+
+    # Step 4 - Close old hedge on broker now
+    old_hedge_closed_successfully = False
+    close_price = 0.0
+    hedge_pnl = 0.0
+
     if old_hedge and old_hedge["status"] == "OPEN":
-        old_qty      = old_hedge["lots"] * lot_size
+        old_qty = old_hedge["lots"] * lot_size
         old_sym_info = _resolve_symbol(old_hedge)
         if not old_sym_info:
-            return {"ok": False, "message": f"Cannot resolve old hedge symbol. Aborting rollover."}
+            # Critical warning: New hedge bought but cannot resolve symbol to close old hedge
+            # We must link the new hedge anyway to prevent double-exposure issues in DB, but raise alert.
+            db.unlink_hedge(sell_strike_id)
+            if old_hedge_id:
+                db.unlink_hedge(old_hedge_id)
+            link_hedge_to_sell(sell_strike_id, new_hedge_strike_id)
+            tg.alert_rollover_failed(block_num, f"New hedge bought but could not resolve old hedge symbol to close it. Please close old hedge manually!")
+            return {
+                "ok": False,
+                "message": (
+                    f"WARNING: New hedge bought @ Rs{buy_result['fill_price']:.2f}, but could not resolve old hedge symbol to close it. "
+                    f"Please manually close old hedge {old_hedge_symbol} on Zerodha! Database updated to link new hedge."
+                ),
+                "new_hedge_strike_id": new_hedge_strike_id,
+            }
+
         _log(f"[ROLLOVER] Closing old hedge: {old_sym_info['trading_symbol']} qty={old_qty}", "ORDER")
         close_order_id, close_filled = kite_executor.execute_sell_and_confirm(
             trading_symbol = old_sym_info["trading_symbol"],
@@ -1275,8 +1228,22 @@ def rollover_hedge(
             qty            = old_qty,
         )
         if not close_filled:
-            tg.alert_rollover_failed(block_num, f"Old hedge close failed (order {close_order_id}). Rollover aborted.")
-            return {"ok": False, "message": f"Old hedge close FAILED (order {close_order_id}). Rollover aborted."}
+            # Critical warning: New hedge bought but old hedge failed to close.
+            db.unlink_hedge(sell_strike_id)
+            if old_hedge_id:
+                db.unlink_hedge(old_hedge_id)
+            link_hedge_to_sell(sell_strike_id, new_hedge_strike_id)
+            tg.alert_rollover_failed(block_num, f"New hedge bought, but old hedge close failed (order {close_order_id}). Database updated. Please close old hedge manually!")
+            return {
+                "ok": False,
+                "message": (
+                    f"WARNING: New hedge bought @ Rs{buy_result['fill_price']:.2f}, but old hedge {old_hedge_symbol} failed to close (order {close_order_id}). "
+                    f"Please manually close old hedge on Zerodha! Database updated to link new hedge."
+                ),
+                "new_hedge_strike_id": new_hedge_strike_id,
+            }
+
+        # Calculate PnL and close leg
         close_price = kite_executor.get_order_fill_price(close_order_id)
         if close_price <= 0:
             close_price = kite_executor.get_ltp(old_sym_info["token"], old_sym_info["trading_symbol"])
@@ -1289,53 +1256,14 @@ def rollover_hedge(
             db.close_leg(open_leg["leg_id"], close_price, hedge_pnl)
         db.update_strike_status(old_hedge_id, "CLOSED")
         _log(f"[ROLLOVER] Old hedge closed @ Rs{close_price:.2f} | PnL: Rs{hedge_pnl:.2f}", "OK")
+        old_hedge_closed_successfully = True
 
-    # Step 3 - Create new HEDGE_BUY in DB
-    new_hedge_res = add_strike_to_block(
-        block_id     = sell_strike["block_id"],
-        strike_price = new_hedge_strike_price,
-        option_type  = new_hedge_option_type,
-        leg_type     = "HEDGE_BUY",
-        anchor_price = 0.0,
-        lots         = new_hedge_lots,
-        expiry_date  = new_hedge_expiry,
-    )
-    if not new_hedge_res["ok"]:
-        tg.alert_rollover_failed(block_num, f"New hedge DB creation failed: {new_hedge_res['message']}")
-        return {"ok": False, "message": f"New hedge DB failed: {new_hedge_res['message']}. Old hedge closed -- buy manually!"}
-
-    new_hedge_strike_id = new_hedge_res["strike_id"]
-    _log(f"[ROLLOVER] New hedge in DB: id={new_hedge_strike_id} {new_hedge_strike_price} {new_hedge_option_type} exp={new_hedge_expiry}", "ORDER")
-
-    # Step 4 - Buy new hedge on broker
-    new_qty = new_hedge_lots * lot_size
-    db.try_set_strike_executing(new_hedge_strike_id)
-    new_hedge_rec = db.get_strike(new_hedge_strike_id)
-    buy_result    = _execute_buy_leg(new_hedge_rec, new_qty)
-
-    if not buy_result["ok"]:
-        db.update_strike_status(new_hedge_strike_id, "PENDING")
-        tg.alert_naked_short_risk(block_num, sell_strike["strike_price"], sell_strike["option_type"])
-        tg.alert_rollover_failed(block_num, f"NEW HEDGE BUY FAILED. SELL IS UNHEDGED!")
-        return {
-            "ok": False,
-            "message": (
-                f"CRITICAL: Old hedge closed but new hedge BUY failed. "
-                f"Sell {sell_strike['strike_price']} {sell_strike['option_type']} is UNHEDGED! "
-                f"Strike #{new_hedge_strike_id} is PENDING -- buy manually on broker."
-            ),
-            "new_hedge_strike_id": new_hedge_strike_id,
-        }
-
-    db.update_strike_anchor_price(new_hedge_strike_id, buy_result["fill_price"])
-    _log(f"[ROLLOVER] New hedge bought @ Rs{buy_result['fill_price']:.2f} | Order: {buy_result['order_id']}", "OK")
-
-    # Step 5 - Re-link
+    # Step 5 - Re-link new hedge
     if old_hedge_id:
         db.unlink_hedge(old_hedge_id)
     link_hedge_to_sell(sell_strike_id, new_hedge_strike_id)
 
-    # Step 6 - Telegram
+    # Step 6 - Telegram Complete notification
     new_sym_info = _resolve_symbol(db.get_strike(new_hedge_strike_id))
     new_symbol   = new_sym_info["trading_symbol"] if new_sym_info else f"{new_hedge_strike_price}{new_hedge_option_type}"
     tg.alert_rollover_complete(
@@ -1349,9 +1277,8 @@ def rollover_hedge(
     return {
         "ok": True,
         "message": (
-            f"Rollover complete! Old hedge closed. "
-            f"New hedge {new_hedge_strike_price} {new_hedge_option_type} ({new_hedge_expiry}) "
-            f"bought @ Rs{buy_result['fill_price']:.2f}."
+            f"Rollover complete! New hedge {new_symbol} bought @ Rs{buy_result['fill_price']:.2f}. "
+            f"Old hedge {old_hedge_symbol} closed successfully."
         ),
         "new_hedge_strike_id": new_hedge_strike_id,
     }

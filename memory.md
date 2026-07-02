@@ -66,4 +66,11 @@ kite.place_order(
 - **Same-Day Re-entry**: If a strike is closed TODAY (e.g. stopped out during the day), the engine allows it to re-enter today if the Nifty option price drops below `anchor_price`, provided the hedge strike is still OPEN.
 - **Resolved Symbol Lookup**: The engine uses the exact trading symbol resolved from the cache master instead of hand-constructed symbols for live LTP lookup, guaranteeing correct pricing queries.
 
+## 🔄 Weekly Hedge Rollover (1-Click UI & Safe Sequence)
+- **Centralized Rollover UI**: Added "🔄 WEEKLY HEDGE ROLLOVER CENTER" at the top of the main dashboard page in `app.py`. It lists all active weekly hedges across blocks and allows customizing strike, expiry, and lots.
+- **Safe Rollover Sequence**: The engine executes rollovers by buying the new hedge first, confirming the fill, and then immediately closing the old hedge. This avoids any naked sell exposure, preventing massive margin spikes (up to ₹1.5L+ per lot) and order rejection.
+- **Linking Updates**: Automatically unlinks the old hedge and links the new hedge to the sell strike in the database.
+- **Telegram / Ntfy Integration**: Sends alerts when rollover starts, completes successfully (showing old/new symbols and fill price), or fails (triggering urgent operator action alerts).
+
+
 
