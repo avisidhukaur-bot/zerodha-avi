@@ -1,0 +1,23 @@
+secrets.txt
+git_credentials.txt
+.env
+*.env
+
+# SQLite Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Python cache & logs
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.DS_Store
+Thumbs.db
+
+# Instruments csv
+zerodha_instruments.csv
+
