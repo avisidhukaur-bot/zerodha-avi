@@ -2049,7 +2049,7 @@ def main():
     _show_flash()
 
     # Create Tabs for Option Selling and Commodities
-    tab_options, tab_commodity = st.tabs(["💰 Nifty Option Selling", "🛢️ MCX Commodities FUT"])
+    tab_options, tab_commodity = st.tabs(["💰 Nifty Options", "🛢️ MCX Futures"])
 
     with tab_options:
 

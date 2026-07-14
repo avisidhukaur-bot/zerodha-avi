@@ -572,7 +572,7 @@ def render_commodity_tab():
             
             new_part1 = (
                 "\n\n    # Create Tabs for Option Selling and Commodities\n"
-                "    tab_options, tab_commodity = st.tabs([\"💰 Nifty Option Selling\", \"🛢️ MCX Commodities FUT\"])\n\n"
+                "    tab_options, tab_commodity = st.tabs([\"💰 Nifty Options\", \"🛢️ MCX Futures\"])\n\n"
                 "    with tab_options:\n"
                 + "\n".join(indented_lines)
                 + "\n"
