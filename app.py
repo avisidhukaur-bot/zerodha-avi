@@ -5,8 +5,8 @@ Reference: memory.md
 Version  : 2.0 BASE MODEL (Brick 6)
 Date     : June 2026
 
-Streamlit Dashboard — VPS Port 9007
-Run: streamlit run app.py --server.port 9007
+Streamlit Dashboard — VPS Port 9008
+Run: streamlit run app.py --server.port 9008
 
 SECTIONS:
   Header      -- System status bar (mode, algo, lot size, portfolio P&L)
@@ -63,7 +63,7 @@ st.set_page_config(
     menu_items       = {
         "Get Help"    : None,
         "Report a bug": None,
-        "About"       : "Zerodha OptionSelling Engine v1.01 | Port 9007 | NIFTY Only",
+        "About"       : "Zerodha OptionSelling Engine v1.01 | Port 9008 | NIFTY Only",
     }
 )
 
@@ -2118,7 +2118,7 @@ def main():
         updated = portfolio.get("last_updated", "--")
         st.markdown(
             f'<div style="text-align:center;font-size:0.68rem;color:#374151;">'
-            f'Zerodha OptionSelling Engine v1.01 | NIFTY Only | Port 9007 | '
+            f'Zerodha OptionSelling Engine v1.01 | NIFTY Only | Port 9008 | '
             f'Last updated: {updated}'
             f'</div>',
             unsafe_allow_html=True,

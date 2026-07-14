@@ -6,8 +6,8 @@ import os
 # System Name
 SYSTEM_NAME = "Zerodha Option Selling App"
 
-# Port Configuration  — PORT 9007
-DASHBOARD_PORT = 9007
+# Port Configuration  — PORT 9008
+DASHBOARD_PORT = 9008
 
 # File Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

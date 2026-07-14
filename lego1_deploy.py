@@ -55,7 +55,7 @@ FILES = [
 print("=" * 60)
 print("  LEGO 1 — ZERODHA OPTION SELLING DEPLOY")
 print(f"  Target: {VPS_USER}@{VPS_IP}:{REMOTE_DIR}")
-print("  Dashboard Port: 9007")
+print("  Dashboard Port: 9008")
 print("=" * 60)
 
 client = paramiko.SSHClient()
@@ -153,7 +153,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory={REMOTE_DIR}
-ExecStart=/usr/local/bin/streamlit run app.py --server.port 9007 --server.address 0.0.0.0
+ExecStart=/usr/local/bin/streamlit run app.py --server.port 9008 --server.address 0.0.0.0
 Restart=always
 RestartSec=5
 
@@ -192,10 +192,10 @@ time.sleep(5)
 # ── Verify ───────────────────────────────────────────────────
 print("\n[3/3] Verifying services state...")
 run_ssh("systemctl is-active zerodha_engine.service zerodha_dashboard.service zerodha_commodity.service", "Services active check")
-run_ssh("ss -tlnp | grep 9007", "Port 9007 listening check")
+run_ssh("ss -tlnp | grep 9008", "Port 9008 listening check")
 
 client.close()
 print("\n" + "=" * 60)
 print("  ZERODHA OS DEPLOYMENT SUCCESSFUL!")
-print("  Dashboard: http://5.75.250.104:9007")
+print("  Dashboard: http://5.75.250.104:9008")
 print("=" * 60)
