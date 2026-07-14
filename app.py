@@ -32,6 +32,8 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import db
+import commodity_executor as comm_exec  # MCX Commodity Engine
+
 import config as cfg
 import block_manager as bm
 import pnl_engine as pe
@@ -358,6 +360,497 @@ def _show_flash() -> None:
         st.session_state["action_msg"] = None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ACTION CALLBACKS (Prevents Streamlit double-click issues)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cb_quick_relogin():
+    from kite_executor import kite_executor as _kexec
+    _kexec.access_token  = None
+    _kexec.is_logged_in  = False
+    _kexec.login_time    = None
+    db.set("kite_access_token", "")
+    db.set("kite_is_logged_in", "False")
+    ok = _kexec.login()
+    if ok:
+        db.set("kite_login_status", "OK")
+        tg.alert_login_success()
+        _flash("✅ Re-login successful!", "success")
+    else:
+        db.set("kite_login_status", "FAILED")
+        _flash("❌ Re-login failed. Use manual credentials below.", "error")
+
+def cb_send_otp_sms():
+    from kite_executor import kite_executor as _kexec
+    res = _kexec.request_login_otp()
+    if res:
+        st.session_state["manual_login_session"] = res
+        _flash("✅ OTP sent to your registered mobile/email!", "success")
+    else:
+        _flash("❌ Failed to request OTP. Check credentials in secrets.txt.", "error")
+
+def cb_connect_with_totp():
+    manual_otp = st.session_state.get("input_manual_totp")
+    if not manual_otp or len(manual_otp) != 6 or not manual_otp.isdigit():
+        _flash("Please enter a valid 6-digit code.", "error")
+    else:
+        from kite_executor import kite_executor as _kexec
+        _kexec.access_token  = None
+        _kexec.is_logged_in  = False
+        _kexec.login_time    = None
+        db.set("kite_access_token", "")
+        db.set("kite_is_logged_in", "False")
+        ok, msg = _kexec.login_with_otp(manual_otp)
+        if ok:
+            db.set("kite_login_status", "OK")
+            tg.alert_login_success()
+            _flash("✅ Login successful! Session active.", "success")
+        else:
+            db.set("kite_login_status", "FAILED")
+            _flash(f"❌ Login failed: {msg}", "error")
+
+def cb_verify_otp():
+    manual_otp = st.session_state.get("input_manual_sms_otp")
+    sent_session = st.session_state.get("manual_login_session")
+    if not sent_session:
+        _flash("No active login session found.", "error")
+        return
+    if not manual_otp or len(manual_otp) != 6 or not manual_otp.isdigit():
+        _flash("Please enter a valid 6-digit OTP code.", "error")
+    else:
+        from kite_executor import kite_executor as _kexec
+        _kexec.access_token  = None
+        _kexec.is_logged_in  = False
+        _kexec.login_time    = None
+        db.set("kite_access_token", "")
+        db.set("kite_is_logged_in", "False")
+        ok, msg = _kexec.complete_login_with_otp(
+            sent_session["request_id"],
+            sent_session["session"],
+            manual_otp,
+            sent_session["twofa_type"]
+        )
+        if ok:
+            db.set("kite_login_status", "OK")
+            st.session_state.pop("manual_login_session", None)
+            tg.alert_login_success()
+            _flash("✅ OTP login successful! Session active.", "success")
+        else:
+            db.set("kite_login_status", "FAILED")
+            _flash(f"❌ Verification failed: {msg}", "error")
+
+def cb_cancel_otp():
+    st.session_state.pop("manual_login_session", None)
+    _flash("Session reset. You can request a new OTP now.", "info")
+
+def cb_save_credentials(input_api_key, input_api_secret, input_client_code, input_password, input_totp, input_ntfy):
+    if not input_api_key or not input_api_secret or not input_client_code or not input_password:
+        _flash("Please fill all required fields (API Key, API Secret, Client Code, Password).", "error")
+    else:
+        save_totp = input_totp.strip() if input_totp else "YOUR_TOTP_SECRET_KEY"
+        db.save_secrets_to_file({
+            "KITE_API_KEY": input_api_key,
+            "KITE_API_SECRET": input_api_secret,
+            "KITE_CLIENT_CODE": input_client_code.strip(),
+            "KITE_PASSWORD": input_password.strip(),
+            "KITE_TOTP_KEY": save_totp,
+            "NTFY_TOPIC": input_ntfy.strip()
+        })
+        _flash("✅ Credentials saved successfully! You can now use Manual OTP.", "success")
+    st.session_state["login_expanded"] = True
+
+def cb_headless_login(has_totp):
+    if not has_totp:
+        _flash("TOTP key is required for headless login.", "error")
+        return
+    from kite_executor import kite_executor as _kexec
+    _kexec.access_token = None
+    _kexec.is_logged_in = False
+    _kexec.login_time = None
+    success = _kexec.login()
+    if success:
+        db.set("kite_login_status", "OK")
+        tg.alert_login_success()
+        _flash("✅ Headless login successful! Session active.", "success")
+    else:
+        db.set("kite_login_status", "FAILED")
+        tg.alert_login_failed("Headless credentials login failed.")
+        _flash("❌ Login failed. Check your credentials and TOTP Secret.", "error")
+    st.session_state["login_expanded"] = True
+
+def cb_reconcile():
+    import block_manager as bm
+    reconciled = bm.reconcile_active_blocks()
+    if reconciled > 0:
+        _flash(f"Reconciled: {reconciled} trade(s) synced!", "success")
+    else:
+        _flash("DB is already fully synchronized with broker.", "info")
+
+def cb_refresh_pnl():
+    st.session_state["portfolio_pnl"] = _get_portfolio(sim=st.session_state.get("sim_pnl", False))
+    st.session_state["last_refresh"]  = time.time()
+
+def cb_send_test_tg():
+    r = tg.test_telegram_connection()
+    _flash(r["message"], "success" if r["ok"] else "error")
+
+def cb_send_portfolio_summary():
+    pnl  = _get_portfolio(sim=st.session_state.get("sim_pnl", False))
+    sent = tg.alert_portfolio_summary(pnl)
+    _flash("Portfolio summary sent to Telegram/ntfy!" if sent else "Alert channels not configured.", "success" if sent else "warning")
+
+def cb_toggle_trade_history():
+    st.session_state["show_trade_log"] = not st.session_state.get("show_trade_log", False)
+
+def cb_close_stranded_hedge(h_strike_id):
+    res = bm.close_hedge_strike_only(h_strike_id)
+    if res["ok"]:
+        _flash(res["message"], "success")
+    else:
+        _flash(res["message"], "error")
+
+def cb_set_add_strike_block(block_id):
+    st.session_state["add_strike_block"] = block_id
+
+def cb_execute_block(block_id):
+    r = bm.execute_block(block_id)
+    if r["ok"]:
+        _flash(r["message"], "success")
+        tg.alert_engine_started()
+    else:
+        _flash(r["message"], "error")
+
+def cb_close_strike(block_id):
+    sel_label = st.session_state.get(f"close_sel_{block_id}")
+    if not sel_label:
+        _flash("No strike selected to close.", "error")
+        return
+    try:
+        sid_str = sel_label.split("(#")[-1].replace(")", "")
+        sid = int(sid_str)
+    except Exception as e:
+        _flash(f"Failed to parse strike ID: {e}", "error")
+        return
+        
+    block = db.get_block(block_id)
+    block_num = block["block_number"] if block else "?"
+    strike_data = db.get_strike(sid)
+    
+    result = bm.close_strike(sid)
+    if result["ok"]:
+        tg.alert_strike_closed(
+            block_number     = block_num,
+            strike_price     = strike_data["strike_price"] if strike_data else 0,
+            option_type      = strike_data["option_type"] if strike_data else "",
+            sell_anchor      = result.get("sell_close_price", 0),
+            sell_exit_price  = result.get("sell_close_price", 0),
+            hedge_anchor     = result.get("hedge_close_price", 0),
+            hedge_exit_price = result.get("hedge_close_price", 0),
+            realized_pnl     = result.get("realized_pnl", 0),
+        )
+        _flash(result["message"], "success")
+    else:
+        _flash(result["message"], "error")
+
+def cb_send_daily_summary(block_id, block_num):
+    pnl_data = pe.calc_block_pnl(block_id)
+    tg.alert_block_daily_summary(pnl_data)
+    _flash(f"Block {block_num} summary sent to Telegram!", "success")
+
+def cb_execute_inline_rollover(sell_sid):
+    rv_strike = st.session_state.get(f"rv_strike_{sell_sid}")
+    rv_expiry = st.session_state.get(f"rv_expiry_{sell_sid}")
+    rv_lots = st.session_state.get(f"rv_lots_{sell_sid}")
+    
+    sell_s = db.get_strike(sell_sid)
+    if not sell_s:
+        _flash("Failed to retrieve Sell strike information.", "error")
+        return
+        
+    rv_res = bm.rollover_hedge(
+        sell_strike_id         = sell_sid,
+        new_hedge_strike_price = int(rv_strike),
+        new_hedge_expiry       = rv_expiry,
+        new_hedge_lots         = int(rv_lots),
+        new_hedge_option_type  = sell_s["option_type"],
+    )
+    if rv_res["ok"]:
+        _flash(rv_res["message"], "success")
+    else:
+        _flash(rv_res["message"], "error")
+        st.session_state[f"rollover_exp_{sell_sid}"] = True
+
+def cb_execute_rollover_center(sell_sid):
+    rv_strike = st.session_state.get(f"rv_center_strike_{sell_sid}")
+    rv_expiry = st.session_state.get(f"rv_center_expiry_{sell_sid}")
+    rv_lots = st.session_state.get(f"rv_center_lots_{sell_sid}")
+    
+    sell_s = db.get_strike(sell_sid)
+    if not sell_s:
+        _flash("Failed to retrieve Sell strike information for rollover.", "error")
+        return
+        
+    rv_res = bm.rollover_hedge(
+        sell_strike_id=sell_sid,
+        new_hedge_strike_price=int(rv_strike),
+        new_hedge_expiry=rv_expiry,
+        new_hedge_lots=int(rv_lots),
+        new_hedge_option_type=sell_s["option_type"],
+    )
+    if rv_res["ok"]:
+        _flash(rv_res["message"], "success")
+    else:
+        _flash(rv_res["message"], "error")
+        st.session_state["rollover_expanded"] = True
+
+def cb_create_block():
+    expiry_str = st.session_state.get("new_block_expiry")
+    expiry_type = st.session_state.get("new_block_type")
+    notes = st.session_state.get("new_block_notes", "")
+    result     = bm.create_block(expiry_str, expiry_type, notes)
+    if result["ok"]:
+        _flash(f"Block {result['block_number']} created for {expiry_str} ({expiry_type})", "success")
+    else:
+        if result.get("duplicate"):
+            _flash(result["message"], "warning")
+        else:
+            _flash(result["message"], "error")
+        st.session_state["new_block_expanded"] = True
+
+def cb_execute_live_trade(block_id):
+    strike_price = st.session_state.get(f"sell_sp_{block_id}", 24000)
+    option_type = st.session_state.get(f"sell_ot_{block_id}", "CE")
+    lots = st.session_state.get(f"sell_ls_{block_id}", 1)
+    use_live_anchor = st.session_state.get(f"use_live_ap_{block_id}", True)
+    
+    from kite_executor import kite_executor
+    sell_sym_info = kite_executor.search_option_symbol(db.get_block(block_id)["expiry_date"], strike_price, option_type)
+    sell_ltp = 0.0
+    if sell_sym_info:
+        sell_ltp = kite_executor.get_ltp(sell_sym_info["token"], sell_sym_info["trading_symbol"])
+        
+    if use_live_anchor:
+        anchor_price = sell_ltp if sell_ltp > 0 else 10.0
+    else:
+        anchor_price = st.session_state.get(f"manual_ap_{block_id}", 100.0)
+        
+    if anchor_price <= 0:
+        _flash("Sell anchor price must be greater than 0.", "error")
+        return
+
+    sell_res = bm.add_strike_to_block(
+        block_id     = block_id,
+        strike_price = int(strike_price),
+        option_type  = option_type,
+        leg_type     = "SELL",
+        anchor_price = float(anchor_price),
+        lots         = int(lots)
+    )
+    
+    if not sell_res["ok"]:
+        _flash(sell_res["message"], "error")
+        return
+        
+    sell_strike_id = sell_res["strike_id"]
+
+    all_block_strikes = db.get_strikes_by_block(block_id)
+    existing_open_hedges = [
+        h for h in all_block_strikes
+        if h["leg_type"] == "HEDGE_BUY"
+        and h["status"] == "OPEN"
+    ]
+    
+    use_existing_hedge = False
+    selected_existing_hedge = None
+    
+    if existing_open_hedges:
+        eg_choice = st.session_state.get(f"eg_radio_{block_id}", "")
+        use_existing_hedge = eg_choice.startswith("Use existing")
+        if use_existing_hedge:
+            if len(existing_open_hedges) == 1:
+                selected_existing_hedge = existing_open_hedges[0]
+            else:
+                sel_eg_label = st.session_state.get(f"eg_sel_{block_id}")
+                for h in existing_open_hedges:
+                    h_sym = kite_executor.search_option_symbol(h.get("expiry_date", ""), h["strike_price"], h["option_type"])
+                    h_ltp = kite_executor.get_ltp(h_sym["token"], h_sym["trading_symbol"]) if h_sym else 0.0
+                    label = f"{h['strike_price']} {h['option_type']} (exp: {h.get('expiry_date', '?')}) | LTP ₹{h_ltp:.2f} | #{h['strike_id']}"
+                    if label == sel_eg_label:
+                        selected_existing_hedge = h
+                        break
+
+    if use_existing_hedge and selected_existing_hedge:
+        bm.link_hedge_to_sell(sell_strike_id, selected_existing_hedge["strike_id"])
+        _flash_msg_suffix = f" (Using existing hedge {selected_existing_hedge['strike_price']} {selected_existing_hedge['option_type']})"
+    elif st.session_state.get(f"add_hedge_chk_{block_id}", False):
+        h_sp = st.session_state.get(f"hedge_sp_{block_id}", 0)
+        h_exp = st.session_state.get(f"hedge_exp_{block_id}", None)
+        
+        hedge_res = bm.add_strike_to_block(
+            block_id     = block_id,
+            strike_price = int(h_sp),
+            option_type  = option_type,
+            leg_type     = "HEDGE_BUY",
+            anchor_price = 0.0,
+            lots         = int(lots),
+            expiry_date  = h_exp
+        )
+        
+        if hedge_res["ok"]:
+            bm.link_hedge_to_sell(sell_strike_id, hedge_res["strike_id"])
+        else:
+            _flash(f"Hedge creation failed: {hedge_res['message']}. Aborting trade.", "error")
+            bm.remove_strike(sell_strike_id)
+            return
+        _flash_msg_suffix = ""
+    else:
+        _flash_msg_suffix = " (No hedge — unhedged sell!)"
+        
+    r = bm.execute_strike(sell_strike_id)
+    if r["ok"]:
+        _flash(f"Live trade executed successfully! {r['message']}{_flash_msg_suffix}", "success")
+        st.session_state["add_strike_block"] = None
+        tg.alert_engine_started()
+    else:
+        _flash(f"Execution failed: {r['message']}", "error")
+
+def cb_save_pending_trade(block_id):
+    strike_price = st.session_state.get(f"sell_sp_{block_id}", 24000)
+    option_type = st.session_state.get(f"sell_ot_{block_id}", "CE")
+    lots = st.session_state.get(f"sell_ls_{block_id}", 1)
+    use_live_anchor = st.session_state.get(f"use_live_ap_{block_id}", True)
+    
+    from kite_executor import kite_executor
+    sell_sym_info = kite_executor.search_option_symbol(db.get_block(block_id)["expiry_date"], strike_price, option_type)
+    sell_ltp = 0.0
+    if sell_sym_info:
+        sell_ltp = kite_executor.get_ltp(sell_sym_info["token"], sell_sym_info["trading_symbol"])
+        
+    if use_live_anchor:
+        anchor_price = sell_ltp if sell_ltp > 0 else 10.0
+    else:
+        anchor_price = st.session_state.get(f"manual_ap_{block_id}", 100.0)
+        
+    if anchor_price <= 0:
+        _flash("Sell anchor price must be greater than 0.", "error")
+        return
+
+    sell_res = bm.add_strike_to_block(
+        block_id     = block_id,
+        strike_price = int(strike_price),
+        option_type  = option_type,
+        leg_type     = "SELL",
+        anchor_price = float(anchor_price),
+        lots         = int(lots)
+    )
+    
+    if not sell_res["ok"]:
+        _flash(sell_res["message"], "error")
+        return
+        
+    sell_strike_id = sell_res["strike_id"]
+
+    all_block_strikes = db.get_strikes_by_block(block_id)
+    existing_open_hedges = [
+        h for h in all_block_strikes
+        if h["leg_type"] == "HEDGE_BUY"
+        and h["status"] == "OPEN"
+    ]
+    
+    use_existing_hedge = False
+    selected_existing_hedge = None
+    
+    if existing_open_hedges:
+        eg_choice = st.session_state.get(f"eg_radio_{block_id}", "")
+        use_existing_hedge = eg_choice.startswith("Use existing")
+        if use_existing_hedge:
+            if len(existing_open_hedges) == 1:
+                selected_existing_hedge = existing_open_hedges[0]
+            else:
+                sel_eg_label = st.session_state.get(f"eg_sel_{block_id}")
+                for h in existing_open_hedges:
+                    h_sym = kite_executor.search_option_symbol(h.get("expiry_date", ""), h["strike_price"], h["option_type"])
+                    h_ltp = kite_executor.get_ltp(h_sym["token"], h_sym["trading_symbol"]) if h_sym else 0.0
+                    label = f"{h['strike_price']} {h['option_type']} (exp: {h.get('expiry_date', '?')}) | LTP ₹{h_ltp:.2f} | #{h['strike_id']}"
+                    if label == sel_eg_label:
+                        selected_existing_hedge = h
+                        break
+
+    if use_existing_hedge and selected_existing_hedge:
+        bm.link_hedge_to_sell(sell_strike_id, selected_existing_hedge["strike_id"])
+        _flash(
+            f"Sell strike saved as PENDING. Linked to existing hedge "
+            f"{selected_existing_hedge['strike_price']} {selected_existing_hedge['option_type']}.",
+            "success"
+        )
+    elif st.session_state.get(f"add_hedge_chk_{block_id}", False):
+        h_sp = st.session_state.get(f"hedge_sp_{block_id}", 0)
+        h_exp = st.session_state.get(f"hedge_exp_{block_id}", None)
+        
+        hedge_res = bm.add_strike_to_block(
+            block_id     = block_id,
+            strike_price = int(h_sp),
+            option_type  = option_type,
+            leg_type     = "HEDGE_BUY",
+            anchor_price = 0.0,
+            lots         = int(lots),
+            expiry_date  = h_exp
+        )
+        
+        if hedge_res["ok"]:
+            bm.link_hedge_to_sell(sell_strike_id, hedge_res["strike_id"])
+            _flash("Sell & Hedge strikes saved as PENDING.", "success")
+        else:
+            _flash(f"Hedge creation failed: {hedge_res['message']}. Aborting trade.", "error")
+            bm.remove_strike(sell_strike_id)
+            return
+    else:
+        _flash("Sell strike saved as PENDING.", "success")
+        
+    st.session_state["add_strike_block"] = None
+
+def cb_cancel_add_strike(block_id):
+    st.session_state["add_strike_block"] = None
+
+def cb_update_anchor_price(strike_id):
+    new_anchor = st.session_state.get("anchor_edit_new_val", 0.0)
+    r = bm.update_strike_anchor_price(strike_id, new_anchor)
+    if r["ok"]:
+        _flash(r["message"], "success")
+    else:
+        _flash(r["message"], "error")
+    st.session_state["anchor_edit_expanded"] = True
+
+def cb_edit_block(block_id):
+    st.session_state["edit_block_id"] = block_id
+    st.session_state["block_mgmt_expanded"] = True
+
+def cb_archive_block(block_id):
+    r = bm.archive_block(block_id)
+    _flash(r["message"], "success" if r["ok"] else "error")
+    st.session_state["block_mgmt_expanded"] = True
+
+def cb_delete_block(block_id):
+    r = bm.delete_block(block_id)
+    _flash(r["message"], "success" if r["ok"] else "error")
+    st.session_state["block_mgmt_expanded"] = True
+
+def cb_save_edit_block(block_id):
+    new_expiry = st.session_state.get(f"new_exp_{block_id}", "").strip()
+    new_exp_type = st.session_state.get(f"new_etype_{block_id}", "MONTHLY")
+    if new_expiry:
+        db.update_block_expiry(block_id, new_expiry, new_exp_type)
+        _flash(f"Block expiry updated to {new_expiry}", "success")
+        st.session_state["edit_block_id"] = None
+    else:
+        _flash("Expiry date cannot be empty.", "error")
+    st.session_state["block_mgmt_expanded"] = True
+
+def cb_cancel_edit_block():
+    st.session_state["edit_block_id"] = None
+    st.session_state["block_mgmt_expanded"] = True
+
+
 def _pnl_color_class(pnl: float) -> str:
     return "metric-profit" if pnl >= 0 else "metric-loss"
 
@@ -457,14 +950,7 @@ def render_sidebar():
 
         if login_status == "OK" and token_fresh:
             st.success("🟢 Zerodha API: CONNECTED")
-            if st.button("🔧 Reconcile / Sync DB", key="btn_reconcile", use_container_width=True, help="Scan today's orders to link any filled/pending trades that are not recorded in the DB."):
-                import block_manager as bm
-                reconciled = bm.reconcile_active_blocks()
-                if reconciled > 0:
-                    _flash(f"Reconciled: {reconciled} trade(s) synced!", "success")
-                else:
-                    _flash("DB is already fully synchronized with broker.", "info")
-                st.rerun()
+            st.button("🔧 Reconcile / Sync DB", key="btn_reconcile", use_container_width=True, help="Scan today's orders to link any filled/pending trades that are not recorded in the DB.", on_click=cb_reconcile)
         elif login_status == "OK" and not token_fresh:
             st.warning("⚠️ Session expired (24hr) — please re-login below")
             login_status = "EXPIRED"
@@ -479,22 +965,7 @@ def render_sidebar():
             and len(totp_key_stored) >= 16
         )
         if login_status in ("EXPIRED", "PENDING", "FAILED") and totp_is_real:
-            if st.button("🔄 Quick Re-Login (TOTP)", use_container_width=True, key="btn_quick_relogin"):
-                from kite_executor import kite_executor as _kexec
-                _kexec.access_token  = None
-                _kexec.is_logged_in  = False
-                _kexec.login_time    = None
-                db.set("kite_access_token", "")
-                db.set("kite_is_logged_in", "False")
-                ok = _kexec.login()
-                if ok:
-                    db.set("kite_login_status", "OK")
-                    tg.alert_login_success()
-                    _flash("✅ Re-login successful!", "success")
-                else:
-                    db.set("kite_login_status", "FAILED")
-                    _flash("❌ Re-login failed. Use manual credentials below.", "error")
-                st.rerun()
+            st.button("🔄 Quick Re-Login (TOTP)", use_container_width=True, key="btn_quick_relogin", on_click=cb_quick_relogin)
 
         if login_status in ("EXPIRED", "PENDING", "FAILED"):
             st.markdown("### 🔌 MANUAL OTP LOGIN")
@@ -504,16 +975,7 @@ def render_sidebar():
             
             if not sent_session:
                 # Option A: Send SMS OTP
-                if st.button("📲 Send OTP to Mobile", use_container_width=True, key="btn_send_otp_sms"):
-                    from kite_executor import kite_executor as _kexec
-                    with st.spinner("Requesting OTP..."):
-                        res = _kexec.request_login_otp()
-                    if res:
-                        st.session_state["manual_login_session"] = res
-                        _flash("✅ OTP sent to your registered mobile/email!", "success")
-                    else:
-                        _flash("❌ Failed to request OTP. Check credentials in secrets.txt.", "error")
-                    st.rerun()
+                st.button("📲 Send OTP to Mobile", use_container_width=True, key="btn_send_otp_sms", on_click=cb_send_otp_sms)
                 
                 st.markdown("<div style='text-align: center; margin: 8px 0; color: #64748b; font-size: 0.8rem;'>— OR —</div>", unsafe_allow_html=True)
                 
@@ -525,26 +987,7 @@ def render_sidebar():
                     help="Enter 6-digit code if you use Google Authenticator.",
                     key="input_manual_totp"
                 )
-                if st.button("🔌 Connect with TOTP", use_container_width=True, key="btn_manual_totp_login"):
-                    if not manual_otp or len(manual_otp) != 6 or not manual_otp.isdigit():
-                        _flash("Please enter a valid 6-digit code.", "error")
-                    else:
-                        from kite_executor import kite_executor as _kexec
-                        _kexec.access_token  = None
-                        _kexec.is_logged_in  = False
-                        _kexec.login_time    = None
-                        db.set("kite_access_token", "")
-                        db.set("kite_is_logged_in", "False")
-                        with st.spinner("Connecting with TOTP..."):
-                            ok, msg = _kexec.login_with_otp(manual_otp)
-                        if ok:
-                            db.set("kite_login_status", "OK")
-                            tg.alert_login_success()
-                            _flash("✅ Login successful! Session active.", "success")
-                        else:
-                            db.set("kite_login_status", "FAILED")
-                            _flash(f"❌ Login failed: {msg}", "error")
-                        st.rerun()
+                st.button("🔌 Connect with TOTP", use_container_width=True, key="btn_manual_totp_login", on_click=cb_connect_with_totp)
             else:
                 # OTP is sent: Show OTP input and Verify/Resend buttons
                 st.info("📩 OTP has been sent to your registered mobile/email.")
@@ -558,40 +1001,12 @@ def render_sidebar():
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("🔌 Verify & Connect", use_container_width=True, key="btn_verify_otp"):
-                        if not manual_otp or len(manual_otp) != 6 or not manual_otp.isdigit():
-                            _flash("Please enter a valid 6-digit OTP code.", "error")
-                        else:
-                            from kite_executor import kite_executor as _kexec
-                            _kexec.access_token  = None
-                            _kexec.is_logged_in  = False
-                            _kexec.login_time    = None
-                            db.set("kite_access_token", "")
-                            db.set("kite_is_logged_in", "False")
-                            
-                            with st.spinner("Verifying OTP..."):
-                                ok, msg = _kexec.complete_login_with_otp(
-                                    sent_session["request_id"],
-                                    sent_session["session"],
-                                    manual_otp,
-                                    sent_session["twofa_type"]
-                                )
-                            if ok:
-                                db.set("kite_login_status", "OK")
-                                st.session_state.pop("manual_login_session", None)
-                                tg.alert_login_success()
-                                _flash("✅ OTP login successful! Session active.", "success")
-                            else:
-                                db.set("kite_login_status", "FAILED")
-                                _flash(f"❌ Verification failed: {msg}", "error")
-                            st.rerun()
+                    st.button("🔌 Verify & Connect", use_container_width=True, key="btn_verify_otp", on_click=cb_verify_otp)
                 with col2:
-                    if st.button("🔄 Cancel", use_container_width=True, key="btn_cancel_otp"):
-                        st.session_state.pop("manual_login_session", None)
-                        _flash("Session reset. You can request a new OTP now.", "info")
-                        st.rerun()
+                    st.button("🔄 Cancel", use_container_width=True, key="btn_cancel_otp", on_click=cb_cancel_otp)
 
-        with st.expander("🔐 Zerodha Credentials & Login", expanded=login_status not in ("OK",)):
+        login_expanded = st.session_state.pop("login_expanded", False)
+        with st.expander("🔐 Zerodha Credentials & Login", expanded=login_expanded or login_status not in ("OK",)):
             st.caption("Enter your Zerodha Kite Connect credentials.")
             
             curr_api_key = db.get("KITE_API_KEY", "")
@@ -660,38 +1075,10 @@ def render_sidebar():
             
             col_s1, col_s2 = st.columns(2)
             with col_s1:
-                if st.button("💾 Save Credentials", use_container_width=True, key="btn_save_credentials"):
-                    if not input_api_key or not input_api_secret or not input_client_code or not input_password:
-                        _flash("Please fill all required fields (API Key, API Secret, Client Code, Password).", "error")
-                    else:
-                        save_totp = input_totp.strip() if input_totp else "YOUR_TOTP_SECRET_KEY"
-                        db.save_secrets_to_file({
-                            "KITE_API_KEY": input_api_key,
-                            "KITE_API_SECRET": input_api_secret,
-                            "KITE_CLIENT_CODE": input_client_code.strip(),
-                            "KITE_PASSWORD": input_password.strip(),
-                            "KITE_TOTP_KEY": save_totp,
-                            "NTFY_TOPIC": input_ntfy.strip()
-                        })
-                        _flash("✅ Credentials saved successfully! You can now use Manual OTP.", "success")
-                        st.rerun()
+                st.button("💾 Save Credentials", use_container_width=True, key="btn_save_credentials", on_click=cb_save_credentials, args=(input_api_key, input_api_secret, input_client_code, input_password, input_totp, input_ntfy))
             with col_s2:
                 has_totp = input_totp and input_totp.upper() not in ("YOUR_TOTP_SECRET_KEY", "")
-                if st.button("🔑 Run Headless Login", use_container_width=True, key="btn_headless_login", disabled=not has_totp):
-                    from kite_executor import kite_executor as _kexec
-                    _kexec.access_token = None
-                    _kexec.is_logged_in = False
-                    _kexec.login_time = None
-                    success = _kexec.login()
-                    if success:
-                        db.set("kite_login_status", "OK")
-                        tg.alert_login_success()
-                        _flash("✅ Headless login successful! Session active.", "success")
-                    else:
-                        db.set("kite_login_status", "FAILED")
-                        tg.alert_login_failed("Headless credentials login failed.")
-                        _flash("❌ Login failed. Check your credentials and TOTP Secret.", "error")
-                    st.rerun()
+                st.button("🔑 Run Headless Login", use_container_width=True, key="btn_headless_login", disabled=not has_totp, on_click=cb_headless_login, args=(has_totp,))
 
             st.markdown("---")
             if input_api_key:
@@ -736,25 +1123,13 @@ def render_sidebar():
         # --- Test buttons ---
         st.markdown("### TOOLS")
 
-        if st.button("📊 Refresh P&L", use_container_width=True, key="btn_refresh"):
-            st.session_state["portfolio_pnl"] = _get_portfolio(sim=st.session_state.get("sim_pnl", False))
-            st.session_state["last_refresh"]  = time.time()
-            st.rerun()
+        st.button("📊 Refresh P&L", use_container_width=True, key="btn_refresh", on_click=cb_refresh_pnl)
 
-        if st.button("📱 Send Test Alert", use_container_width=True, key="btn_test_tg"):
-            r = tg.test_telegram_connection()
-            _flash(r["message"], "success" if r["ok"] else "error")
-            st.rerun()
+        st.button("📱 Send Test Alert", use_container_width=True, key="btn_test_tg", on_click=cb_send_test_tg)
 
-        if st.button("📮 Portfolio Summary", use_container_width=True, key="btn_port_sum"):
-            pnl  = _get_portfolio(sim=st.session_state.get("sim_pnl", False))
-            sent = tg.alert_portfolio_summary(pnl)
-            _flash("Portfolio summary sent to Telegram/ntfy!" if sent else "Alert channels not configured.", "success" if sent else "warning")
-            st.rerun()
+        st.button("📮 Portfolio Summary", use_container_width=True, key="btn_port_sum", on_click=cb_send_portfolio_summary)
 
-        if st.button("📋 Trade History", use_container_width=True, key="btn_history"):
-            st.session_state["show_trade_log"] = not st.session_state.get("show_trade_log", False)
-            st.rerun()
+        st.button("📋 Trade History", use_container_width=True, key="btn_history", on_click=cb_toggle_trade_history)
 
         st.divider()
 
@@ -977,13 +1352,7 @@ def render_block_card(block_pnl: dict):
             st.warning("⚠️ **Orphaned Hedges Detected!** (Partner Sell Strike is CLOSED)")
             for h in orphaned_hedges:
                 h_label = f"Hedge {h['strike_price']} {h['option_type']} (Strike #{h['strike_id']})"
-                if st.button(f"✖ Close Stranded {h_label}", key=f"close_orphaned_{h['strike_id']}", use_container_width=True):
-                    res = bm.close_hedge_strike_only(h["strike_id"])
-                    if res["ok"]:
-                        _flash(res["message"], "success")
-                    else:
-                        _flash(res["message"], "error")
-                    st.rerun()
+                st.button(f"✖ Close Stranded {h_label}", key=f"close_orphaned_{h['strike_id']}", use_container_width=True, on_click=cb_close_stranded_hedge, args=(h["strike_id"],))
 
     else:
         st.markdown(
@@ -1012,9 +1381,10 @@ def render_block_card(block_pnl: dict):
         else:
             old_hedge_label = "None linked"
 
+        inline_rv_expanded = st.session_state.pop(f"rollover_exp_{sell_sid}", False)
         with st.expander(
             f"🔄 Rollover Hedge — {sell_s['strike_price']} {sell_s['option_type']} SELL (#{sell_sid})",
-            expanded=False
+            expanded=inline_rv_expanded
         ):
             st.markdown(
                 f"""
@@ -1086,46 +1456,26 @@ def render_block_card(block_pnl: dict):
                 unsafe_allow_html=True
             )
 
-            if st.button(
+            st.button(
                 f"🔄 Execute Rollover",
                 key=f"btn_rollover_{sell_sid}",
                 use_container_width=True,
-                type="primary"
-            ):
-                with st.spinner("Rolling over hedge... please wait"):
-                    rv_res = bm.rollover_hedge(
-                        sell_strike_id         = sell_sid,
-                        new_hedge_strike_price = int(rv_strike),
-                        new_hedge_expiry       = rv_expiry,
-                        new_hedge_lots         = int(rv_lots),
-                        new_hedge_option_type  = sell_s["option_type"],
-                    )
-                if rv_res["ok"]:
-                    _flash(rv_res["message"], "success")
-                else:
-                    _flash(rv_res["message"], "error")
-                st.rerun()
+                type="primary",
+                on_click=cb_execute_inline_rollover,
+                args=(sell_sid,)
+            )
 
     # Action buttons row
     if status == "ACTIVE":
         col_a, col_b, col_c, col_d = st.columns([2, 2, 2, 2])
 
         with col_a:
-            if st.button(f"+ Add Strike", key=f"add_strike_{block_id}", use_container_width=True):
-                st.session_state["add_strike_block"] = block_id
-                st.rerun()
+            st.button(f"+ Add Strike", key=f"add_strike_{block_id}", use_container_width=True, on_click=cb_set_add_strike_block, args=(block_id,))
 
         with col_b:
             all_pending = [s for s in bm.get_block_summary(block_id)["strikes"] if s["status"] == "PENDING"]
             if all_pending:
-                if st.button(f"▶ Execute Block", key=f"exec_block_{block_id}", use_container_width=True):
-                    r = bm.execute_block(block_id)
-                    if r["ok"]:
-                        _flash(r["message"], "success")
-                        tg.alert_engine_started()
-                    else:
-                        _flash(r["message"], "error")
-                    st.rerun()
+                st.button(f"▶ Execute Block", key=f"exec_block_{block_id}", use_container_width=True, on_click=cb_execute_block, args=(block_id,))
 
         with col_c:
             open_sells = [s for s in bm.get_block_summary(block_id)["strikes"]
@@ -1141,38 +1491,18 @@ def render_block_card(block_pnl: dict):
                     key     = f"close_sel_{block_id}",
                     label_visibility="collapsed",
                 )
-                if st.button(f"✖ Close + Hedge", key=f"close_btn_{block_id}", use_container_width=True):
-                    sid    = strike_options[sel_label]
-                    result = bm.close_strike(sid)
-                    if result["ok"]:
-                        tg.alert_strike_closed(
-                            block_number     = block_num,
-                            strike_price     = db.get_strike(sid)["strike_price"] if db.get_strike(sid) else 0,
-                            option_type      = db.get_strike(sid)["option_type"] if db.get_strike(sid) else "",
-                            sell_anchor      = result.get("sell_close_price", 0),
-                            sell_exit_price  = result.get("sell_close_price", 0),
-                            hedge_anchor     = result.get("hedge_close_price", 0),
-                            hedge_exit_price = result.get("hedge_close_price", 0),
-                            realized_pnl     = result.get("realized_pnl", 0),
-                        )
-                        _flash(result["message"], "success")
-                    else:
-                        _flash(result["message"], "error")
-                    st.rerun()
+                st.button(f"✖ Close + Hedge", key=f"close_btn_{block_id}", use_container_width=True, on_click=cb_close_strike, args=(block_id,))
 
         with col_d:
-            if st.button(f"📊 Daily Summary", key=f"daily_sum_{block_id}", use_container_width=True):
-                pnl_data = pe.calc_block_pnl(block_id)
-                tg.alert_block_daily_summary(pnl_data)
-                _flash(f"Block {block_num} summary sent to Telegram!", "success")
-                st.rerun()
+            st.button(f"📊 Daily Summary", key=f"daily_sum_{block_id}", use_container_width=True, on_click=cb_send_daily_summary, args=(block_id, block_num))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WEEKLY HEDGE ROLLOVER CENTER
 # ─────────────────────────────────────────────────────────────────────────────
 def render_rollover_center():
-    with st.expander("🔄 WEEKLY HEDGE ROLLOVER CENTER", expanded=False):
+    rollover_expanded = st.session_state.pop("rollover_expanded", False)
+    with st.expander("🔄 WEEKLY HEDGE ROLLOVER CENTER", expanded=rollover_expanded):
         st.markdown(
             '<p class="section-title">Centralized Weekly Hedge Rollover Control</p>',
             unsafe_allow_html=True
@@ -1284,32 +1614,22 @@ def render_rollover_center():
             unsafe_allow_html=True
         )
 
-        if st.button(
+        st.button(
             "🔄 Confirm & Execute Rollover",
             key=f"rv_center_btn_execute_{sell_sid}",
             use_container_width=True,
-            type="primary"
-        ):
-            with st.spinner("Rolling over weekly hedge... please wait"):
-                rv_res = bm.rollover_hedge(
-                    sell_strike_id=sell_sid,
-                    new_hedge_strike_price=int(rv_strike),
-                    new_hedge_expiry=rv_expiry,
-                    new_hedge_lots=int(rv_lots),
-                    new_hedge_option_type=sell_s["option_type"],
-                )
-            if rv_res["ok"]:
-                _flash(rv_res["message"], "success")
-            else:
-                _flash(rv_res["message"], "error")
-            st.rerun()
+            type="primary",
+            on_click=cb_execute_rollover_center,
+            args=(sell_sid,)
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # NEW BLOCK FORM
 # ─────────────────────────────────────────────────────────────────────────────
 def render_new_block_form():
-    with st.expander("➕ CREATE NEW BLOCK", expanded=False):
+    new_block_expanded = st.session_state.pop("new_block_expanded", False)
+    with st.expander("➕ CREATE NEW BLOCK", expanded=new_block_expanded):
         st.markdown('<p class="section-title">New Block Setup</p>', unsafe_allow_html=True)
         col1, col2, col3 = st.columns([2, 2, 3])
 
@@ -1337,16 +1657,7 @@ def render_new_block_form():
                 key         = "new_block_notes",
             )
 
-        if st.button("🆕 Create Block", key="btn_create_block", type="primary"):
-            result     = bm.create_block(expiry_str, expiry_type, notes)
-            if result["ok"]:
-                _flash(f"Block {result['block_number']} created for {expiry_str} ({expiry_type})", "success")
-            else:
-                if result.get("duplicate"):
-                    _flash(result["message"], "warning")
-                else:
-                    _flash(result["message"], "error")
-            st.rerun()
+        st.button("🆕 Create Block", key="btn_create_block", type="primary", on_click=cb_create_block)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1557,132 +1868,13 @@ def render_add_strike_form(block_id: int):
     col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 
     with col_btn1:
-        if st.button("▶ Execute Live Trade", key=f"btn_exec_trade_{block_id}", type="primary", use_container_width=True):
-            if anchor_price <= 0:
-                _flash("Sell anchor price must be greater than 0.", "error")
-                st.rerun()
-                
-            # Add Sell strike
-            sell_res = bm.add_strike_to_block(
-                block_id     = block_id,
-                strike_price = int(strike_price),
-                option_type  = option_type,
-                leg_type     = "SELL",
-                anchor_price = float(anchor_price),
-                lots         = int(lots)
-            )
-            
-            if not sell_res["ok"]:
-                _flash(sell_res["message"], "error")
-                st.rerun()
-                
-            sell_strike_id = sell_res["strike_id"]
-
-            # Feature B: If using existing hedge, link it instead of buying new
-            if use_existing_hedge and selected_existing_hedge:
-                bm.link_hedge_to_sell(sell_strike_id, selected_existing_hedge["strike_id"])
-                _flash_msg_suffix = f" (Using existing hedge {selected_existing_hedge['strike_price']} {selected_existing_hedge['option_type']})"
-            elif st.session_state.get(f"add_hedge_chk_{block_id}", False):
-                # Add Hedge strike if requested
-                hedge_sym_info = kite_executor.search_option_symbol(st.session_state.get(f"hedge_exp_{block_id}"), st.session_state.get(f"hedge_sp_{block_id}"), option_type)
-                hedge_ltp = kite_executor.get_ltp(hedge_sym_info["token"], hedge_sym_info["trading_symbol"]) if hedge_sym_info else 0.0
-                h_sp = st.session_state.get(f"hedge_sp_{block_id}", 0)
-                h_exp = st.session_state.get(f"hedge_exp_{block_id}", None)
-                
-                hedge_res = bm.add_strike_to_block(
-                    block_id     = block_id,
-                    strike_price = int(h_sp),
-                    option_type  = option_type,
-                    leg_type     = "HEDGE_BUY",
-                    anchor_price = 0.0,
-                    lots         = int(lots),
-                    expiry_date  = h_exp
-                )
-                
-                if hedge_res["ok"]:
-                    bm.link_hedge_to_sell(sell_strike_id, hedge_res["strike_id"])
-                else:
-                    _flash(f"Hedge creation failed: {hedge_res['message']}. Aborting trade.", "error")
-                    bm.remove_strike(sell_strike_id)
-                    st.rerun()
-                _flash_msg_suffix = ""
-            else:
-                _flash_msg_suffix = " (No hedge — unhedged sell!)"
-                
-            # Execute immediately
-            r = bm.execute_strike(sell_strike_id)
-            if r["ok"]:
-                _flash(f"Live trade executed successfully! {r['message']}{_flash_msg_suffix}", "success")
-                st.session_state["add_strike_block"] = None
-                tg.alert_engine_started()
-            else:
-                _flash(f"Execution failed: {r['message']}", "error")
-            st.rerun()
+        st.button("▶ Execute Live Trade", key=f"btn_exec_trade_{block_id}", type="primary", use_container_width=True, on_click=cb_execute_live_trade, args=(block_id,))
 
     with col_btn2:
-        if st.button("💾 Save as Pending", key=f"btn_save_pending_{block_id}", use_container_width=True):
-            if anchor_price <= 0:
-                _flash("Sell anchor price must be greater than 0.", "error")
-                st.rerun()
-                
-            # Add Sell strike
-            sell_res = bm.add_strike_to_block(
-                block_id     = block_id,
-                strike_price = int(strike_price),
-                option_type  = option_type,
-                leg_type     = "SELL",
-                anchor_price = float(anchor_price),
-                lots         = int(lots)
-            )
-            
-            if not sell_res["ok"]:
-                _flash(sell_res["message"], "error")
-                st.rerun()
-                
-            sell_strike_id = sell_res["strike_id"]
-
-            # Feature B: If using existing hedge, link it (no buy needed for pending)
-            if use_existing_hedge and selected_existing_hedge:
-                bm.link_hedge_to_sell(sell_strike_id, selected_existing_hedge["strike_id"])
-                _flash(
-                    f"Sell strike saved as PENDING. Linked to existing hedge "
-                    f"{selected_existing_hedge['strike_price']} {selected_existing_hedge['option_type']}.",
-                    "success"
-                )
-            elif st.session_state.get(f"add_hedge_chk_{block_id}", False):
-                h_sp = st.session_state.get(f"hedge_sp_{block_id}", 0)
-                h_exp = st.session_state.get(f"hedge_exp_{block_id}", None)
-                hedge_sym_info = kite_executor.search_option_symbol(h_exp, h_sp, option_type)
-                hedge_ltp = kite_executor.get_ltp(hedge_sym_info["token"], hedge_sym_info["trading_symbol"]) if hedge_sym_info else 0.0
-                eff_hedge_anchor = 0.0
-                
-                hedge_res = bm.add_strike_to_block(
-                    block_id     = block_id,
-                    strike_price = int(h_sp),
-                    option_type  = option_type,
-                    leg_type     = "HEDGE_BUY",
-                    anchor_price = eff_hedge_anchor,
-                    lots         = int(lots),
-                    expiry_date  = h_exp
-                )
-                
-                if hedge_res["ok"]:
-                    bm.link_hedge_to_sell(sell_strike_id, hedge_res["strike_id"])
-                    _flash("Sell & Hedge strikes saved as PENDING.", "success")
-                else:
-                    _flash(f"Hedge creation failed: {hedge_res['message']}. Aborting trade.", "error")
-                    bm.remove_strike(sell_strike_id)
-                    st.rerun()
-            else:
-                _flash("Sell strike saved as PENDING.", "success")
-                
-            st.session_state["add_strike_block"] = None
-            st.rerun()
+        st.button("💾 Save as Pending", key=f"btn_save_pending_{block_id}", use_container_width=True, on_click=cb_save_pending_trade, args=(block_id,))
 
     with col_btn3:
-        if st.button("✖ Cancel", key=f"cancel_add_{block_id}", use_container_width=True):
-            st.session_state["add_strike_block"] = None
-            st.rerun()
+        st.button("✖ Cancel", key=f"cancel_add_{block_id}", use_container_width=True, on_click=cb_cancel_add_strike, args=(block_id,))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1722,7 +1914,8 @@ def render_trade_log():
 # ARCHIVE / DELETE / EDIT SECTION
 # ─────────────────────────────────────────────────────────────────────────────
 def render_edit_anchor_form():
-    with st.expander("✏️ Edit Strike Anchor Price (Mid-Trade)", expanded=False):
+    anchor_edit_expanded = st.session_state.pop("anchor_edit_expanded", False)
+    with st.expander("✏️ Edit Strike Anchor Price (Mid-Trade)", expanded=anchor_edit_expanded):
         st.markdown('<p class="section-title">Edit Anchor Price</p>', unsafe_allow_html=True)
         blocks = db.get_all_blocks()
         if not blocks:
@@ -1760,14 +1953,7 @@ def render_edit_anchor_form():
                 key="anchor_edit_new_val"
             )
             
-            if st.button("Update Anchor Price", key="btn_update_anchor", type="primary"):
-                import block_manager as bm
-                r = bm.update_strike_anchor_price(strike_id, new_anchor)
-                if r["ok"]:
-                    _flash(r["message"], "success")
-                else:
-                    _flash(r["message"], "error")
-                st.rerun()
+            st.button("Update Anchor Price", key="btn_update_anchor", type="primary", on_click=cb_update_anchor_price, args=(strike_id,))
 
 
 def render_block_management():
@@ -1788,20 +1974,12 @@ def render_block_management():
                 unsafe_allow_html=True,
             )
         with col2:
-            if st.button("✏️ Edit", key=f"edit_{b['block_id']}", use_container_width=True):
-                st.session_state["edit_block_id"] = b["block_id"]
-                st.rerun()
+            st.button("✏️ Edit", key=f"edit_{b['block_id']}", use_container_width=True, on_click=cb_edit_block, args=(b['block_id'],))
         with col3:
             if b["status"] == "ACTIVE":
-                if st.button("Archive", key=f"arch_{b['block_id']}", use_container_width=True):
-                    r = bm.archive_block(b["block_id"])
-                    _flash(r["message"], "success" if r["ok"] else "error")
-                    st.rerun()
+                st.button("Archive", key=f"arch_{b['block_id']}", use_container_width=True, on_click=cb_archive_block, args=(b['block_id'],))
         with col4:
-            if st.button("🗑 Delete", key=f"del_{b['block_id']}", use_container_width=True):
-                r = bm.delete_block(b["block_id"])
-                _flash(r["message"], "success" if r["ok"] else "error")
-                st.rerun()
+            st.button("🗑 Delete", key=f"del_{b['block_id']}", use_container_width=True, on_click=cb_delete_block, args=(b['block_id'],))
 
         # Edit block inline panel
         if st.session_state.get("edit_block_id") == b["block_id"]:
@@ -1825,20 +2003,9 @@ def render_block_management():
                     )
                 with ec3:
                     st.markdown("<br/>", unsafe_allow_html=True)
-                save_edit = st.form_submit_button("💾 Save Changes", use_container_width=True)
+                st.form_submit_button("💾 Save Changes", use_container_width=True, on_click=cb_save_edit_block, args=(b['block_id'],))
 
-            if save_edit:
-                if new_expiry.strip():
-                    db.update_block_expiry(b["block_id"], new_expiry.strip(), new_exp_type)
-                    _flash(f"Block {b['block_number']} expiry updated to {new_expiry}", "success")
-                    st.session_state["edit_block_id"] = None
-                else:
-                    _flash("Expiry date cannot be empty.", "error")
-                st.rerun()
-
-            if st.button("Cancel Edit", key=f"cancel_edit_{b['block_id']}"):
-                st.session_state["edit_block_id"] = None
-                st.rerun()
+            st.button("Cancel Edit", key=f"cancel_edit_{b['block_id']}", on_click=cb_cancel_edit_block)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1881,75 +2048,369 @@ def main():
     # Flash messages
     _show_flash()
 
-    # Metrics row
-    render_metrics(portfolio)
+    # Create Tabs for Option Selling and Commodities
+    tab_options, tab_commodity = st.tabs(["💰 Nifty Option Selling", "🛢️ MCX Commodities FUT"])
 
-    st.markdown("<br/>", unsafe_allow_html=True)
+    with tab_options:
 
-    # Weekly hedge rollover center (always visible at top)
-    render_rollover_center()
 
-    st.markdown("<br/>", unsafe_allow_html=True)
+        # Metrics row
+        render_metrics(portfolio)
 
-    # New block form (always visible at top)
-    render_new_block_form()
+        st.markdown("<br/>", unsafe_allow_html=True)
 
-    st.markdown("<br/>", unsafe_allow_html=True)
+        # Weekly hedge rollover center (always visible at top)
+        render_rollover_center()
 
-    # Add strike form (shown when user clicks "Add Strike")
-    add_block_id = st.session_state.get("add_strike_block")
-    if add_block_id:
-        with st.container():
-            render_add_strike_form(add_block_id)
+        st.markdown("<br/>", unsafe_allow_html=True)
+
+        # New block form (always visible at top)
+        render_new_block_form()
+
+        st.markdown("<br/>", unsafe_allow_html=True)
+
+        # Add strike form (shown when user clicks "Add Strike")
+        add_block_id = st.session_state.get("add_strike_block")
+        if add_block_id:
+            with st.container():
+                render_add_strike_form(add_block_id)
+            st.markdown("---")
+
+        # Block cards
+        block_pnls = portfolio.get("block_pnls", [])
+
+        if not block_pnls:
+            st.markdown("""
+            <div style="text-align:center;padding:60px 0;color:#374151;">
+                <div style="font-size:3rem;">📦</div>
+                <div style="font-size:1.1rem;font-weight:600;color:#6b7280;margin-top:12px;">No Active Blocks</div>
+                <div style="font-size:0.85rem;color:#374151;margin-top:6px;">
+                    Create your first block above to start trading
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown('<p class="section-title">ACTIVE BLOCKS</p>', unsafe_allow_html=True)
+
+            for bp in block_pnls:
+                with st.container():
+                    st.markdown('<div class="block-card">', unsafe_allow_html=True)
+                    render_block_card(bp)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown("<br/>", unsafe_allow_html=True)
+
+        # Edit anchor price form
+        render_edit_anchor_form()
+
+        # Block management (archive/delete)
+        block_mgmt_expanded = st.session_state.pop("block_mgmt_expanded", False) or st.session_state.get("edit_block_id") is not None
+        with st.expander("⚙️ Block Management (Archive / Delete)", expanded=block_mgmt_expanded):
+            render_block_management()
+
+        # Trade history log
+        if st.session_state.get("show_trade_log"):
+            render_trade_log()
+
+        # Paper Mode notice removed
+
+        # Footer
         st.markdown("---")
+        updated = portfolio.get("last_updated", "--")
+        st.markdown(
+            f'<div style="text-align:center;font-size:0.68rem;color:#374151;">'
+            f'Zerodha OptionSelling Engine v1.01 | NIFTY Only | Port 9007 | '
+            f'Last updated: {updated}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    # Block cards
-    block_pnls = portfolio.get("block_pnls", [])
 
-    if not block_pnls:
+
+
+    # ═══════════════════════════════════════════════════════════════
+    # MCX COMMODITY FUTURES TAB (Auto-added by upgrade_add_commodity.py)
+    # ═══════════════════════════════════════════════════════════════
+    def render_commodity_tab():
+        """Renders the MCX Commodity Futures dashboard tab."""
+        import commodity_executor as comm_exec
+    
         st.markdown("""
-        <div style="text-align:center;padding:60px 0;color:#374151;">
-            <div style="font-size:3rem;">📦</div>
-            <div style="font-size:1.1rem;font-weight:600;color:#6b7280;margin-top:12px;">No Active Blocks</div>
-            <div style="font-size:0.85rem;color:#374151;margin-top:6px;">
-                Create your first block above to start trading
+        <div style='text-align:center;padding:12px 0 4px;'>
+            <h2 style='margin:0;font-size:1.5rem;'>🛢️ MCX COMMODITY FUTURES ENGINE</h2>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Engine Status Badge
+        comm_running = db.get("comm_engine_running", "OFF") == "ON"
+        badge_color = "#22c55e" if comm_running else "#ef4444"
+        badge_text = "🟢 RUNNING & MONITORING" if comm_running else "🔴 ENGINE PAUSED"
+    
+        st.markdown(f"""
+        <div style='text-align:center;margin:8px 0 16px;'>
+            <span style='font-size:0.8rem;color:#94a3b8;font-weight:700;'>COMMODITY ENGINE STATUS</span><br/>
+            <span style='background:{badge_color};color:white;padding:6px 16px;border-radius:30px;font-size:0.9rem;font-weight:800;'>
+                {badge_text}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_st1, col_st2, col_st3 = st.columns([1, 1, 1])
+        with col_st1:
+            st.markdown(
+                f"<p style='font-size:0.85rem;color:#64748b;'>Contract: <b>{db.get('comm_selected_contract', 'None')}</b></p>",
+                unsafe_allow_html=True
+            )
+        with col_st2:
+            comm_toggle = st.toggle(
+                "Activate Commodity Engine",
+                value=comm_running,
+                key="comm_engine_toggle",
+                help="Turn ON to begin auto-trading on 15m candle closed boundaries."
+            )
+            if comm_toggle != comm_running:
+                db.set("comm_engine_running", "ON" if comm_toggle else "OFF")
+                if comm_toggle:
+                    db.set("comm_last_check_candle_time", "")
+                _flash("Commodity Engine " + ("Activated" if comm_toggle else "Paused"), "success")
+                st.rerun()
+        with col_st3:
+            if st.button("🔄 Refresh Data", key="comm_refresh_btn", use_container_width=True):
+                st.rerun()
+
+        st.markdown("<br/>", unsafe_allow_html=True)
+
+        # 2. Resolve Active/Selected Contract
+        pos_state = db.get("comm_position_state", "FLAT")
+        entry_p = float(db.get("comm_entry_price", "0.0") or 0.0)
+        entry_t = db.get("comm_entry_time", "")
+        saved_contract = db.get("comm_selected_contract", "")
+    
+        commodity_assets = [
+            "GOLDPETAL", "GOLDM", "GOLD", "SILVERMIC", "SILVERM", "SILVER", 
+            "CRUDEOILM", "CRUDEOIL", "NATGASMINI", "NATURALGAS", 
+            "COPPER", "NICKEL", "ZINC", "ZINCM", "LEAD", "LEADM", "ALUMINIUM", "ALUMINI"
+        ]
+    
+        widget_asset = st.session_state.get("comm_sel_asset_widget")
+        if widget_asset:
+            default_asset = widget_asset
+        else:
+            default_asset = "GOLDPETAL"
+            for asset in commodity_assets:
+                if saved_contract.startswith(asset):
+                    default_asset = asset
+                    break
+                
+        contracts = comm_exec.get_available_contracts(default_asset)
+        contract_options = [c["trading_symbol"] for c in contracts]
+    
+        widget_contract = st.session_state.get("comm_sel_contract_widget")
+    
+        if pos_state != "FLAT" and saved_contract:
+            display_contract = saved_contract
+        elif widget_contract:
+            display_contract = widget_contract
+        elif saved_contract:
+            display_contract = saved_contract
+        elif contract_options:
+            display_contract = contract_options[0]
+        else:
+            display_contract = ""
+        
+        ltp = 0.0
+        pnl_pct = 0.0
+        if display_contract:
+            ltp = comm_exec.get_mcx_ltp(display_contract)
+            if ltp > 0:
+                db.set("comm_current_ltp", str(ltp))
+                if pos_state != "FLAT" and entry_p > 0:
+                    if pos_state == "LONG":
+                        pnl_pct = ((ltp - entry_p) / entry_p) * 100
+                    else:
+                        pnl_pct = ((entry_p - ltp) / entry_p) * 100
+                    db.set("comm_unrealized_pnl_pct", str(round(pnl_pct, 2)))
+            else:
+                try:
+                    ltp = float(db.get("comm_current_ltp", "0") or 0)
+                except ValueError:
+                    pass
+                pnl_pct = float(db.get("comm_unrealized_pnl_pct", "0") or 0)
+
+        # Draw position card
+        pos_color = "#22c55e" if pos_state == "LONG" else "#ef4444" if pos_state == "SHORT" else "#64748b"
+        pnl_color = "#22c55e" if pnl_pct >= 0 else "#ef4444"
+        anchor_p = float(db.get("comm_anchor_price", "0.0") or 0.0)
+    
+        if anchor_p > 0 and ltp > 0:
+            if ltp > anchor_p:
+                signal_text, signal_color, signal_bg = "🟢 BULLISH", "#22c55e", "#f0fdf4"
+            elif ltp < anchor_p:
+                signal_text, signal_color, signal_bg = "🔴 BEARISH", "#ef4444", "#fef2f2"
+            else:
+                signal_text, signal_color, signal_bg = "⚪ NEUTRAL", "#f59e0b", "#fffbeb"
+        else:
+            signal_text, signal_color, signal_bg = "⏸️ NO SIGNAL", "#94a3b8", "#f8fafc"
+
+        st.markdown(f"""
+        <div style='background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);'>
+            <div style='display:flex;justify-content:space-between;align-items:center;'>
+                <div>
+                    <span style='font-size:0.78rem;color:#94a3b8;font-weight:700;'>ACTIVE CONTRACT</span><br/>
+                    <span style='font-size:1.4rem;font-weight:800;color:#1e293b;'>{display_contract or "None Selected"}</span>
+                </div>
+                <div style='text-align:center;'>
+                    <span style='font-size:0.78rem;color:#94a3b8;font-weight:700;'>SIGNAL</span><br/>
+                    <span style='background:{signal_bg};color:{signal_color};padding:4px 14px;border-radius:30px;font-size:1.0rem;font-weight:800;border:2px solid {signal_color};'>
+                        {signal_text}
+                    </span>
+                </div>
+                <div style='text-align:right;'>
+                    <span style='font-size:0.78rem;color:#94a3b8;font-weight:700;'>NET POSITION</span><br/>
+                    <span style='background:{pos_color};color:white;padding:4px 12px;border-radius:30px;font-size:1.0rem;font-weight:800;'>
+                        {pos_state}
+                    </span>
+                </div>
+            </div>
+            <hr style='margin:16px 0;border-color:#f1f5f9;' />
+            <div style='display:grid;grid-template-columns:repeat(3, 1fr);gap:16px;'>
+                <div>
+                    <span style='font-size:0.75rem;color:#94a3b8;font-weight:600;'>Current LTP</span><br/>
+                    <span style='font-size:1.15rem;font-weight:700;font-family:monospace;'>₹{ltp:,.2f}</span>
+                </div>
+                <div>
+                    <span style='font-size:0.75rem;color:#f59e0b;font-weight:700;'>⚓ Anchor Price</span><br/>
+                    <span style='font-size:1.15rem;font-weight:700;font-family:monospace;color:#f59e0b;'>₹{anchor_p:,.2f}</span>
+                </div>
+                <div>
+                    <span style='font-size:0.75rem;color:#94a3b8;font-weight:600;'>Entry Price</span><br/>
+                    <span style='font-size:1.15rem;font-weight:700;font-family:monospace;'>₹{entry_p:,.2f}</span>
+                </div>
+            </div>
+            <div style='display:grid;grid-template-columns:repeat(3, 1fr);gap:16px;margin-top:12px;'>
+                <div>
+                    <span style='font-size:0.75rem;color:#94a3b8;font-weight:600;'>Entry Time</span><br/>
+                    <span style='font-size:0.9rem;font-weight:600;color:#475569;'>{entry_t or "--"}</span>
+                </div>
+                <div>
+                    <span style='font-size:0.75rem;color:#94a3b8;font-weight:600;'>LTP vs Anchor</span><br/>
+                    <span style='font-size:1.0rem;font-weight:700;font-family:monospace;color:{signal_color};'>
+                        {f"₹{ltp - anchor_p:+,.2f}" if anchor_p > 0 and ltp > 0 else "--"}
+                    </span>
+                </div>
+                <div>
+                    <span style='font-size:0.75rem;color:#94a3b8;font-weight:600;'>Unrealized P&L %</span><br/>
+                    <span style='font-size:1.2rem;font-weight:800;font-family:monospace;color:{pnl_color};'>
+                        {"+" if pnl_pct >= 0 else ""}{pnl_pct:.2f}%
+                    </span>
+                </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
-    else:
-        st.markdown('<p class="section-title">ACTIVE BLOCKS</p>', unsafe_allow_html=True)
 
-        for bp in block_pnls:
-            with st.container():
-                st.markdown('<div class="block-card">', unsafe_allow_html=True)
-                render_block_card(bp)
-                st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown("<br/>", unsafe_allow_html=True)
+        st.markdown("<br/>", unsafe_allow_html=True)
 
-    # Edit anchor price form
-    render_edit_anchor_form()
+        # 3. Settings Form
+        with st.expander("🔧 CONFIGURATION & SETTINGS", expanded=saved_contract == ""):
+            col_c1, col_c2, col_c3 = st.columns([2, 2, 2])
+        
+            with col_c1:
+                sel_asset = st.selectbox(
+                    "Base Commodity Asset",
+                    options=commodity_assets,
+                    index=commodity_assets.index(default_asset) if default_asset in commodity_assets else 0,
+                    key="comm_sel_asset_widget"
+                )
+            
+            default_contract_idx = 0
+            if saved_contract in contract_options:
+                default_contract_idx = contract_options.index(saved_contract)
+            
+            with col_c2:
+                if not contract_options:
+                    st.warning("No active contracts found in CSV.")
+                    sel_contract = st.text_input("Enter Trading Symbol manually", value=saved_contract, key="comm_sel_contract_widget")
+                    lot_size = int(db.get("comm_lot_size", "1"))
+                else:
+                    sel_contract = st.selectbox(
+                        "MCX Futures Contract",
+                        options=contract_options,
+                        index=default_contract_idx,
+                        key="comm_sel_contract_widget"
+                    )
+                    resolved_c = [c for c in contracts if c["trading_symbol"] == sel_contract][0]
+                    lot_size = resolved_c["lot_size"]
+                
+            with col_c3:
+                st.markdown(f"<br/><p style='font-size:0.85rem;color:#475569;'><b>Lot Size</b>: {lot_size} units</p>", unsafe_allow_html=True)
 
-    # Block management (archive/delete)
-    with st.expander("⚙️ Block Management (Archive / Delete)", expanded=False):
-        render_block_management()
+            col_cfg1, col_cfg2, col_cfg3 = st.columns(3)
+            with col_cfg1:
+                curr_lots = int(db.get("comm_lots", "1") or 1)
+                sel_lots = st.number_input("Lots", min_value=1, max_value=1000, value=curr_lots, key="comm_num_lots")
+                curr_cf = db.get("comm_carry_forward", "NO") == "YES"
+                sel_cf = st.checkbox("Carry Forward (Overnight)", value=curr_cf)
+            with col_cfg2:
+                curr_anchor = float(db.get("comm_anchor_price", "0.0") or 0.0)
+                sel_anchor = st.number_input("Anchor Price (Rs)", min_value=0.0, value=curr_anchor, step=1.0, format="%.2f")
+            
+                if ltp > 0:
+                    st.markdown(f"<p style='color:#22c55e;font-size:0.88rem;font-weight:700;'>Live Price: ₹{ltp:,.2f}</p>", unsafe_allow_html=True)
+                    if st.button("🎯 Set to Live LTP", key="btn_use_live_ltp", use_container_width=True):
+                        db.set("comm_anchor_price", str(ltp))
+                        _flash(f"Anchor Price preset to live LTP: {ltp}", "info")
+                        st.rerun()
+                else:
+                    st.caption("Live LTP not available to auto-set.")
+            with col_cfg3:
+                curr_sl = float(db.get("comm_stop_loss_pct", "0.0") or 0.0)
+                sel_sl = st.number_input("Stop Loss % (0 to disable)", min_value=0.0, max_value=100.0, value=curr_sl, step=0.1, format="%.2f")
+                st.caption("Anchor acts as dynamic flip/SL. Standard SL % is optional.")
 
-    # Trade history log
-    if st.session_state.get("show_trade_log"):
-        render_trade_log()
+            if st.button("💾 Save Commodity Config", key="comm_save_config_btn", type="primary", use_container_width=True):
+                db.set("comm_selected_contract", sel_contract)
+                db.set("comm_lot_size", str(lot_size))
+                db.set("comm_lots", str(sel_lots))
+                db.set("comm_anchor_price", str(sel_anchor))
+                db.set("comm_stop_loss_pct", str(sel_sl))
+                db.set("comm_carry_forward", "YES" if sel_cf else "NO")
+                db.set("comm_last_check_candle_time", "")
+                _flash("Commodity configuration updated successfully!", "success")
+                st.rerun()
 
-    # Paper Mode notice removed
+        # 4. Manual Controls
+        with st.expander("🛡️ MANUAL CONTROLS (EMERGENCY)"):
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                if st.button("🟢 Force LONG", key="comm_force_long", use_container_width=True):
+                    if st.session_state.get("comm_confirm_long"):
+                        comm_exec.execute_commodity_flip("LONG")
+                        _flash("Forced LONG position.", "success")
+                        st.rerun()
+                    else:
+                        st.session_state["comm_confirm_long"] = True
+                        _flash("Click again to confirm FORCE LONG.", "warning")
+            with mc2:
+                if st.button("🔴 Force SHORT", key="comm_force_short", use_container_width=True):
+                    if st.session_state.get("comm_confirm_short"):
+                        comm_exec.execute_commodity_flip("SHORT")
+                        _flash("Forced SHORT position.", "success")
+                        st.rerun()
+                    else:
+                        st.session_state["comm_confirm_short"] = True
+                        _flash("Click again to confirm FORCE SHORT.", "warning")
+            with mc3:
+                if st.button("⬜ Square Off All", key="comm_square_off", use_container_width=True, type="primary"):
+                    if st.session_state.get("comm_confirm_sqoff"):
+                        comm_exec.square_off_all_mcx_positions()
+                        _flash("Squared off all MCX positions.", "success")
+                        st.rerun()
+                    else:
+                        st.session_state["comm_confirm_sqoff"] = True
+                        _flash("Click again to confirm SQUARE OFF.", "warning")
 
-    # Footer
-    st.markdown("---")
-    updated = portfolio.get("last_updated", "--")
-    st.markdown(
-        f'<div style="text-align:center;font-size:0.68rem;color:#374151;">'
-        f'Zerodha OptionSelling Engine v1.01 | NIFTY Only | Port 9007 | '
-        f'Last updated: {updated}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
 
+    with tab_commodity:
+        render_commodity_tab()
 
 if __name__ == "__main__":
     main()

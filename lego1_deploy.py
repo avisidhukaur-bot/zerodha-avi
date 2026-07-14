@@ -41,6 +41,8 @@ FILES = [
     "telegram_bot.py",
     "main.py",
     "utils.py",
+    "commodity_executor.py",
+    "commodity_engine.py",
     "app.py",
     "lego2_rollover.py",
     "requirements.txt",
@@ -78,7 +80,7 @@ def run_ssh(cmd, label):
 
 # ── STEP 0: Stop old services ─────────
 print("[0/3] Stopping old Zerodha services...")
-run_ssh("systemctl stop zerodha_engine.service zerodha_dashboard.service 2>/dev/null || true", "Stopping old services")
+run_ssh("systemctl stop zerodha_engine.service zerodha_dashboard.service zerodha_commodity.service 2>/dev/null || true", "Stopping old services")
 
 # ── Create remote directory ───────────────────────────────────
 try:
@@ -129,6 +131,21 @@ RestartSec=5
 WantedBy=multi-user.target
 """
 
+commodity_service_code = f"""[Unit]
+Description=Zerodha Commodity Futures Engine
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={REMOTE_DIR}
+ExecStart=/usr/bin/python3 -u commodity_engine.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+"""
+
 dash_service_code = f"""[Unit]
 Description=Zerodha Option Selling Dashboard
 After=network.target
@@ -156,19 +173,25 @@ write_dash_cmd = f"cat > /etc/systemd/system/zerodha_dashboard.service << 'SVCEO
 client.exec_command(write_dash_cmd)
 time.sleep(1)
 
+# Write commodity service
+write_comm_cmd = f"cat > /etc/systemd/system/zerodha_commodity.service << 'SVCEOF'\n{commodity_service_code}\nSVCEOF"
+client.exec_command(write_comm_cmd)
+time.sleep(1)
+
 run_ssh("systemctl daemon-reload", "Reloading systemd daemon")
-run_ssh("systemctl enable zerodha_engine.service zerodha_dashboard.service", "Enabling Services")
+run_ssh("systemctl enable zerodha_engine.service zerodha_dashboard.service zerodha_commodity.service", "Enabling Services")
 
 # ── STEP 3: Start services ────────────────────────────────────
 print("\nStarting Zerodha Option Selling services...")
 run_ssh("systemctl start zerodha_engine.service && echo 'zerodha_engine started'", "Starting Engine service")
 run_ssh("systemctl start zerodha_dashboard.service && echo 'zerodha_dashboard started'", "Starting Dashboard service")
+run_ssh("systemctl start zerodha_commodity.service && echo 'zerodha_commodity started'", "Starting Commodity service")
 
 time.sleep(5)
 
 # ── Verify ───────────────────────────────────────────────────
 print("\n[3/3] Verifying services state...")
-run_ssh("systemctl is-active zerodha_engine.service zerodha_dashboard.service", "Services active check")
+run_ssh("systemctl is-active zerodha_engine.service zerodha_dashboard.service zerodha_commodity.service", "Services active check")
 run_ssh("ss -tlnp | grep 9007", "Port 9007 listening check")
 
 client.close()

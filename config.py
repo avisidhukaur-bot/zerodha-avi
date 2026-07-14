@@ -33,3 +33,11 @@ FORCE_CLOSE_TIME = "15:15"  # Square off time if necessary
 # Fallback Settings
 YAHOO_TICKER = "^NSEI"  # Nifty 50 Spot ticker
 NSE_INDEX_NAME = "NIFTY 50"
+
+
+# ── MCX Commodity Configuration (Auto-added by upgrade_add_commodity.py) ──
+COMMODITY_LOCK_PORT = 9991  # Port to prevent duplicate engine processes
+COMMODITY_MARKET_OPEN_H = 9  # MCX opens at 09:00
+COMMODITY_MARKET_OPEN_M = 0
+COMMODITY_SQUAREOFF_H = 23  # Intraday square-off at 23:00 IST
+COMMODITY_SQUAREOFF_M = 0

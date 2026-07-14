@@ -1061,6 +1061,17 @@ def init_db() -> None:
         "preferred_index"      : "NIFTY",
         "max_strikes_per_block": "5",
         "last_cycle_time"      : "",
+        "comm_engine_running"  : "OFF",
+        "comm_selected_contract": "",
+        "comm_anchor_price"    : "0.0",
+        "comm_lots"            : "1",
+        "comm_position_state"  : "FLAT",
+        "comm_entry_price"     : "0.0",
+        "comm_entry_time"      : "",
+        "comm_unrealized_pnl_pct": "0.0",
+        "comm_stop_loss_pct"   : "0.0",
+        "comm_carry_forward"   : "NO",
+        "comm_last_check_candle_time": "",
     }
     for k, v in defaults.items():
         if not get(k):

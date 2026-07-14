@@ -1082,4 +1082,37 @@ class KiteExecutor:
 
 
 # Singleton instance
+
+    # ── MCX Commodity Functions (Auto-added by upgrade_add_commodity.py) ──
+
+    def get_mcx_futures(self, base_symbol: str) -> list:
+        """
+        Searches the instruments master for MCX Futures matching the base symbol.
+        Returns: list of dicts: [{"token": str, "trading_symbol": str, "expiry": str, "lot_size": int}]
+        Sorted by expiry date.
+        """
+        df = self._load_security_master()
+        if df.empty:
+            return []
+        filtered = df[
+            (df["name"].str.upper() == base_symbol.upper()) &
+            (df["exchange"].str.upper() == "MCX") &
+            (df["instrument_type"].str.upper() == "FUT")
+        ]
+        results = []
+        for _, row in filtered.iterrows():
+            results.append({
+                "token":          str(row["instrument_token"]),
+                "trading_symbol": str(row["tradingsymbol"]),
+                "expiry":         str(row["expiry"]),
+                "lot_size":       int(row["lot_size"]),
+            })
+        try:
+            from datetime import datetime as dt
+            results.sort(key=lambda x: dt.strptime(x["expiry"], "%Y-%m-%d"))
+        except Exception:
+            results.sort(key=lambda x: x.get("expiry", ""))
+        return results
+
+
 kite_executor = KiteExecutor()

@@ -3,8 +3,10 @@ import sys
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
+import os
+
 secrets = {}
-secrets_path = r"c:\Users\pc\Desktop\BHARAT-SYSTEMS\ZERODHA OS\secrets.txt"
+secrets_path = os.path.join(os.path.dirname(__file__), "secrets.txt")
 with open(secrets_path, encoding="utf-8") as f:
     for line in f:
         line = line.strip()
@@ -20,8 +22,8 @@ client = paramiko.SSHClient()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 client.connect(VPS_IP, username=VPS_USER, password=VPS_PASSWORD, timeout=15)
 
-print("--- VPS Engine Log (last 100 lines) ---")
-_, stdout, stderr = client.exec_command("tail -n 100 /root/BHARAT-SYSTEMS/ZERODHA-OS/zerodha_engine.log")
+print("--- VPS Engine Log (Today's Logs) ---")
+_, stdout, stderr = client.exec_command("grep '2026-07-10' /root/BHARAT-SYSTEMS/ZERODHA-OS/zerodha_engine.log")
 print(stdout.read().decode(errors='replace').strip())
 
 print("\n--- systemctl status ---")

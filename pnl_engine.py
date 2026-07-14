@@ -251,6 +251,12 @@ def calc_strike_pnl(strike: dict, ltp: float) -> dict:
     legs = db.get_legs_by_strike(strike["strike_id"])
     realized_pnl = sum(float(l["realized_pnl"] or 0.0) for l in legs if l.get("exit_time"))
     
+    # Find actual entry price of the last leg
+    eff_entry_price = anchor
+    if legs:
+        last_leg = sorted(legs, key=lambda x: x["leg_id"])[-1]
+        eff_entry_price = float(last_leg["entry_price"])
+    
     # 2. Compute unrealized P&L for the open leg
     unrealized_pnl = 0.0
     ltp_avail   = ltp > 0
@@ -311,6 +317,7 @@ def calc_strike_pnl(strike: dict, ltp: float) -> dict:
         "leg_type"     : strike["leg_type"],
         "status"       : status,
         "anchor_price" : anchor,
+        "entry_price"  : eff_entry_price,
         "ltp"          : display_ltp,
         "is_exit_price": is_exit_price,        # True = ltp column shows exit price
         "lots"         : lots,
@@ -466,6 +473,13 @@ def get_strike_display_row(s_pnl: dict) -> dict:
     ltp        = s_pnl["ltp"]
     leg_type   = s_pnl["leg_type"]
 
+    status     = s_pnl["status"]
+    display_anchor = s_pnl["entry_price"]
+    if leg_type == "HEDGE_BUY" and status == "PENDING":
+        anchor_str = "--"
+    else:
+        anchor_str = f"Rs{display_anchor:.2f}"
+
     # Decay for sell legs: how much premium has decayed
     if leg_type == "SELL" and anchor > 0 and ltp_avail:
         decay_pct = ((anchor - ltp) / anchor) * 100
@@ -476,7 +490,7 @@ def get_strike_display_row(s_pnl: dict) -> dict:
         "Strike"    : s_pnl["strike_price"],
         "Type"      : s_pnl["option_type"],
         "Leg"       : leg_type,
-        "Anchor Rs" : f"Rs{anchor:.2f}" if leg_type == "SELL" else "--",
+        "Anchor Rs" : anchor_str,
         "LTP Rs"    : f"Rs{ltp:.2f}" if ltp_avail else "--",
         "Lots"      : s_pnl["lots"],
         "Qty"       : s_pnl["qty"],
@@ -611,12 +625,8 @@ def run_pnl_cycle() -> dict:
             now_time_str = now_ist.strftime("%H:%M")
             today_str = now_ist.strftime("%Y-%m-%d")
             
-            # Decoupled Stop-Loss Exit Check (Runs every 15 minutes / 900 seconds)
-            run_exit_checks = False
-            if _last_exit_check_time == 0.0 or (now_ts - _last_exit_check_time) >= 900:
-                run_exit_checks = True
-                _last_exit_check_time = now_ts
-                _log("Running stop-loss exit checks...", "CYCLE")
+            # Run stop-loss exit checks on every cycle (every 30 seconds) for immediate protection
+            run_exit_checks = True
             
             for b in blocks:
                 # 1. Stop-Loss Exit Check (Only run on exit-check interval)
@@ -701,6 +711,13 @@ def run_pnl_cycle() -> dict:
                                     break
                             if not closed_today:
                                 continue  # Strike was closed on a previous day — skip re-entry
+                            
+                            # GUARD: Limit same-day entries to prevent whipsaw losses (default: 2 entries per day max)
+                            today_entries = sum(1 for leg in legs if leg.get("entry_time", "").startswith(today_str))
+                            max_reentries = int(db.get("max_same_day_reentries", "2"))
+                            if today_entries >= max_reentries:
+                                _log(f"[RE-ENTRY-GUARD] Strike {s['strike_price']} {s['option_type']} blocked: already has {today_entries} entries today (max {max_reentries}).", "CYCLE")
+                                continue
                             
                             # GUARD: Block must not be expired
                             block_expiry = b.get("expiry_date", "")
