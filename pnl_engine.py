@@ -712,9 +712,9 @@ def run_pnl_cycle() -> dict:
                             if not closed_today:
                                 continue  # Strike was closed on a previous day — skip re-entry
                             
-                            # GUARD: Limit same-day entries to prevent whipsaw losses (default: 2 entries per day max)
+                            # GUARD: Limit same-day entries to prevent whipsaw losses (default: 10 entries per day max)
                             today_entries = sum(1 for leg in legs if leg.get("entry_time", "").startswith(today_str))
-                            max_reentries = int(db.get("max_same_day_reentries", "2"))
+                            max_reentries = int(db.get("max_same_day_reentries", "10"))
                             if today_entries >= max_reentries:
                                 _log(f"[RE-ENTRY-GUARD] Strike {s['strike_price']} {s['option_type']} blocked: already has {today_entries} entries today (max {max_reentries}).", "CYCLE")
                                 continue

@@ -18,6 +18,7 @@ Background Loop Process:
 
 import sys
 import time
+import socket
 from datetime import datetime
 import pytz
 import requests
@@ -29,6 +30,18 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 import db
 import config as cfg
 import utils
+
+_lock_socket = None
+
+def _acquire_lock() -> None:
+    global _lock_socket
+    _lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _lock_socket.bind(("127.0.0.1", cfg.OPTION_LOCK_PORT))
+    except OSError:
+        utils.log(f"OPTION ENGINE ALREADY RUNNING (port {cfg.OPTION_LOCK_PORT}). Exiting duplicate process/thread.", "WARN")
+        sys.exit(1)
+
 from kite_executor import kite_executor
 import block_manager as bm
 import pnl_engine as pe
@@ -87,7 +100,9 @@ def run_monday_rollover_check() -> None:
 
 def start_engine_loop() -> None:
     """Main execution loop."""
+    _acquire_lock()
     utils.log("Starting Zerodha Option Selling trading engine background loop...", "INIT")
+
 
     # Force check_interval to 30 seconds in database
     db.set("check_interval", "30")

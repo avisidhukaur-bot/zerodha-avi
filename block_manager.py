@@ -191,6 +191,99 @@ def delete_block(block_id: int) -> dict:
     return {"ok": False, "message": f"Cannot delete block {block_id} -- open strikes exist."}
 
 
+def kill_block(block_id: int) -> dict:
+    """
+    Emergency Kill Switch for a block:
+    1. Scans all strikes in the block.
+    2. Identifies all OPEN / PENDING_CLOSE strikes.
+    3. Attempts to cover all SELL strikes FIRST (to reduce risk & release margin).
+    4. Then attempts to exit all HEDGE_BUY strikes SECOND.
+    5. Force-deletes the block from the database.
+    6. Sends a detailed summary to Telegram.
+    """
+    block = db.get_block(block_id)
+    if not block:
+        return {"ok": False, "message": f"Block {block_id} not found."}
+
+    block_num = block["block_number"]
+    _log(f"💥 EMERGENCY KILL SWITCH TRIGGERED for Block {block_num} (ID: {block_id}) 💥", "WARN")
+
+    strikes = db.get_strikes_by_block(block_id)
+    open_sells = [s for s in strikes if s["leg_type"] == "SELL" and s["status"] in ("OPEN", "PENDING_CLOSE")]
+    open_hedges = [s for s in strikes if s["leg_type"] == "HEDGE_BUY" and s["status"] in ("OPEN", "PENDING_CLOSE")]
+
+    closed_sells = []
+    failed_sells = []
+    closed_hedges = []
+    failed_hedges = []
+
+    # 1. Close all SELL strikes first
+    for s in open_sells:
+        try:
+            res = close_strike(s["strike_id"], close_hedge=False)
+            if res["ok"]:
+                closed_sells.append(f"{s['strike_price']} {s['option_type']}")
+            else:
+                failed_sells.append(f"{s['strike_price']} {s['option_type']} ({res['message']})")
+        except Exception as ex:
+            failed_sells.append(f"{s['strike_price']} {s['option_type']} (Err: {str(ex)})")
+
+    # 2. Close all HEDGE strikes second
+    for h in open_hedges:
+        try:
+            res = close_hedge_strike_only(h["strike_id"])
+            if res["ok"]:
+                closed_hedges.append(f"{h['strike_price']} {h['option_type']}")
+            else:
+                failed_hedges.append(f"{h['strike_price']} {h['option_type']} ({res['message']})")
+        except Exception as ex:
+            failed_hedges.append(f"{h['strike_price']} {h['option_type']} (Err: {str(ex)})")
+
+    # 3. Force-delete the block from the DB
+    ok = db.delete_block(block_id, force=True)
+
+    # 4. Telegram alert
+    tg_msg = (
+        f"💥 <b>KILL SWITCH TRIGGERED: BLOCK {block_num}</b>\n"
+        f"Expiry: {block['expiry_date']} ({block['expiry_type']})\n\n"
+    )
+    if open_sells or open_hedges:
+        tg_msg += "<b>Position Closures:</b>\n"
+        if closed_sells:
+            tg_msg += f"✅ Covered Shorts: {', '.join(closed_sells)}\n"
+        if failed_sells:
+            tg_msg += f"❌ Failed to Cover Shorts: {', '.join(failed_sells)}\n"
+        if closed_hedges:
+            tg_msg += f"✅ Exited Hedges: {', '.join(closed_hedges)}\n"
+        if failed_hedges:
+            tg_msg += f"❌ Failed to Exit Hedges: {', '.join(failed_hedges)}\n"
+    else:
+        tg_msg += "No open positions found in block.\n"
+
+    if ok:
+        tg_msg += f"\n🗑️ <b>Block {block_num} has been force-deleted from the database.</b>\n"
+        if failed_sells or failed_hedges:
+            tg_msg += "⚠️ <b>WARNING: Some positions failed to close! Please check and close them manually on Kite!</b>"
+        else:
+            tg_msg += "All block positions successfully cleared."
+    else:
+        tg_msg += f"\n⚠️ DB Error: Block {block_num} could not be deleted from DB."
+
+    try:
+        tg.send(tg_msg)
+    except Exception as tg_ex:
+        _log(f"Failed to send Telegram alert: {tg_ex}", "ERROR")
+
+    # Return result
+    if ok:
+        msg = f"Block {block_num} has been killed and force-deleted."
+        if failed_sells or failed_hedges:
+            msg += " WARNING: Some exits failed! Check Kite and close manually."
+        return {"ok": True, "message": msg}
+    else:
+        return {"ok": False, "message": f"Block {block_num} trades exited, but DB deletion failed."}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STRIKE OPERATIONS
 # ─────────────────────────────────────────────────────────────────────────────

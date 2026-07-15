@@ -557,6 +557,21 @@ def cb_send_daily_summary(block_id, block_num):
     tg.alert_block_daily_summary(pnl_data)
     _flash(f"Block {block_num} summary sent to Telegram!", "success")
 
+def cb_trigger_kill_switch(block_id):
+    st.session_state[f"kill_confirm_{block_id}"] = True
+
+def cb_cancel_kill_switch(block_id):
+    st.session_state[f"kill_confirm_{block_id}"] = False
+
+def cb_kill_block(block_id):
+    st.session_state[f"kill_confirm_{block_id}"] = False
+    with st.spinner("Executing Emergency Kill Switch..."):
+        r = bm.kill_block(block_id)
+        if r["ok"]:
+            _flash(r["message"], "success")
+        else:
+            _flash(r["message"], "error")
+
 def cb_execute_inline_rollover(sell_sid):
     rv_strike = st.session_state.get(f"rv_strike_{sell_sid}")
     rv_expiry = st.session_state.get(f"rv_expiry_{sell_sid}")
@@ -1496,6 +1511,49 @@ def render_block_card(block_pnl: dict):
         with col_d:
             st.button(f"📊 Daily Summary", key=f"daily_sum_{block_id}", use_container_width=True, on_click=cb_send_daily_summary, args=(block_id, block_num))
 
+        # --- Emergency Kill Switch ---
+        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+        confirm_key = f"kill_confirm_{block_id}"
+        if st.session_state.get(confirm_key, False):
+            st.markdown(
+                f"""
+                <div style='border: 1px solid #ef4444; background-color: #fef2f2; border-radius: 8px; padding: 12px; margin-bottom: 12px;'>
+                    <span style='color: #dc2626; font-weight: bold; font-size: 0.9rem;'>⚠️ CONFIRM EMERGENCY KILL SWITCH</span><br/>
+                    <span style='color: #7f1d1d; font-size: 0.85rem;'>
+                        This will immediately execute cover orders for all active shorts and exit all hedges in Block {block_num}, then FORCE-DELETE the block from the database.
+                        If any order fails to execute on the broker, the block will still be deleted so you can safely handle remaining positions manually.
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            kc1, kc2 = st.columns([1, 1])
+            with kc1:
+                st.button(
+                    "🔥 Yes, Kill & Delete",
+                    key=f"btn_confirm_kill_{block_id}",
+                    type="primary",
+                    use_container_width=True,
+                    on_click=cb_kill_block,
+                    args=(block_id,)
+                )
+            with kc2:
+                st.button(
+                    "Cancel",
+                    key=f"btn_cancel_kill_{block_id}",
+                    use_container_width=True,
+                    on_click=cb_cancel_kill_switch,
+                    args=(block_id,)
+                )
+        else:
+            st.button(
+                "🚨 EMERGENCY KILL SWITCH",
+                key=f"btn_trigger_kill_{block_id}",
+                use_container_width=True,
+                on_click=cb_trigger_kill_switch,
+                args=(block_id,)
+            )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WEEKLY HEDGE ROLLOVER CENTER
@@ -2165,7 +2223,7 @@ def main():
                 "Activate Commodity Engine",
                 value=comm_running,
                 key="comm_engine_toggle",
-                help="Turn ON to begin auto-trading on 15m candle closed boundaries."
+                help="Turn ON to begin auto-trading on 5m candle closed boundaries."
             )
             if comm_toggle != comm_running:
                 db.set("comm_engine_running", "ON" if comm_toggle else "OFF")

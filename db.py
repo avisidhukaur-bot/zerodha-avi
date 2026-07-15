@@ -424,15 +424,16 @@ def update_block_expiry(block_id: int, expiry_date: str, expiry_type: str) -> bo
         return False
 
 
-def delete_block(block_id: int) -> bool:
+def delete_block(block_id: int, force: bool = False) -> bool:
     """
-    HARD RULE: Cannot delete if any strike is OPEN.
+    HARD RULE: Cannot delete if any strike is OPEN. (Bypassed if force=True)
     Deletes block + all its strikes + legs + trades.
     """
-    open_strikes = get_strikes_by_block(block_id, status_filter="OPEN")
-    if open_strikes:
-        print(f"[DB] BLOCKED HARD RULE: Cannot delete Block {block_id} -- {len(open_strikes)} strike(s) still OPEN.")
-        return False
+    if not force:
+        open_strikes = get_strikes_by_block(block_id, status_filter="OPEN")
+        if open_strikes:
+            print(f"[DB] BLOCKED HARD RULE: Cannot delete Block {block_id} -- {len(open_strikes)} strike(s) still OPEN.")
+            return False
     try:
         with _lock:
             conn = _conn()

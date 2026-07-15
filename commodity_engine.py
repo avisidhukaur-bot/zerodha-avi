@@ -2,7 +2,7 @@
 commodity_engine.py — Zerodha OptionSelling Engine | Commodity Futures Engine Loop
 =============================================================================
 STRICT STATE MACHINE — Commodity Futures Anchor Edition
-15-min closed candle evaluations | 11:00 PM intraday square-off
+5-min closed candle evaluations | 11:00 PM intraday square-off
 """
 
 import time
@@ -50,9 +50,9 @@ def _acquire_lock():
         sys.exit(1)
 
 
-def seconds_to_next_15min_candle() -> int:
-    """Sleeps until exactly 65 seconds after the next 15-minute boundary."""
-    candle_minutes = 15
+def seconds_to_next_5min_candle() -> int:
+    """Sleeps until exactly 65 seconds after the next 5-minute boundary."""
+    candle_minutes = 5
     now = datetime.now(IST)
     elapsed_in_period = (now.minute % candle_minutes) * 60 + now.second
     seconds_to_boundary = (candle_minutes * 60) - elapsed_in_period
@@ -144,23 +144,23 @@ def run_one_cycle() -> None:
                 executor.square_off_all_mcx_positions()
                 trade_active = False
 
-    # ── 5. Timing Boundary check: 15-Minute boundary ─────────
+    # ── 5. Timing Boundary check: 5-Minute boundary ──────────
     now = datetime.now(IST)
-    floor_min = (now.minute // 15) * 15
-    curr_15m = f"{now.strftime('%Y-%m-%d')} {now.hour:02d}:{floor_min:02d}"
+    floor_min = (now.minute // 5) * 5
+    curr_5m = f"{now.strftime('%Y-%m-%d')} {now.hour:02d}:{floor_min:02d}"
     last_check = db.get("comm_last_check_candle_time", "")
 
-    if last_check == curr_15m:
+    if last_check == curr_5m:
         # Already checked this candle boundary
         return
 
-    utils.log(f"[COMMODITIES] Evaluating Anchor Price triggers for boundary {curr_15m}...", "INFO")
+    utils.log(f"[COMMODITIES] Evaluating Anchor Price triggers for boundary {curr_5m}...", "INFO")
     
     # ── 6. Evaluate Anchor prices & trigger trade flips ──────
     anchor_price = float(db.get("comm_anchor_price", "0.0") or 0.0)
     if anchor_price <= 0:
         utils.log("[COMMODITIES] Anchor price not set or <= 0. Skipping trade checks.", "WAIT")
-        db.set("comm_last_check_candle_time", curr_15m)
+        db.set("comm_last_check_candle_time", curr_5m)
         return
 
     pos_state = db.get("comm_position_state", "FLAT")
@@ -176,7 +176,7 @@ def run_one_cycle() -> None:
             utils.log(f"[COMMODITIES] LTP {ltp:.2f} < Anchor {anchor_price:.2f}. Executing SHORT Flip...", "TRADE")
             executor.execute_commodity_flip("SHORT")
 
-    db.set("comm_last_check_candle_time", curr_15m)
+    db.set("comm_last_check_candle_time", curr_5m)
 
 
 def main():
@@ -186,7 +186,7 @@ def main():
     print("  ⚓ ZERODHA COMMODITY EXTENSION  —  MCX FUTURES ENGINE  ")
     print("=" * 62)
     print("  Rule 1: Isolated database prefixed state keys")
-    print("  Rule 2: 15-Minute candle boundary evaluation")
+    print("  Rule 2: 5-Minute candle boundary evaluation")
     print("  Rule 3: Reversal flips executed using double lot sizes")
     print("  Rule 4: Intraday square-off at 11:00 PM IST sharp")
     print("=" * 62)
@@ -197,7 +197,7 @@ def main():
         sys.exit(1)
 
     _now = datetime.now(IST)
-    last_heartbeat_slot = (_now.hour * 4) + (_now.minute // 15)
+    last_heartbeat_slot = (_now.hour * 12) + (_now.minute // 5)
     last_loop_log = 0.0
 
     while True:
@@ -206,7 +206,7 @@ def main():
             
             if algo_running and is_commodity_market_open():
                 now = datetime.now(IST)
-                curr_slot = (now.hour * 4) + (now.minute // 15)
+                curr_slot = (now.hour * 12) + (now.minute // 5)
                 
                 if curr_slot != last_heartbeat_slot:
                     # Send Commodity Heartbeat
