@@ -129,6 +129,20 @@ def _conn() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass
 
+    # Ensure side_type, call_active, put_active exist in blocks table
+    try:
+        conn.execute("ALTER TABLE blocks ADD COLUMN side_type TEXT DEFAULT 'BOTH'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE blocks ADD COLUMN call_active INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE blocks ADD COLUMN put_active INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     return conn
 
@@ -311,11 +325,12 @@ def save_secrets_to_file(secrets_dict: dict) -> bool:
 # ██████  BLOCKS CRUD
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = "") -> int:
+def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = "", side_type: str = "BOTH", call_active: int = 1, put_active: int = 1) -> int:
     """
     Creates a new block. Auto-assigns next block_number.
     expiry_date : "26-Jun-2025"
     expiry_type : "MONTHLY" / "WEEKLY"
+    side_type   : "BOTH" / "CALL_ONLY" / "PUT_ONLY"
     Returns     : block_id (int) or -1 on failure
     """
     try:
@@ -325,21 +340,46 @@ def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = ""
             cur = conn.execute("SELECT COALESCE(MAX(block_number), 0) FROM blocks")
             next_num = cur.fetchone()[0] + 1
 
+            s_type = side_type.upper() if side_type else "BOTH"
+            if s_type not in ("BOTH", "CALL_ONLY", "PUT_ONLY"):
+                s_type = "BOTH"
+
+            c_act = 1 if call_active else 0
+            p_act = 1 if put_active else 0
+
             conn.execute(
                 """
-                INSERT INTO blocks (block_number, expiry_date, expiry_type, status, created_at, notes)
-                VALUES (?, ?, ?, 'ACTIVE', ?, ?)
+                INSERT INTO blocks (block_number, expiry_date, expiry_type, status, created_at, notes, side_type, call_active, put_active)
+                VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?)
                 """,
-                (next_num, expiry_date, expiry_type.upper(), _ist_now(), notes)
+                (next_num, expiry_date, expiry_type.upper(), _ist_now(), notes, s_type, c_act, p_act)
             )
             conn.commit()
             block_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             conn.close()
-            print(f"[DB] OK Block {next_num} created -> block_id={block_id} | Expiry: {expiry_date} ({expiry_type})")
+            print(f"[DB] OK Block {next_num} created -> block_id={block_id} | Expiry: {expiry_date} ({expiry_type}) | Side: {s_type}")
             return block_id
     except Exception as e:
         print(f"[DB] ERR create_block() failed: {e}")
         return -1
+
+
+def update_block_side_status(block_id: int, call_active: bool, put_active: bool) -> bool:
+    """Updates call_active and put_active toggles for a block."""
+    try:
+        with _lock:
+            conn = _conn()
+            conn.execute(
+                "UPDATE blocks SET call_active=?, put_active=? WHERE block_id=?",
+                (1 if call_active else 0, 1 if put_active else 0, block_id)
+            )
+            conn.commit()
+            conn.close()
+        print(f"[DB] OK Block {block_id} side status updated -> CALL: {call_active}, PUT: {put_active}")
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_block_side_status() failed: {e}")
+        return False
 
 
 def get_block(block_id: int) -> dict:
@@ -655,6 +695,27 @@ def update_strike_anchor_price(strike_id: int, anchor_price: float) -> bool:
         return True
     except Exception as e:
         print(f"[DB] ERR update_strike_anchor_price() failed: {e}")
+        return False
+
+
+def update_strike_lots(strike_id: int, lots: int) -> bool:
+    """Updates the lots count for a strike."""
+    if lots <= 0:
+        print(f"[DB] ERR: Lots must be > 0. Got: {lots}")
+        return False
+    try:
+        with _lock:
+            conn = _conn()
+            conn.execute(
+                "UPDATE strikes SET lots=? WHERE strike_id=?",
+                (int(lots), strike_id)
+            )
+            conn.commit()
+            conn.close()
+        print(f"[DB] OK Strike {strike_id} lots updated -> {lots}")
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_strike_lots() failed: {e}")
         return False
 
 

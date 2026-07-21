@@ -622,15 +622,23 @@ def cb_create_block():
     expiry_str = st.session_state.get("new_block_expiry")
     expiry_type = st.session_state.get("new_block_type")
     notes = st.session_state.get("new_block_notes", "")
-    result     = bm.create_block(expiry_str, expiry_type, notes)
+    side_type = st.session_state.get("new_block_side", "BOTH")
+    result     = bm.create_block(expiry_str, expiry_type, notes, side_type=side_type)
     if result["ok"]:
-        _flash(f"Block {result['block_number']} created for {expiry_str} ({expiry_type})", "success")
+        _flash(f"Block {result['block_number']} created for {expiry_str} ({expiry_type}) [{side_type}]", "success")
     else:
         if result.get("duplicate"):
             _flash(result["message"], "warning")
         else:
             _flash(result["message"], "error")
         st.session_state["new_block_expanded"] = True
+
+def cb_update_strike_lots(strike_id, new_lots, scale_live):
+    res = bm.update_strike_lots_manager(strike_id, int(new_lots), scale_live=scale_live)
+    if res["ok"]:
+        _flash(res["message"], "success")
+    else:
+        _flash(res["message"], "error")
 
 def cb_execute_live_trade(block_id):
     strike_price = st.session_state.get(f"sell_sp_{block_id}", 24000)
@@ -1292,6 +1300,31 @@ def render_block_card(block_pnl: dict):
     </div>
     """, unsafe_allow_html=True)
 
+    # Side Control Toggles (CALL ON/OFF, PUT ON/OFF)
+    call_active = bool(b.get("call_active", 1))
+    put_active  = bool(b.get("put_active", 1))
+
+    c_col, p_col = st.columns(2)
+    with c_col:
+        c_toggle = st.toggle(
+            f"🔵 CALL SIDE ({'ACTIVE' if call_active else 'PAUSED'})",
+            value = call_active,
+            key   = f"toggle_call_side_{block_id}",
+            help  = "Enable/Disable Call side entries & re-entries for this block."
+        )
+    with p_col:
+        p_toggle = st.toggle(
+            f"🔴 PUT SIDE ({'ACTIVE' if put_active else 'PAUSED'})",
+            value = put_active,
+            key   = f"toggle_put_side_{block_id}",
+            help  = "Enable/Disable Put side entries & re-entries for this block."
+        )
+
+    if c_toggle != call_active or p_toggle != put_active:
+        bm.update_block_side_status(block_id, c_toggle, p_toggle)
+        _flash(f"Block {block_num} side controls updated: CALL {'ON' if c_toggle else 'OFF'}, PUT {'ON' if p_toggle else 'OFF'}", "success")
+        st.rerun()
+
     # Strike table
     if strikes:
         rows = []
@@ -1352,6 +1385,49 @@ def render_block_card(block_pnl: dict):
                 "P&L%" : st.column_config.TextColumn("P&L %"),
             },
         )
+
+        # Edit Lot Sizes Section
+        with st.expander("✏️ Edit Lot Sizes", expanded=False):
+            strike_options_lots = {
+                f"{s['strike_price']} {s['option_type']} ({s['leg_type']}) - {s['lots']} Lots [{s['status']}]": s
+                for s in strikes
+            }
+            if strike_options_lots:
+                sel_label = st.selectbox(
+                    "Select Strike to Edit Lots",
+                    options=list(strike_options_lots.keys()),
+                    key=f"edit_lots_sel_{block_id}"
+                )
+                target_s = strike_options_lots[sel_label]
+
+                el_c1, el_c2 = st.columns([2, 3])
+                with el_c1:
+                    new_lots_val = st.number_input(
+                        "New Lot Size",
+                        min_value=1,
+                        max_value=100,
+                        value=int(target_s["lots"]),
+                        key=f"new_lots_val_{target_s['strike_id']}"
+                    )
+                with el_c2:
+                    scale_live_chk = False
+                    if target_s["status"] == "OPEN":
+                        scale_live_chk = st.checkbox(
+                            "⚡ Scale live position on Zerodha immediately",
+                            value=False,
+                            key=f"scale_live_chk_{target_s['strike_id']}",
+                            help="Places buy/sell order for the difference to match new lot size immediately on broker."
+                        )
+                    else:
+                        st.markdown("<div style='font-size:0.8rem;color:#6b7280;margin-top:28px;'>Status is PENDING/CLOSED — will apply on execution.</div>", unsafe_allow_html=True)
+
+                st.button(
+                    "💾 Update Lots",
+                    key=f"btn_save_lots_{target_s['strike_id']}",
+                    type="primary",
+                    on_click=cb_update_strike_lots,
+                    args=(target_s["strike_id"], new_lots_val, scale_live_chk)
+                )
 
         # Scan for orphaned hedges in this block
         orphaned_hedges = []
@@ -1689,7 +1765,7 @@ def render_new_block_form():
     new_block_expanded = st.session_state.pop("new_block_expanded", False)
     with st.expander("➕ CREATE NEW BLOCK", expanded=new_block_expanded):
         st.markdown('<p class="section-title">New Block Setup</p>', unsafe_allow_html=True)
-        col1, col2, col3 = st.columns([2, 2, 3])
+        col1, col2, col3, col4 = st.columns([2, 2, 2, 3])
 
         with col1:
             expiries_list = get_sorted_nifty_expiries()
@@ -1709,6 +1785,15 @@ def render_new_block_form():
             )
 
         with col3:
+            side_type = st.selectbox(
+                "Side Focus",
+                options = ["BOTH", "CALL_ONLY", "PUT_ONLY"],
+                index   = 0,
+                key     = "new_block_side",
+                help    = "Select if this block is for BOTH sides, CALL ONLY, or PUT ONLY."
+            )
+
+        with col4:
             notes = st.text_input(
                 "Notes (optional)",
                 placeholder = "e.g. June Monthly Straddle",

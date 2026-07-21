@@ -53,7 +53,7 @@ def _log(msg: str, level: str = "INFO") -> None:
 # BLOCK OPERATIONS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = "") -> dict:
+def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = "", side_type: str = "BOTH") -> dict:
     """
     Creates a new trading block.
 
@@ -64,15 +64,27 @@ def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = ""
     expiry_date : "26-Jun-2025" (DD-Mon-YYYY format)
     expiry_type : "MONTHLY" or "WEEKLY"
     notes       : Optional user label
+    side_type   : "BOTH", "CALL_ONLY", "PUT_ONLY"
 
     Returns: {"ok": bool, "block_id": int, "block_number": int, "message": str}
     """
     # Normalize expiry
     expiry_date = expiry_date.strip()
     expiry_type = expiry_type.upper()
+    side_type   = side_type.strip().upper() if side_type else "BOTH"
 
     if expiry_type not in ("MONTHLY", "WEEKLY"):
         return {"ok": False, "message": f"Invalid expiry_type '{expiry_type}'. Must be MONTHLY or WEEKLY."}
+
+    if side_type not in ("BOTH", "CALL_ONLY", "PUT_ONLY"):
+        side_type = "BOTH"
+
+    if side_type == "CALL_ONLY":
+        call_active, put_active = 1, 0
+    elif side_type == "PUT_ONLY":
+        call_active, put_active = 0, 1
+    else:
+        call_active, put_active = 1, 1
 
     # HARD RULE: One expiry per block -- check for duplicate ACTIVE block
     existing_blocks = db.get_all_blocks(status_filter="ACTIVE")
@@ -90,18 +102,27 @@ def create_block(expiry_date: str, expiry_type: str = "MONTHLY", notes: str = ""
                 "duplicate":    True,
             }
 
-    block_id = db.create_block(expiry_date, expiry_type, notes)
+    block_id = db.create_block(expiry_date, expiry_type, notes, side_type=side_type, call_active=call_active, put_active=put_active)
     if block_id < 0:
         return {"ok": False, "message": "DB error creating block."}
 
     block = db.get_block(block_id)
-    _log(f"Block {block['block_number']} created | Expiry: {expiry_date} ({expiry_type})", "OK")
+    _log(f"Block {block['block_number']} created | Expiry: {expiry_date} ({expiry_type}) | Side: {side_type}", "OK")
     return {
         "ok":           True,
         "block_id":     block_id,
         "block_number": block["block_number"],
-        "message":      f"Block {block['block_number']} created for {expiry_date} ({expiry_type}).",
+        "message":      f"Block {block['block_number']} created for {expiry_date} ({expiry_type}) [{side_type}].",
     }
+
+
+def update_block_side_status(block_id: int, call_active: bool, put_active: bool) -> dict:
+    """Updates side toggles (CALL ON/OFF, PUT ON/OFF) for a block."""
+    ok = db.update_block_side_status(block_id, call_active, put_active)
+    if ok:
+        _log(f"Block {block_id} side toggled -> Call: {call_active}, Put: {put_active}", "OK")
+        return {"ok": True, "message": f"Block side toggles updated: CALL {'ON' if call_active else 'OFF'}, PUT {'ON' if put_active else 'OFF'}."}
+    return {"ok": False, "message": "DB error updating block side status."}
 
 
 def get_block_summary(block_id: int) -> dict:
@@ -401,6 +422,67 @@ def remove_strike(strike_id: int) -> dict:
     return {"ok": False, "message": f"DB error removing strike {strike_id}."}
 
 
+def update_strike_lots_manager(strike_id: int, new_lots: int, scale_live: bool = False) -> dict:
+    """
+    Updates the lot size of a strike.
+    If position is PENDING or CLOSED: updates DB lots.
+    If position is OPEN and scale_live=True: calculates diff qty and executes orders in Zerodha.
+    """
+    strike = db.get_strike(strike_id)
+    if not strike:
+        return {"ok": False, "message": f"Strike {strike_id} not found."}
+
+    if new_lots <= 0:
+        return {"ok": False, "message": "Lots must be greater than 0."}
+
+    old_lots = strike.get("lots", 1)
+    if old_lots == new_lots:
+        return {"ok": True, "message": "Lots unchanged."}
+
+    # Update DB lots for main strike
+    db.update_strike_lots(strike_id, new_lots)
+
+    # Also update linked hedge strike lots if present
+    hedge_strike_id = strike.get("hedge_strike_id")
+    if hedge_strike_id:
+        db.update_strike_lots(hedge_strike_id, new_lots)
+
+    msg = f"Strike {strike_id} lots updated: {old_lots} -> {new_lots} Lots."
+
+    if strike["status"] == "OPEN" and scale_live:
+        lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
+        diff_lots = new_lots - old_lots
+        diff_qty = abs(diff_lots) * lot_size
+
+        if diff_lots > 0:
+            # Scale UP: place additional orders
+            if strike["leg_type"] == "SELL":
+                if hedge_strike_id:
+                    h_strike = db.get_strike(hedge_strike_id)
+                    _execute_buy_leg(h_strike, diff_qty)
+                _execute_sell_leg(strike, diff_qty)
+                msg += f" Live scaled UP by +{diff_lots} Lot(s) ({diff_qty} Qty) on Zerodha."
+            else: # HEDGE_BUY
+                _execute_buy_leg(strike, diff_qty)
+                msg += f" Live scaled UP by +{diff_lots} Lot(s) ({diff_qty} Qty) on Zerodha."
+        elif diff_lots < 0:
+            # Scale DOWN: exit partial quantity
+            if strike["leg_type"] == "SELL":
+                _execute_buy_leg(strike, diff_qty)
+                if hedge_strike_id:
+                    h_strike = db.get_strike(hedge_strike_id)
+                    _execute_sell_leg(h_strike, diff_qty)
+                msg += f" Live scaled DOWN by -{abs(diff_lots)} Lot(s) ({diff_qty} Qty) on Zerodha."
+            else:
+                _execute_sell_leg(strike, diff_qty)
+                msg += f" Live scaled DOWN by -{abs(diff_lots)} Lot(s) ({diff_qty} Qty) on Zerodha."
+    elif strike["status"] == "OPEN":
+        msg += " Saved for future re-entries (current live position unchanged)."
+
+    _log(msg, "OK")
+    return {"ok": True, "message": msg}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EXECUTION — EXECUTE SINGLE STRIKE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -446,6 +528,22 @@ def execute_strike(strike_id: int) -> dict:
     strike = db.get_strike(strike_id)
     if not strike:
         return {"ok": False, "message": f"Strike {strike_id} not found."}
+
+    block = db.get_block(strike["block_id"])
+    if not block:
+        return {"ok": False, "message": "Block not found."}
+
+    # Whitelist / Side Active Check: Prevent execution if Call or Put side is turned OFF
+    opt_type = strike["option_type"].upper()
+    call_active = bool(block.get("call_active", 1))
+    put_active = bool(block.get("put_active", 1))
+
+    if opt_type == "CE" and not call_active:
+        _log(f"Execution BLOCKED: CALL side is turned OFF for Block {block['block_number']}", "WARN")
+        return {"ok": False, "message": f"Execution BLOCKED: CALL side is turned OFF for Block {block['block_number']}."}
+    elif opt_type == "PE" and not put_active:
+        _log(f"Execution BLOCKED: PUT side is turned OFF for Block {block['block_number']}", "WARN")
+        return {"ok": False, "message": f"Execution BLOCKED: PUT side is turned OFF for Block {block['block_number']}."}
 
     # Whitelist / execution check: Prevent entry if already breached (LTP >= anchor + buffer)
     if strike["leg_type"] == "SELL":
