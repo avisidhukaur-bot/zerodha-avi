@@ -2114,6 +2114,72 @@ def render_edit_anchor_form():
             st.button("Update Anchor Price", key="btn_update_anchor", type="primary", on_click=cb_update_anchor_price, args=(strike_id,))
 
 
+def cb_update_strike_lots_global(strike_id):
+    new_lots = st.session_state.get("lots_edit_new_val", 1)
+    scale_live = st.session_state.get("lots_edit_scale_live", False)
+    res = bm.update_strike_lots_manager(strike_id, int(new_lots), scale_live=scale_live)
+    if res["ok"]:
+        _flash(res["message"], "success")
+    else:
+        _flash(res["message"], "error")
+    st.session_state["edit_lots_expanded"] = True
+
+
+def render_edit_lots_form():
+    edit_lots_expanded = st.session_state.pop("edit_lots_expanded", False)
+    with st.expander("✏️ Edit Strike Lot Size (Dynamic Lot Editing)", expanded=edit_lots_expanded):
+        st.markdown('<p class="section-title">Dynamic Lot Editing</p>', unsafe_allow_html=True)
+        blocks = db.get_all_blocks()
+        if not blocks:
+            st.caption("No blocks available.")
+            return
+
+        block_options = {
+            f"Block {b['block_number']} ({b['expiry_date']}) - {b['status']}": b["block_id"]
+            for b in blocks
+        }
+        selected_block_label = st.selectbox("Select Block", list(block_options.keys()), key="lots_edit_block")
+        block_id = block_options[selected_block_label]
+
+        strikes = db.get_strikes_by_block(block_id)
+        if not strikes:
+            st.caption("No strikes in this block.")
+            return
+
+        strike_options = {
+            f"{s['strike_price']} {s['option_type']} {s['leg_type']} (#{s['strike_id']}) [Current Lots: {s['lots']} | Status: {s['status']}]": s["strike_id"]
+            for s in strikes
+        }
+        selected_strike_label = st.selectbox("Select Strike to Edit Lots", list(strike_options.keys()), key="lots_edit_strike")
+        strike_id = strike_options[selected_strike_label]
+
+        strike = db.get_strike(strike_id)
+        if strike:
+            curr_lots = int(strike.get("lots", 1))
+            c1, c2 = st.columns([2, 3])
+            with c1:
+                new_lots = st.number_input(
+                    "New Lots Count",
+                    min_value=1,
+                    max_value=100,
+                    value=curr_lots,
+                    step=1,
+                    key="lots_edit_new_val"
+                )
+            with c2:
+                scale_live_chk = False
+                if strike["status"] == "OPEN":
+                    scale_live_chk = st.checkbox(
+                        "⚡ Scale live position in Zerodha immediately",
+                        value=False,
+                        key="lots_edit_scale_live"
+                    )
+                else:
+                    st.caption("Status is PENDING/CLOSED — will apply on execution.")
+
+            st.button("Update Lot Size", key="btn_update_lots_global", type="primary", on_click=cb_update_strike_lots_global, args=(strike_id,))
+
+
 def render_block_management():
     all_blocks = db.get_all_blocks()
     if not all_blocks:
@@ -2259,6 +2325,9 @@ def main():
 
         # Edit anchor price form
         render_edit_anchor_form()
+
+        # Edit lot size form
+        render_edit_lots_form()
 
         # Block management (archive/delete)
         block_mgmt_expanded = st.session_state.pop("block_mgmt_expanded", False) or st.session_state.get("edit_block_id") is not None
