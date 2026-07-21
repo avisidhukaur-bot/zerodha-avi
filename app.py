@@ -647,6 +647,13 @@ def cb_close_side(block_id, option_type):
     else:
         _flash(res["message"], "error")
 
+def cb_kill_side(block_id, option_type):
+    res = bm.kill_side(block_id, option_type)
+    if res["ok"]:
+        _flash(res["message"], "success")
+    else:
+        _flash(res["message"], "error")
+
 def cb_execute_live_trade(block_id):
     strike_price = st.session_state.get(f"sell_sp_{block_id}", 24000)
     option_type = st.session_state.get(f"sell_ot_{block_id}", "CE")
@@ -1356,15 +1363,26 @@ def render_block_card(block_pnl: dict):
                 })
             st.dataframe(pd.DataFrame(rows_ce), use_container_width=True, hide_index=True)
 
-            open_ce_sells = [s for s in ce_strikes if s["status"] == "OPEN" and s["leg_type"] == "SELL"]
+            open_ce_sells = [s for s in ce_strikes if s["status"] in ("OPEN", "PENDING_CLOSE")]
             if open_ce_sells:
-                st.button(
-                    "✖ Close Call Side",
-                    key=f"close_call_side_{block_id}",
-                    use_container_width=True,
-                    on_click=cb_close_side,
-                    args=(block_id, "CE")
-                )
+                cb1, cb2 = st.columns(2)
+                with cb1:
+                    st.button(
+                        "✖ Close Call Side",
+                        key=f"close_call_side_{block_id}",
+                        use_container_width=True,
+                        on_click=cb_close_side,
+                        args=(block_id, "CE")
+                    )
+                with cb2:
+                    st.button(
+                        "🚨 KILL Call Side",
+                        key=f"kill_call_side_{block_id}",
+                        type="primary",
+                        use_container_width=True,
+                        on_click=cb_kill_side,
+                        args=(block_id, "CE")
+                    )
 
             with st.expander("✏️ Edit Call Lots", expanded=False):
                 ce_lots_options = {f"{s['strike_price']} CE ({s['leg_type']}) - {s['lots']} Lots": s for s in ce_strikes}
@@ -1422,15 +1440,26 @@ def render_block_card(block_pnl: dict):
                 })
             st.dataframe(pd.DataFrame(rows_pe), use_container_width=True, hide_index=True)
 
-            open_pe_sells = [s for s in pe_strikes if s["status"] == "OPEN" and s["leg_type"] == "SELL"]
+            open_pe_sells = [s for s in pe_strikes if s["status"] in ("OPEN", "PENDING_CLOSE")]
             if open_pe_sells:
-                st.button(
-                    "✖ Close Put Side",
-                    key=f"close_put_side_{block_id}",
-                    use_container_width=True,
-                    on_click=cb_close_side,
-                    args=(block_id, "PE")
-                )
+                pb1, pb2 = st.columns(2)
+                with pb1:
+                    st.button(
+                        "✖ Close Put Side",
+                        key=f"close_put_side_{block_id}",
+                        use_container_width=True,
+                        on_click=cb_close_side,
+                        args=(block_id, "PE")
+                    )
+                with pb2:
+                    st.button(
+                        "🚨 KILL Put Side",
+                        key=f"kill_put_side_{block_id}",
+                        type="primary",
+                        use_container_width=True,
+                        on_click=cb_kill_side,
+                        args=(block_id, "PE")
+                    )
 
             with st.expander("✏️ Edit Put Lots", expanded=False):
                 pe_lots_options = {f"{s['strike_price']} PE ({s['leg_type']}) - {s['lots']} Lots": s for s in pe_strikes}

@@ -765,13 +765,13 @@ def unlink_hedge(strike_id: int) -> bool:
         return False
 
 
-def delete_strike(strike_id: int) -> bool:
-    """Deletes a PENDING (not yet executed) strike + its legs."""
+def delete_strike(strike_id: int, force: bool = False) -> bool:
+    """Deletes a strike + its legs. If force=True, deletes even if status is OPEN."""
     strike = get_strike(strike_id)
     if not strike:
         print(f"[DB] ERR Strike {strike_id} not found.")
         return False
-    if strike["status"] == "OPEN":
+    if strike["status"] == "OPEN" and not force:
         print(f"[DB] BLOCKED Cannot delete strike {strike_id} -- status is OPEN (has live position).")
         return False
     try:
@@ -781,7 +781,7 @@ def delete_strike(strike_id: int) -> bool:
             conn.execute("DELETE FROM strikes WHERE strike_id=?", (strike_id,))
             conn.commit()
             conn.close()
-        print(f"[DB] OK Strike {strike_id} deleted.")
+        print(f"[DB] OK Strike {strike_id} deleted (force={force}).")
         return True
     except Exception as e:
         print(f"[DB] ERR delete_strike() failed: {e}")

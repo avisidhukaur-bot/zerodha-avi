@@ -305,6 +305,85 @@ def kill_block(block_id: int) -> dict:
         return {"ok": False, "message": f"Block {block_num} trades exited, but DB deletion failed."}
 
 
+def kill_side(block_id: int, option_type: str) -> dict:
+    """
+    Emergency Kill Switch for a specific side (CE or PE) in a block:
+    1. Scans all strikes of option_type in the block.
+    2. Closes open SELL strikes of option_type FIRST.
+    3. Closes open HEDGE strikes of option_type SECOND.
+    4. Force-deletes all strikes of option_type from the DB.
+    5. Sends Telegram alert.
+    """
+    opt_type = option_type.upper()
+    if opt_type not in ("CE", "PE"):
+        return {"ok": False, "message": "option_type must be CE or PE."}
+
+    block = db.get_block(block_id)
+    if not block:
+        return {"ok": False, "message": f"Block {block_id} not found."}
+
+    block_num = block["block_number"]
+    _log(f"💥 EMERGENCY KILL SIDE TRIGGERED for Block {block_num} ({opt_type} SIDE) 💥", "WARN")
+
+    strikes = [s for s in db.get_strikes_by_block(block_id) if s["option_type"].upper() == opt_type]
+    if not strikes:
+        return {"ok": False, "message": f"No {opt_type} strikes found in Block {block_num}."}
+
+    open_sells = [s for s in strikes if s["leg_type"] == "SELL" and s["status"] in ("OPEN", "PENDING_CLOSE")]
+    open_hedges = [s for s in strikes if s["leg_type"] == "HEDGE_BUY" and s["status"] in ("OPEN", "PENDING_CLOSE")]
+
+    closed_sells, failed_sells = [], []
+    closed_hedges, failed_hedges = [], []
+
+    # 1. Close SELL strikes first
+    for s in open_sells:
+        try:
+            res = close_strike(s["strike_id"], close_hedge=False)
+            if res["ok"]:
+                closed_sells.append(f"{s['strike_price']} {s['option_type']}")
+            else:
+                failed_sells.append(f"{s['strike_price']} {s['option_type']} ({res['message']})")
+        except Exception as ex:
+            failed_sells.append(f"{s['strike_price']} {s['option_type']} (Err: {str(ex)})")
+
+    # 2. Close HEDGE strikes second
+    for h in open_hedges:
+        try:
+            res = close_hedge_strike_only(h["strike_id"])
+            if res["ok"]:
+                closed_hedges.append(f"{h['strike_price']} {h['option_type']}")
+            else:
+                failed_hedges.append(f"{h['strike_price']} {h['option_type']} ({res['message']})")
+        except Exception as ex:
+            failed_hedges.append(f"{h['strike_price']} {h['option_type']} (Err: {str(ex)})")
+
+    # 3. Force-delete all strikes of this side
+    for s in strikes:
+        db.delete_strike(s["strike_id"], force=True)
+
+    # 4. Telegram Alert
+    tg_msg = (
+        f"💥 <b>KILL SIDE TRIGGERED: BLOCK {block_num} ({opt_type} SIDE)</b>\n"
+        f"Expiry: {block['expiry_date']} ({block['expiry_type']})\n\n"
+    )
+    if closed_sells:
+        tg_msg += f"✅ Covered Shorts: {', '.join(closed_sells)}\n"
+    if failed_sells:
+        tg_msg += f"❌ Failed Shorts: {', '.join(failed_sells)}\n"
+    if closed_hedges:
+        tg_msg += f"✅ Exited Hedges: {', '.join(closed_hedges)}\n"
+    if failed_hedges:
+        tg_msg += f"❌ Failed Hedges: {', '.join(failed_hedges)}\n"
+
+    try:
+        tg.send(tg_msg)
+    except Exception:
+        pass
+
+    msg = f"Block {block_num} {opt_type} side has been emergency killed and cleared from DB."
+    return {"ok": True, "message": msg}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # STRIKE OPERATIONS
 # ─────────────────────────────────────────────────────────────────────────────
