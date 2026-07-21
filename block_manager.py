@@ -1138,6 +1138,39 @@ def close_strike(strike_id: int, close_hedge: bool = True) -> dict:
     }
 
 
+def close_side(block_id: int, option_type: str) -> dict:
+    """
+    Closes all OPEN sell strikes (and their linked hedges) for a specific side (CE or PE) in a block.
+    """
+    opt_type = option_type.upper()
+    if opt_type not in ("CE", "PE"):
+        return {"ok": False, "message": "option_type must be CE or PE."}
+
+    strikes = db.get_strikes_by_block(block_id)
+    open_sells = [
+        s for s in strikes
+        if s["status"] == "OPEN" and s["leg_type"] == "SELL" and s["option_type"].upper() == opt_type
+    ]
+
+    if not open_sells:
+        return {"ok": False, "message": f"No OPEN {opt_type} sell strikes found in Block {block_id}."}
+
+    closed_ids = []
+    failed_ids = []
+
+    for s in open_sells:
+        res = close_strike(s["strike_id"])
+        if res["ok"]:
+            closed_ids.append(s["strike_id"])
+        else:
+            failed_ids.append(s["strike_id"])
+
+    if failed_ids:
+        return {"ok": False, "message": f"Failed to close some {opt_type} strikes: {failed_ids}"}
+
+    return {"ok": True, "message": f"All OPEN {opt_type} side strikes in Block {block_id} closed successfully."}
+
+
 def close_hedge_strike_only(strike_id: int) -> dict:
     """
     Closes a HEDGE_BUY strike immediately and synchronously.

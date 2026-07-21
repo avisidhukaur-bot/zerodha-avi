@@ -640,6 +640,13 @@ def cb_update_strike_lots(strike_id, new_lots, scale_live):
     else:
         _flash(res["message"], "error")
 
+def cb_close_side(block_id, option_type):
+    res = bm.close_side(block_id, option_type)
+    if res["ok"]:
+        _flash(res["message"], "success")
+    else:
+        _flash(res["message"], "error")
+
 def cb_execute_live_trade(block_id):
     strike_price = st.session_state.get(f"sell_sp_{block_id}", 24000)
     option_type = st.session_state.get(f"sell_ot_{block_id}", "CE")
@@ -1300,150 +1307,158 @@ def render_block_card(block_pnl: dict):
     </div>
     """, unsafe_allow_html=True)
 
-    # Side Control Toggles (CALL ON/OFF, PUT ON/OFF)
-    call_active = bool(b.get("call_active", 1))
-    put_active  = bool(b.get("put_active", 1))
+    # ── Split Visual Sub-Blocks (CALL SIDE vs PUT SIDE) ───────────────────────
+    ce_strikes = [s for s in strikes if s["option_type"].upper() == "CE"]
+    pe_strikes = [s for s in strikes if s["option_type"].upper() == "PE"]
 
-    c_col, p_col = st.columns(2)
-    with c_col:
-        c_toggle = st.toggle(
-            f"🔵 CALL SIDE ({'ACTIVE' if call_active else 'PAUSED'})",
-            value = call_active,
-            key   = f"toggle_call_side_{block_id}",
-            help  = "Enable/Disable Call side entries & re-entries for this block."
+    col_call, col_put = st.columns(2)
+
+    # ── 🔵 SUB-BLOCK A: CALL SIDE (CE) ─────────────────────────────────────────
+    with col_call:
+        c_active = bool(b.get("call_active", 1))
+        c_status_str = "ACTIVE" if c_active else "PAUSED"
+        st.markdown(f"""
+        <div style="background:#0f172a;border:1px solid #1e3a8a;border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:700;color:#60a5fa;font-size:0.95rem;">🔵 CALL SIDE (CE)</span>
+                <span style="font-size:0.75rem;padding:2px 8px;border-radius:12px;background:{'#1e3a8a' if c_active else '#334155'};color:#93c5fd;font-weight:700;">{c_status_str}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        new_c_toggle = st.toggle(
+            "Call Side Enable",
+            value = c_active,
+            key   = f"toggle_c_{block_id}",
+            help  = "Enable or pause Call side auto-entries and re-entries"
         )
-    with p_col:
-        p_toggle = st.toggle(
-            f"🔴 PUT SIDE ({'ACTIVE' if put_active else 'PAUSED'})",
-            value = put_active,
-            key   = f"toggle_put_side_{block_id}",
-            help  = "Enable/Disable Put side entries & re-entries for this block."
-        )
+        if new_c_toggle != c_active:
+            bm.update_block_side_status(block_id, new_c_toggle, bool(b.get("put_active", 1)))
+            _flash(f"Block {block_num} Call side {'enabled' if new_c_toggle else 'paused'}", "success")
+            st.rerun()
 
-    if c_toggle != call_active or p_toggle != put_active:
-        bm.update_block_side_status(block_id, c_toggle, p_toggle)
-        _flash(f"Block {block_num} side controls updated: CALL {'ON' if c_toggle else 'OFF'}, PUT {'ON' if p_toggle else 'OFF'}", "success")
-        st.rerun()
+        if ce_strikes:
+            rows_ce = []
+            for s in ce_strikes:
+                ltp = s.get("ltp", 0.0)
+                pnl = s.get("pnl", 0.0)
+                la  = s.get("ltp_available", False)
+                ltp_str = f"Exit @ Rs{ltp:.2f}" if s.get("is_exit_price") else (f"Rs{ltp:.2f}" if la else "--")
+                pnl_str = f"{'+' if pnl>=0 else ''}Rs{pnl:,.2f}" if la else "--"
+                rows_ce.append({
+                    "Strike": s["strike_price"],
+                    "Leg": s["leg_type"],
+                    "Anchor": f"Rs{s['anchor_price']:.2f}",
+                    "LTP": ltp_str,
+                    "Lots": s["lots"],
+                    "P&L": pnl_str,
+                    "Status": s["status"],
+                })
+            st.dataframe(pd.DataFrame(rows_ce), use_container_width=True, hide_index=True)
 
-    # Strike table
-    if strikes:
-        rows = []
-        for s in strikes:
-            ltp = s.get("ltp", 0.0)
-            pnl = s.get("pnl", 0.0)
-            la  = s.get("ltp_available", False)
-
-            anchor_str = f"Rs{s['anchor_price']:.2f}"
-            # OPEN  → show live LTP
-            # CLOSED → show actual exit price with "Exit @" label
-            if s.get("is_exit_price"):
-                ltp_str = f"Exit @ Rs{ltp:.2f}" if ltp > 0 else "Exited"
-            elif la:
-                ltp_str = f"Rs{ltp:.2f}"
-            else:
-                ltp_str = "--"
-
-            if not la:
-                pnl_str = "--"
-            elif pnl >= 0:
-                pnl_str = f"+Rs{pnl:,.2f}"
-            else:
-                pnl_str = f"-Rs{abs(pnl):,.2f}"
-
-            pct   = s.get("pnl_pct", 0.0)
-            pct_str = f"{'+' if pct>=0 else ''}{pct:.1f}%" if la else "--"
-
-            # Decay % for sell legs
-            if s["leg_type"] == "SELL" and la and s["anchor_price"] > 0:
-                decay = ((s["anchor_price"] - ltp) / s["anchor_price"]) * 100
-                decay_str = f"{decay:.1f}%"
-            else:
-                decay_str = "--"
-
-            rows.append({
-                "Strike" : s["strike_price"],
-                "Type"   : s["option_type"],
-                "Leg"    : s["leg_type"],
-                "Anchor" : anchor_str,
-                "LTP"    : ltp_str,
-                "Lots"   : s["lots"],
-                "Qty"    : s.get("qty", s["lots"] * int(db.get("lot_size","65"))),
-                "P&L"    : pnl_str,
-                "P&L%"   : pct_str,
-                "Decay%" : decay_str,
-                "Status" : s["status"],
-            })
-
-        df = pd.DataFrame(rows)
-        st.dataframe(
-            df,
-            use_container_width = True,
-            hide_index          = True,
-            column_config       = {
-                "Strike": st.column_config.NumberColumn("Strike", format="%d"),
-                "P&L"  : st.column_config.TextColumn("P&L (Rs)"),
-                "P&L%" : st.column_config.TextColumn("P&L %"),
-            },
-        )
-
-        # Edit Lot Sizes Section
-        with st.expander("✏️ Edit Lot Sizes", expanded=False):
-            strike_options_lots = {
-                f"{s['strike_price']} {s['option_type']} ({s['leg_type']}) - {s['lots']} Lots [{s['status']}]": s
-                for s in strikes
-            }
-            if strike_options_lots:
-                sel_label = st.selectbox(
-                    "Select Strike to Edit Lots",
-                    options=list(strike_options_lots.keys()),
-                    key=f"edit_lots_sel_{block_id}"
-                )
-                target_s = strike_options_lots[sel_label]
-
-                el_c1, el_c2 = st.columns([2, 3])
-                with el_c1:
-                    new_lots_val = st.number_input(
-                        "New Lot Size",
-                        min_value=1,
-                        max_value=100,
-                        value=int(target_s["lots"]),
-                        key=f"new_lots_val_{target_s['strike_id']}"
-                    )
-                with el_c2:
-                    scale_live_chk = False
-                    if target_s["status"] == "OPEN":
-                        scale_live_chk = st.checkbox(
-                            "⚡ Scale live position on Zerodha immediately",
-                            value=False,
-                            key=f"scale_live_chk_{target_s['strike_id']}",
-                            help="Places buy/sell order for the difference to match new lot size immediately on broker."
-                        )
-                    else:
-                        st.markdown("<div style='font-size:0.8rem;color:#6b7280;margin-top:28px;'>Status is PENDING/CLOSED — will apply on execution.</div>", unsafe_allow_html=True)
-
+            open_ce_sells = [s for s in ce_strikes if s["status"] == "OPEN" and s["leg_type"] == "SELL"]
+            if open_ce_sells:
                 st.button(
-                    "💾 Update Lots",
-                    key=f"btn_save_lots_{target_s['strike_id']}",
-                    type="primary",
-                    on_click=cb_update_strike_lots,
-                    args=(target_s["strike_id"], new_lots_val, scale_live_chk)
+                    "✖ Close Call Side",
+                    key=f"close_call_side_{block_id}",
+                    use_container_width=True,
+                    on_click=cb_close_side,
+                    args=(block_id, "CE")
                 )
 
-        # Scan for orphaned hedges in this block
-        orphaned_hedges = []
-        for s in strikes:
-            if s["status"] == "OPEN" and s["leg_type"] == "HEDGE_BUY":
-                sell_id = s.get("hedge_strike_id")
-                if sell_id:
-                    sell_strike = db.get_strike(sell_id)
-                    if sell_strike and sell_strike["status"] == "CLOSED":
-                        orphaned_hedges.append(s)
+            with st.expander("✏️ Edit Call Lots", expanded=False):
+                ce_lots_options = {f"{s['strike_price']} CE ({s['leg_type']}) - {s['lots']} Lots": s for s in ce_strikes}
+                sel_ce_label = st.selectbox("Select Call Strike", options=list(ce_lots_options.keys()), key=f"sel_ce_lots_{block_id}")
+                target_ce = ce_lots_options[sel_ce_label]
+                new_ce_lots = st.number_input("New Lots", min_value=1, max_value=100, value=int(target_ce["lots"]), key=f"num_ce_lots_{target_ce['strike_id']}")
+                scale_ce_chk = False
+                if target_ce["status"] == "OPEN":
+                    scale_ce_chk = st.checkbox("⚡ Scale Zerodha Live", value=False, key=f"chk_scale_ce_{target_ce['strike_id']}")
+                st.button("Update Call Lots", key=f"btn_save_ce_lots_{target_ce['strike_id']}", type="primary", on_click=cb_update_strike_lots, args=(target_ce["strike_id"], new_ce_lots, scale_ce_chk))
+        else:
+            st.markdown("<p style='color:#64748b;font-size:0.8rem;padding:8px;'>No CE strikes added in this block.</p>", unsafe_allow_html=True)
 
-        if orphaned_hedges:
-            st.warning("⚠️ **Orphaned Hedges Detected!** (Partner Sell Strike is CLOSED)")
-            for h in orphaned_hedges:
-                h_label = f"Hedge {h['strike_price']} {h['option_type']} (Strike #{h['strike_id']})"
-                st.button(f"✖ Close Stranded {h_label}", key=f"close_orphaned_{h['strike_id']}", use_container_width=True, on_click=cb_close_stranded_hedge, args=(h["strike_id"],))
+
+    # ── 🔴 SUB-BLOCK B: PUT SIDE (PE) ─────────────────────────────────────────
+    with col_put:
+        p_active = bool(b.get("put_active", 1))
+        p_status_str = "ACTIVE" if p_active else "PAUSED"
+        st.markdown(f"""
+        <div style="background:#18181b;border:1px solid #831843;border-radius:8px;padding:10px 14px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-weight:700;color:#f472b6;font-size:0.95rem;">🔴 PUT SIDE (PE)</span>
+                <span style="font-size:0.75rem;padding:2px 8px;border-radius:12px;background:{'#831843' if p_active else '#334155'};color:#fbcfe8;font-weight:700;">{p_status_str}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        new_p_toggle = st.toggle(
+            "Put Side Enable",
+            value = p_active,
+            key   = f"toggle_p_{block_id}",
+            help  = "Enable or pause Put side auto-entries and re-entries"
+        )
+        if new_p_toggle != p_active:
+            bm.update_block_side_status(block_id, bool(b.get("call_active", 1)), new_p_toggle)
+            _flash(f"Block {block_num} Put side {'enabled' if new_p_toggle else 'paused'}", "success")
+            st.rerun()
+
+        if pe_strikes:
+            rows_pe = []
+            for s in pe_strikes:
+                ltp = s.get("ltp", 0.0)
+                pnl = s.get("pnl", 0.0)
+                la  = s.get("ltp_available", False)
+                ltp_str = f"Exit @ Rs{ltp:.2f}" if s.get("is_exit_price") else (f"Rs{ltp:.2f}" if la else "--")
+                pnl_str = f"{'+' if pnl>=0 else ''}Rs{pnl:,.2f}" if la else "--"
+                rows_pe.append({
+                    "Strike": s["strike_price"],
+                    "Leg": s["leg_type"],
+                    "Anchor": f"Rs{s['anchor_price']:.2f}",
+                    "LTP": ltp_str,
+                    "Lots": s["lots"],
+                    "P&L": pnl_str,
+                    "Status": s["status"],
+                })
+            st.dataframe(pd.DataFrame(rows_pe), use_container_width=True, hide_index=True)
+
+            open_pe_sells = [s for s in pe_strikes if s["status"] == "OPEN" and s["leg_type"] == "SELL"]
+            if open_pe_sells:
+                st.button(
+                    "✖ Close Put Side",
+                    key=f"close_put_side_{block_id}",
+                    use_container_width=True,
+                    on_click=cb_close_side,
+                    args=(block_id, "PE")
+                )
+
+            with st.expander("✏️ Edit Put Lots", expanded=False):
+                pe_lots_options = {f"{s['strike_price']} PE ({s['leg_type']}) - {s['lots']} Lots": s for s in pe_strikes}
+                sel_pe_label = st.selectbox("Select Put Strike", options=list(pe_lots_options.keys()), key=f"sel_pe_lots_{block_id}")
+                target_pe = pe_lots_options[sel_pe_label]
+                new_pe_lots = st.number_input("New Lots", min_value=1, max_value=100, value=int(target_pe["lots"]), key=f"num_pe_lots_{target_pe['strike_id']}")
+                scale_pe_chk = False
+                if target_pe["status"] == "OPEN":
+                    scale_pe_chk = st.checkbox("⚡ Scale Zerodha Live", value=False, key=f"chk_scale_pe_{target_pe['strike_id']}")
+                st.button("Update Put Lots", key=f"btn_save_pe_lots_{target_pe['strike_id']}", type="primary", on_click=cb_update_strike_lots, args=(target_pe["strike_id"], new_pe_lots, scale_pe_chk))
+        else:
+            st.markdown("<p style='color:#64748b;font-size:0.8rem;padding:8px;'>No PE strikes added in this block.</p>", unsafe_allow_html=True)
+
+    # Scan for orphaned hedges in this block
+    orphaned_hedges = []
+    for s in strikes:
+        if s["status"] == "OPEN" and s["leg_type"] == "HEDGE_BUY":
+            sell_id = s.get("hedge_strike_id")
+            if sell_id:
+                sell_strike = db.get_strike(sell_id)
+                if sell_strike and sell_strike["status"] == "CLOSED":
+                    orphaned_hedges.append(s)
+
+    if orphaned_hedges:
+        st.warning("⚠️ **Orphaned Hedges Detected!** (Partner Sell Strike is CLOSED)")
+        for h in orphaned_hedges:
+            h_label = f"Hedge {h['strike_price']} {h['option_type']} (Strike #{h['strike_id']})"
+            st.button(f"✖ Close Stranded {h_label}", key=f"close_orphaned_{h['strike_id']}", use_container_width=True, on_click=cb_close_stranded_hedge, args=(h["strike_id"],))
 
     else:
         st.markdown(
