@@ -57,6 +57,8 @@ def _log(msg: str, level: str = "INFO") -> None:
 
 
 _last_exit_check_time = 0.0
+_last_exit_check_candle = ""
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # LTP CACHE
@@ -598,7 +600,7 @@ def run_pnl_cycle() -> dict:
 
     Returns: portfolio_pnl dict
     """
-    global _last_exit_check_time
+    global _last_exit_check_time, _last_exit_check_candle
     _log("Running P&L cycle...", "CYCLE")
     
     # Run broker positions synchronization
@@ -625,8 +627,14 @@ def run_pnl_cycle() -> dict:
             now_time_str = now_ist.strftime("%H:%M")
             today_str = now_ist.strftime("%Y-%m-%d")
             
-            # Run stop-loss exit checks on every cycle (every 30 seconds) for immediate protection
-            run_exit_checks = True
+            # Decoupled Stop-Loss Exit Check (Runs on 5-minute candle closed boundaries)
+            run_exit_checks = False
+            floor_min = (now_ist.minute // 5) * 5
+            curr_5m_str = f"{today_str} {now_ist.hour:02d}:{floor_min:02d}"
+            if _last_exit_check_candle != curr_5m_str:
+                run_exit_checks = True
+                _last_exit_check_candle = curr_5m_str
+                _log(f"Running stop-loss exit checks for 5-minute candle boundary: {curr_5m_str}", "CYCLE")
             
             for b in blocks:
                 # 1. Stop-Loss Exit Check (Only run on exit-check interval)
