@@ -1,0 +1,16 @@
+# Secrets & Sensitive Files (NEVER COMMIT)
+secrets.txt
+secrets_backup_safety.txt
+*.db
+*.db-journal
+*.log
+
+# Python cache & artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.zip
+
+# OS artifacts
+.DS_Store
+Thumbs.db

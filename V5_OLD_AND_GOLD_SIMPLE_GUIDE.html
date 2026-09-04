@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V5.0 "Old & Gold" Architecture — Simple Visual Guide</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #0284c7;
+            --primary-dark: #0369a1;
+            --primary-light: #e0f2fe;
+            --bullish: #10b981;
+            --bullish-bg: #ecfdf5;
+            --bullish-border: #a7f3d0;
+            --bearish: #ef4444;
+            --bearish-bg: #fef2f2;
+            --bearish-border: #fecaca;
+            --warning: #f59e0b;
+            --warning-bg: #fffbeb;
+            --bg-body: #f8fafc;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --card-bg: #ffffff;
+            --card-border: #e2e8f0;
+            --radius-lg: 16px;
+            --radius-md: 10px;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.07), 0 2px 4px -2px rgba(0,0,0,0.05);
+            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.08), 0 4px 6px -4px rgba(0,0,0,0.04);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 24px 16px;
+        }
+
+        .container {
+            max-width: 1050px;
+            margin: 0 auto;
+        }
+
+        /* Top Hero Header */
+        .hero {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0369a1 100%);
+            color: #ffffff;
+            border-radius: var(--radius-lg);
+            padding: 40px 32px;
+            box-shadow: var(--shadow-lg);
+            margin-bottom: 28px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::after {
+            content: "";
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: radial-gradient(circle, rgba(14, 165, 233, 0.25) 0%, transparent 70%);
+            border-radius: 50%;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(52, 211, 153, 0.4);
+            padding: 6px 14px;
+            border-radius: 30px;
+            font-size: 0.82rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+
+        .hero h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.2rem;
+            font-weight: 800;
+            line-height: 1.25;
+            margin-bottom: 12px;
+            letter-spacing: -0.5px;
+        }
+
+        .hero p {
+            font-size: 1.05rem;
+            color: #cbd5e1;
+            max-width: 780px;
+            line-height: 1.6;
+        }
+
+        /* Golden Principle Banner */
+        .principle-box {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            border: 2px solid #f59e0b;
+            border-radius: var(--radius-md);
+            padding: 20px 24px;
+            margin-bottom: 32px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .principle-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 800;
+            color: #92400e;
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        .principle-text {
+            color: #78350f;
+            font-size: 1.0rem;
+            font-weight: 600;
+            line-height: 1.6;
+        }
+
+        /* Section Headings */
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 36px 0 18px 0;
+        }
+
+        .section-number {
+            width: 38px;
+            height: 38px;
+            background: var(--primary);
+            color: #ffffff;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.1rem;
+        }
+
+        .section-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.45rem;
+            font-weight: 800;
+            color: var(--text-main);
+        }
+
+        /* 4-Story Cards Grid */
+        .stories-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+            gap: 20px;
+            margin-bottom: 28px;
+        }
+
+        .story-card {
+            background: var(--card-bg);
+            border: 1.5px solid var(--card-border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            box-shadow: var(--shadow-sm);
+            transition: all 0.2s ease;
+        }
+
+        .story-card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .story-icon {
+            font-size: 2.2rem;
+            margin-bottom: 12px;
+        }
+
+        .story-card h3 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.2rem;
+            font-weight: 800;
+            margin-bottom: 8px;
+            color: var(--text-main);
+        }
+
+        .story-analogy {
+            background: #f1f5f9;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            font-weight: 700;
+            color: #475569;
+            margin-bottom: 12px;
+        }
+
+        .story-desc {
+            font-size: 0.92rem;
+            color: #334155;
+            line-height: 1.55;
+        }
+
+        /* Interactive Simulator */
+        .interactive-panel {
+            background: #ffffff;
+            border: 2px solid #0284c7;
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            margin-bottom: 32px;
+            box-shadow: var(--shadow-md);
+        }
+
+        .sim-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .sim-header h3 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: #0369a1;
+        }
+
+        .slider-wrapper {
+            margin: 24px 0;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: var(--radius-md);
+            padding: 20px;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            font-weight: 700;
+            font-size: 1.0rem;
+            margin-bottom: 10px;
+        }
+
+        .spot-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.4rem;
+            color: #0284c7;
+            font-weight: 800;
+        }
+
+        input[type=range] {
+            width: 100%;
+            height: 10px;
+            border-radius: 5px;
+            background: #cbd5e1;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .sim-result-box {
+            padding: 20px;
+            border-radius: var(--radius-md);
+            transition: all 0.3s ease;
+        }
+
+        .bullish-active {
+            background: var(--bullish-bg);
+            border: 2px solid var(--bullish);
+        }
+
+        .bearish-active {
+            background: var(--bearish-bg);
+            border: 2px solid var(--bearish);
+        }
+
+        /* Stop Loss Calculator Panel */
+        .calc-panel {
+            background: #ffffff;
+            border: 1.5px solid var(--card-border);
+            border-radius: var(--radius-lg);
+            padding: 26px;
+            margin-bottom: 32px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .calc-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .calc-input-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #475569;
+            margin-bottom: 6px;
+        }
+
+        .calc-input-group input, .calc-input-group select {
+            width: 100%;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1.5px solid #cbd5e1;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .calc-output {
+            background: #f8fafc;
+            border: 1.5px solid #cbd5e1;
+            border-radius: var(--radius-md);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .calc-output-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+
+        .calc-output-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.7rem;
+            font-weight: 800;
+            color: #dc2626;
+            margin-top: 4px;
+        }
+
+        /* Daily Timeline Flow */
+        .timeline {
+            position: relative;
+            padding-left: 32px;
+            margin: 24px 0;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 11px;
+            top: 10px;
+            bottom: 10px;
+            width: 3px;
+            background: #cbd5e1;
+        }
+
+        .timeline-item {
+            position: relative;
+            margin-bottom: 24px;
+        }
+
+        .timeline-dot {
+            position: absolute;
+            left: -32px;
+            top: 4px;
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            background: #ffffff;
+            border: 4px solid var(--primary);
+        }
+
+        .timeline-time {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 800;
+            color: var(--primary);
+            font-size: 0.95rem;
+        }
+
+        .timeline-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.15rem;
+            font-weight: 800;
+            margin: 4px 0;
+            color: var(--text-main);
+        }
+
+        .timeline-body {
+            font-size: 0.92rem;
+            color: #475569;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            padding: 14px 18px;
+            border-radius: var(--radius-md);
+            margin-top: 6px;
+        }
+
+        /* Comparison Table */
+        .table-wrap {
+            overflow-x: auto;
+            background: #ffffff;
+            border-radius: var(--radius-lg);
+            border: 1.5px solid var(--card-border);
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 32px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.92rem;
+        }
+
+        th {
+            background: #f1f5f9;
+            padding: 14px 18px;
+            font-weight: 800;
+            color: #334155;
+            font-family: 'Outfit', sans-serif;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        td {
+            padding: 14px 18px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #334155;
+            vertical-align: top;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .tag-old {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.78rem;
+        }
+
+        .tag-new {
+            background: #dcfce7;
+            color: #166534;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.78rem;
+        }
+
+        /* Footer & Actions */
+        .footer {
+            text-align: center;
+            padding: 32px 0 16px 0;
+            border-top: 1px solid #e2e8f0;
+            color: #94a3b8;
+            font-size: 0.85rem;
+        }
+
+        .print-btn {
+            background: #0f172a;
+            color: #ffffff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-bottom: 16px;
+            transition: all 0.2s;
+        }
+
+        .print-btn:hover {
+            background: #334155;
+        }
+
+        @media (max-width: 640px) {
+            .hero { padding: 24px 18px; }
+            .hero h1 { font-size: 1.6rem; }
+            .calc-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+
+    <!-- Top Hero Header -->
+    <div class="hero">
+        <div class="hero-badge">⭐ Bharat Option Selling Architecture</div>
+        <h1>V5.0 "Old & Gold" Engine<br/>सरल और आसान गाइड (10th Standard Level)</h1>
+        <p>
+            यह गाइड खास तौर पर आपके और आपकी सिस्टर के लिए बनाई गई है, ताकि आप 5 मिनट में बिना किसी कन्फ्यूजन के समझ सकें कि 
+            <b>V5.0 "Old & Gold"</b> कैसे काम करता है, और इसे Zerodha, Kotak या HDFC पर कैसे इस्तेमाल किया जाता है।
+        </p>
+    </div>
+
+    <!-- Golden Principle Banner -->
+    <div class="principle-box">
+        <div class="principle-title">🏆 V5.0 का गोल्डन सिद्धांत (The Golden Rule)</div>
+        <div class="principle-text">
+            "M1 Master Anchor दिन की दिशा तय करता है।<br/>
+            Stop-Loss हर एक ट्रेड के रिस्क को सुरक्षित करता है।<br/>
+            Re-entry बाजार की स्थिति देखकर होती है।<br/>
+            और Orphan Hedge को बिना वजह कभी बंद नहीं किया जाता!"
+        </div>
+    </div>
+
+    <!-- Section 1: 4 Easy Real-Life Stories -->
+    <div class="section-header">
+        <div class="section-number">1</div>
+        <div class="section-title">4 आसान कहानियाँ — सिस्टम को 2 मिनट में समझें</div>
+    </div>
+
+    <div class="stories-grid">
+
+        <!-- Story 1 -->
+        <div class="story-card">
+            <div class="story-icon">🧭</div>
+            <h3>1. M1 Master Anchor</h3>
+            <div class="story-analogy">कहानी: स्कूल क्रिकेट टीम का कैप्टन</div>
+            <div class="story-desc">
+                जैसे मैच शुरू होने पर कैप्टन टॉस जीतकर तय करता है कि बैटिंग करनी है या बॉलिंग, 
+                वैसे ही <b>M1 Master Anchor</b> सुबह एक बार तय हो जाता है (जैसे 24,500)।<br/><br/>
+                दिन में 10 बार हवा बदलने से कैप्टन फैसला नहीं बदलता। दिनभर शांति से पोजीशन को प्रीमियम गिलाने (Theta Decay) दिया जाता है।
+            </div>
+        </div>
+
+        <!-- Story 2 -->
+        <div class="story-card">
+            <div class="story-icon">🪖</div>
+            <h3>2. Individual Stop-Loss</h3>
+            <div class="story-analogy">कहानी: हर सैनिक का अपना हेलमेट</div>
+            <div class="story-desc">
+                अगर एक सैनिक को चोट लगती है, तो वह ड्रेसिंग कराने किनारे जाता है (Stop-Loss Hit)। 
+                हम पूरे देश की फौज को वापस नहीं बुला लेते!<br/><br/>
+                हर बेचे गए ऑप्शन पर <b>10%, 20% या 25%</b> का स्टॉप-लॉस लगा होता है। अगर ₹100 का प्रीमियम ₹125 पहुंच जाए, तो सिर्फ वही एक ट्रेड कटता है, बाकी सिस्टम चालू रहता है।
+            </div>
+        </div>
+
+        <!-- Story 3 -->
+        <div class="story-card">
+            <div class="story-icon">🦺</div>
+            <h3>3. Orphan Hedge (कवच)</h3>
+            <div class="story-analogy">कहानी: नाव की लाइफ-जैकेट</div>
+            <div class="story-desc">
+                अगर आपकी बोट का इंजन खराब हो जाए, तो <b>क्या आप अपनी लाइफ-जैकेट उतार कर पानी में फेंक देंगे? बिल्कुल नहीं!</b><br/><br/>
+                जब शॉर्ट लेग स्टॉप-लॉस पर कटता है, तो हेज (Hedge) को जिंदा रखा जाता है। वह आपका रक्षा-कवच है। अगर वह प्रॉफिट में आ जाए, तो आप 1-क्लिक बटन दबाकर कभी भी मुनाफा बुक कर सकते हैं!
+            </div>
+        </div>
+
+        <!-- Story 4 -->
+        <div class="story-card">
+            <div class="story-icon">📦</div>
+            <h3>4. Single-Window Console</h3>
+            <div class="story-analogy">कहानी: बर्गर मील का कॉम्बो बॉक्स</div>
+            <div class="story-desc">
+                पहले Call के लिए अलग फॉर्म और Put के लिए अलग फॉर्म भरना पड़ता था, जिससे थकान होती थी।<br/><br/>
+                अब बर्गर कॉम्बो की तरह <b>एक ही स्क्रीन पर आमने-सामने</b> Call Wing और Put Wing भरें। Deploy बटन दबाते ही सिस्टम खुद देख लेगा कि मार्केट ऊपर है या नीचे, और सही साइड अपने-आप लाइव कर देगा!
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Section 2: Interactive Spot vs Anchor Simulator -->
+    <div class="section-header">
+        <div class="section-number">2</div>
+        <div class="section-title">लाइव सिम्युलेटर: NIFTY ऊपर-नीचे करके देखें</div>
+    </div>
+
+    <div class="interactive-panel">
+        <div class="sim-header">
+            <h3>🎮 Spot vs Master Anchor लाइव सिमुलेशन</h3>
+            <span style="font-size:0.85rem; background:#e0f2fe; color:#0369a1; padding:4px 10px; border-radius:6px; font-weight:700;">
+                M1 Master Anchor = ₹24,500.00
+            </span>
+        </div>
+
+        <div class="slider-wrapper">
+            <div class="slider-label">
+                <span>NIFTY 50 Spot Price को आगे-पीछे खींचें:</span>
+                <span class="spot-val" id="spotDisplay">₹24,650.00</span>
+            </div>
+            <input type="range" id="spotSlider" min="24000" max="25000" step="25" value="24650" oninput="updateSimulator(this.value)">
+            <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#64748b; margin-top:6px;">
+                <span>24,000 (गहरा Bearish)</span>
+                <span style="font-weight:700; color:#0284c7;">24,500 (Master Anchor)</span>
+                <span>25,000 (मजबूत Bullish)</span>
+            </div>
+        </div>
+
+        <div id="simResult" class="sim-result-box bullish-active">
+            <!-- Dynamic Content via JS -->
+        </div>
+    </div>
+
+    <!-- Section 3: Interactive Stop Loss Calculator -->
+    <div class="section-header">
+        <div class="section-number">3</div>
+        <div class="section-title">स्टॉप-लॉस और री-एंट्री कैलकुलेटर</div>
+    </div>
+
+    <div class="calc-panel">
+        <p style="font-size:0.95rem; color:#475569; margin-bottom:12px;">
+            देखें कि आपके बेचे गए ऑप्शन पर स्टॉप-लॉस और री-एंट्री कैसे तय होती है:
+        </p>
+
+        <div class="calc-row">
+            <div class="calc-input-group">
+                <label>Option Entry Price (₹)</label>
+                <input type="number" id="entryPrice" value="100.00" step="1.0" oninput="calculateSL()">
+            </div>
+            <div class="calc-input-group">
+                <label>Stop Loss Setting (%)</label>
+                <select id="slPctSelect" onchange="calculateSL()">
+                    <option value="25" selected>25% (Standard Default)</option>
+                    <option value="20">20% SL</option>
+                    <option value="10">10% (Tight SL)</option>
+                    <option value="30">30% (Wide SL)</option>
+                </select>
+            </div>
+            <div class="calc-output">
+                <div class="calc-output-title">🚨 SL Trigger Price</div>
+                <div class="calc-output-val" id="slTriggerVal">₹125.00</div>
+                <div style="font-size:0.75rem; color:#dc2626; margin-top:2px;">इस भाव पर ट्रेड तुरंत कट जाएगा</div>
+            </div>
+            <div class="calc-output" style="border-color:#86efac; background:#f0fdf4;">
+                <div class="calc-output-title" style="color:#166534;">🔄 Re-entry Target Price</div>
+                <div class="calc-output-val" id="reentryVal" style="color:#16a34a;">≤ ₹99.00</div>
+                <div style="font-size:0.75rem; color:#166534; margin-top:2px;">5 मिनट कूलडाउन के बाद नया ट्रेड</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Section 4: Daily Timeline -->
+    <div class="section-header">
+        <div class="section-number">4</div>
+        <div class="section-title">ट्रेडिंग दिन का पूरा चक्र (Timeline from 9:15 to 3:30)</div>
+    </div>
+
+    <div class="timeline">
+
+        <div class="timeline-item">
+            <div class="timeline-dot"></div>
+            <div class="timeline-time">09:15 AM - 09:30 AM</div>
+            <div class="timeline-title">सुबह: M1 Master Anchor और 1-Click Deploy</div>
+            <div class="timeline-body">
+                आप सिंगल-विंडो में CE और PE भरते हैं। मास्टर एंकर 24,500 सेट होता है। अगर निफ्टी 24,550 पर है, तो सिस्टम खुद <b>PUT SELL</b> को लाइव कर देता है और <b>CALL SELL</b> को बैकअप में सुरक्षित रख लेता है।
+            </div>
+        </div>
+
+        <div class="timeline-item">
+            <div class="timeline-dot"></div>
+            <div class="timeline-time">11:00 AM</div>
+            <div class="timeline-title">अचानक गिरावट: Stop-Loss ट्रिगर</div>
+            <div class="timeline-body">
+                बाजार में अचानक गिरावट आई और पुट का प्रीमियम ₹100 से बढ़कर ₹125 हो गया।<br/>
+                <b>सिस्टम क्या करेगा?</b> सिर्फ वही पुट बेची हुई लेग को काटेगा। आपका हेज (Hedge) सुरक्षित रहेगा। पूरा सिस्टम बंद नहीं होगा!
+            </div>
+        </div>
+
+        <div class="timeline-item">
+            <div class="timeline-dot"></div>
+            <div class="timeline-time">01:00 PM</div>
+            <div class="timeline-title">बाजार की वापसी: ऑटोमैटिक Re-entry</div>
+            <div class="timeline-body">
+                5 मिनट का कूलडाउन खत्म हो चुका है और बाजार दोबारा एंकर के ऊपर आ गया है। प्रीमियम ठंडा होकर ₹99 पर आ गया। सिस्टम समझदारी से दोबारा <b>PUT SELL</b> में एंट्री ले लेता है।
+            </div>
+        </div>
+
+        <div class="timeline-item">
+            <div class="timeline-dot" style="border-color:#10b981;"></div>
+            <div class="timeline-time" style="color:#10b981;">03:00 PM (15:00 IST) ⭐ मोस्ट इम्पोर्टेंट</div>
+            <div class="timeline-title">3:00 PM का अंतिम फैसला (Continuation Decision)</div>
+            <div class="timeline-body" style="background:#ecfdf5; border-color:#6ee7b7;">
+                दिन में एक बार, ठीक 3:00 बजे सिस्टम निफ्टी और मास्टर एंकर की तुलना करता है:<br/>
+                • <b>अगर Spot ≥ Anchor:</b> पुट साइड को कल के लिए <b>CONTINUED</b> रखा जाएगा। उल्टी कॉल साइड बंद कर दी जाएगी।<br/>
+                • <b>अगर Spot < Anchor:</b> कॉल साइड को कल के लिए <b>CONTINUED</b> रखा जाएगा। उल्टी पुट साइड बंद कर दी जाएगी।<br/>
+                Telegram पर तुरंत साफ़-सुथरा मैसेज आ जाएगा।
+            </div>
+        </div>
+
+        <div class="timeline-item">
+            <div class="timeline-dot"></div>
+            <div class="timeline-time">03:25 PM</div>
+            <div class="timeline-title">Positional Integrity Watchdog</div>
+            <div class="timeline-body">
+                सिस्टम चेक करता है कि अगर कोई आज ही एक्सपायर होने वाली स्ट्राइक है तो वह बंद हो जाए, जबकि अगली एक्सपायरी वाली पोजीशनल स्ट्राइक्स रातभर शांति से होल्ड रहें।
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Section 5: Before vs After Comparison Table -->
+    <div class="section-header">
+        <div class="section-number">5</div>
+        <div class="section-title">पुराने सिस्टम (V3/V4) और नए V5.0 में क्या फर्क है?</div>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>फ़ीचर / सवाल</th>
+                    <th>पुराना तरीका (V3 / V4)</th>
+                    <th>V5.0 "Old & Gold" (नया तरीका)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><b>फॉर्म भरना (UI)</b></td>
+                    <td><span class="tag-old">थकाऊ</span> Call और Put के लिए अलग-अलग जगह जाना पड़ता था।</td>
+                    <td><span class="tag-new">एक ही विंडो</span> दोनों साइड एक स्क्रीन पर भरें और 1-क्लिक Deploy करें।</td>
+                </tr>
+                <tr>
+                    <td><b>दिन में एंकर क्रॉस होना</b></td>
+                    <td><span class="tag-old">झटके से काटना</span> जैसे ही निफ्टी एंकर पार करता, पोजीशन तुरंत कट जाती थी।</td>
+                    <td><span class="tag-new">शांति से होल्ड</span> दिनभर प्रीमियम गलेगा। केवल 3:00 PM पर फैसला होगा।</td>
+                </tr>
+                <tr>
+                    <td><b>स्टॉप लॉस (Stop Loss)</b></td>
+                    <td>25% फिक्स था।</td>
+                    <td><span class="tag-new">कस्टमाइजेबल</span> 10%, 20%, 25% या अपनी पसंद का % चुनें।</td>
+                </tr>
+                <tr>
+                    <td><b>स्टॉप लॉस होने पर हेज (Hedge)</b></td>
+                    <td>कई बार हेज भी साथ में कट जाता था।</td>
+                    <td><span class="tag-new">अछूता (Orphan Shield)</span> हेज कभी ऑटो नहीं कटेगा। वह आपकी सुरक्षा के लिए खुला रहेगा।</td>
+                </tr>
+                <tr>
+                    <td><b>3:00 PM फैसला</b></td>
+                    <td>दोनों साइड खुली रह जाती थीं या कन्फ्यूजन था।</td>
+                    <td><span class="tag-new">ऑटोमैटिक</span> जीतने वाली साइड को होल्ड करेगा, हारने वाली साइड को बंद करेगा।</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Section 6: How to forward to Sister / Any Laptop -->
+    <div class="section-header">
+        <div class="section-number">6</div>
+        <div class="section-title">अपनी सिस्टर या किसी भी लैपटॉप पर कैसे चलाएं?</div>
+    </div>
+
+    <div class="story-card" style="margin-bottom:32px; border-left:6px solid #0284c7;">
+        <h3 style="color:#0369a1;">📋 बस 3 स्टेप्स फॉलो करें:</h3>
+        <ol style="margin-left:22px; margin-top:10px; font-size:0.95rem; color:#334155; line-height:1.7;">
+            <li><b>स्टेप 1:</b> अपने लैपटॉप से यह दोनों फाइलें कॉपी करके अपनी सिस्टर को ईमेल या पेनड्राइव से भेजें:<br/>
+                • <code>UNIVERSAL_V5_UPGRADE_BLUEPRINT_FOR_ANTIGRAVITY.md</code><br/>
+                • <code>V5_OLD_AND_GOLD_SIMPLE_GUIDE.html</code> (यह गाइड)
+            </li>
+            <li><b>स्टेप 2:</b> वह अपने लैपटॉप में **Antigravity IDE** खोलेंगी।</li>
+            <li><b>स्टेप 3:</b> ब्लू-प्रिंट फाइल का पहला प्रॉम्प्ट कॉपी करके Antigravity को दे देंगी। Antigravity खुद उनके Zerodha या Kotak सिस्टम को पूरी तरह V5.0 पर अपग्रेड कर देगा!</li>
+        </ol>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <button class="print-btn" onclick="window.print()">🖨️ इस गाइड को PDF या प्रिंट में सेव करें</button><br/>
+        <b>Bharat Systems Quantitative Architecture V5.0</b> • NIFTY Option Selling Engine<br/>
+        VPS: 46.224.133.16:9004 • All Rights Reserved
+    </div>
+
+</div>
+
+<script>
+    function updateSimulator(spot) {
+        spot = parseFloat(spot);
+        const anchor = 24500.0;
+        document.getElementById('spotDisplay').innerText = '₹' + spot.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+        const resBox = document.getElementById('simResult');
+
+        if (spot >= anchor) {
+            const diff = spot - anchor;
+            resBox.className = 'sim-result-box bullish-active';
+            resBox.innerHTML = `
+                <div style="font-weight:800; color:#15803d; font-size:1.1rem; margin-bottom:6px;">
+                    🟢 बाजार एंकर से ऊपर है (+₹${diff.toFixed(0)} pts) ➔ BULLISH REGIME
+                </div>
+                <div style="font-size:0.92rem; color:#166534; line-height:1.6;">
+                    ✅ <b>Deploy करते ही:</b> सिस्टम सिर्फ <b>PUT SELL WING</b> को ब्रोकर पर लाइव करेगा (Hedge Buy ➔ PE Sell).<br/>
+                    ⚪ <b>CALL SELL WING:</b> सुरक्षित रूप से बैकअप (PENDING) में रहेगा (जीरो रिस्क).<br/>
+                    ⏰ <b>3:00 PM पर:</b> अगर बाजार ऊपर ही रहा, तो PUT SELL को रातभर के लिए <b>CONTINUED</b> रखा जाएगा।
+                </div>
+            `;
+        } else {
+            const diff = anchor - spot;
+            resBox.className = 'sim-result-box bearish-active';
+            resBox.innerHTML = `
+                <div style="font-weight:800; color:#b91c1c; font-size:1.1rem; margin-bottom:6px;">
+                    🔴 बाजार एंकर से नीचे है (-₹${diff.toFixed(0)} pts) ➔ BEARISH REGIME
+                </div>
+                <div style="font-size:0.92rem; color:#991b1b; line-height:1.6;">
+                    ✅ <b>Deploy करते ही:</b> सिस्टम सिर्फ <b>CALL SELL WING</b> को ब्रोकर पर लाइव करेगा (Hedge Buy ➔ CE Sell).<br/>
+                    ⚪ <b>PUT SELL WING:</b> सुरक्षित रूप से बैकअप (PENDING) में रहेगा (जीरो रिस्क).<br/>
+                    ⏰ <b>3:00 PM पर:</b> अगर बाजार नीचे ही रहा, तो CALL SELL को रातभर के लिए <b>CONTINUED</b> रखा जाएगा।
+                </div>
+            `;
+        }
+    }
+
+    function calculateSL() {
+        const entry = parseFloat(document.getElementById('entryPrice').value) || 100.0;
+        const pct = parseFloat(document.getElementById('slPctSelect').value) || 25.0;
+
+        const slTrigger = entry * (1.0 + (pct / 100.0));
+        const reentryTarget = entry - 1.0;
+
+        document.getElementById('slTriggerVal').innerText = '₹' + slTrigger.toFixed(2);
+        document.getElementById('reentryVal').innerText = '≤ ₹' + reentryTarget.toFixed(2);
+    }
+
+    // Initialize on load
+    updateSimulator(24650);
+    calculateSL();
+</script>
+
+</body>
+</html>
