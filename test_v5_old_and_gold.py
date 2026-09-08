@@ -8,9 +8,12 @@ Tests:
   4. test_04_intraday_anchor_crossing_does_not_close_trades
   5. test_05_3pm_master_anchor_decision_continuation
   6. test_06_orphan_hedge_preservation_on_sl_exit
+  7. test_07_multi_unit_isolation_m1_m2
+  8. test_08_explicit_25_pct_stop_loss_trigger
 """
 
 import unittest
+from unittest.mock import patch, MagicMock
 import os
 import sqlite3
 import db
@@ -22,8 +25,45 @@ from kite_executor import kite_executor
 class TestV5OldAndGold(unittest.TestCase):
 
     def setUp(self):
-        # Ensure DB is initialized with migrations
         db.init_db()
+        self.cleanup_test_blocks()
+        
+        self.patches = [
+            patch.object(kite_executor, "ensure_logged_in", return_value=True),
+            patch.object(kite_executor, "get_all_orders", return_value=[]),
+            patch.object(kite_executor, "get_order_fill_price", return_value=80.0),
+            patch.object(kite_executor, "execute_buy_and_confirm", return_value=("ORD_BUY_MOCK", True)),
+            patch.object(kite_executor, "execute_sell_and_confirm", return_value=("ORD_SELL_MOCK", True)),
+            patch.object(kite_executor, "get_ltp", return_value=80.0),
+            patch.object(kite_executor, "get_live_ltp", return_value=80.0),
+            patch.object(kite_executor, "get_nifty_spot", return_value=24200.0),
+            patch.object(kite_executor, "search_option_symbol", side_effect=lambda expiry_date, strike_price, option_type: {
+                "token": f"TOK_{strike_price}_{option_type}",
+                "trading_symbol": f"NIFTY_{strike_price}_{option_type}"
+            }),
+            patch("telegram_bot.send", return_value=True),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            try:
+                p.stop()
+            except Exception:
+                pass
+        self.cleanup_test_blocks()
+
+    def cleanup_test_blocks(self):
+        try:
+            conn = db._conn()
+            conn.execute("DELETE FROM legs WHERE strike_id IN (SELECT strike_id FROM strikes WHERE block_id IN (SELECT block_id FROM blocks WHERE anchor_unit_name LIKE 'V5_%' OR anchor_unit_name IN ('M1', 'M2')))")
+            conn.execute("DELETE FROM strikes WHERE block_id IN (SELECT block_id FROM blocks WHERE anchor_unit_name LIKE 'V5_%' OR anchor_unit_name IN ('M1', 'M2'))")
+            conn.execute("DELETE FROM blocks WHERE anchor_unit_name LIKE 'V5_%' OR anchor_unit_name IN ('M1', 'M2')")
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     def test_01_schema_migrations_v5(self):
         """Verify that all V5.0 columns exist in strikes and blocks tables."""
@@ -79,9 +119,6 @@ class TestV5OldAndGold(unittest.TestCase):
         self.assertEqual(pe_sell["status"], "OPEN")
         self.assertEqual(ce_sell["status"], "PENDING")
 
-        # Clean up
-        bm.kill_block(res["block_id"])
-
     def test_03_unified_console_bearish_selective_execution(self):
         """Spot < Anchor -> Call Wing executes LIVE; Put Wing remains PENDING."""
         test_expiry = "26-Nov-2026"
@@ -91,12 +128,12 @@ class TestV5OldAndGold(unittest.TestCase):
             master_anchor_price=24500.0,
             recommended_lots=1,
             ce_sell_strike=24800,
-            ce_sell_anchor=75.0,
+            ce_sell_anchor=80.0,
             ce_hedge_strike=25100,
             ce_hedge_anchor=12.0,
             ce_sl_pct=25.0,
             pe_sell_strike=24200,
-            pe_sell_anchor=75.0,
+            pe_sell_anchor=80.0,
             pe_hedge_strike=23900,
             pe_hedge_anchor=12.0,
             pe_sl_pct=25.0,
@@ -114,13 +151,9 @@ class TestV5OldAndGold(unittest.TestCase):
         self.assertEqual(ce_sell["status"], "OPEN")
         self.assertEqual(pe_sell["status"], "PENDING")
 
-        # Clean up
-        bm.kill_block(res["block_id"])
-
     def test_04_intraday_anchor_crossing_does_not_close_trades(self):
         """Mid-day spot crossings over/under anchor do NOT exit positions in V5 Decoupled mode."""
         test_expiry = "31-Dec-2026"
-        # Deploy Bullish (PE open)
         res = bm.deploy_unified_master_unit(
             expiry_date=test_expiry,
             anchor_unit_name="V5_TEST_NOISE",
@@ -144,13 +177,9 @@ class TestV5OldAndGold(unittest.TestCase):
         pe_strike_after = db.get_strike(pe_sell_id)
         self.assertEqual(pe_strike_after["status"], "OPEN", "Intraday anchor crossing must NOT close open positions!")
 
-        # Clean up
-        bm.kill_block(res["block_id"])
-
     def test_05_3pm_master_anchor_decision_continuation(self):
         """At 15:00 IST, winning side is CONTINUED and opposing side is closed."""
         test_expiry = "28-Jan-2027"
-        # Create block with Master Anchor 24000
         res = bm.deploy_unified_master_unit(
             expiry_date=test_expiry,
             anchor_unit_name="V5_TEST_3PM",
@@ -175,9 +204,6 @@ class TestV5OldAndGold(unittest.TestCase):
 
         pe_sell = db.get_strike(res["pe_sell_id"])
         self.assertEqual(pe_sell.get("trade_state"), "CONTINUED", "3PM decision should mark winning PE as CONTINUED")
-
-        # Clean up
-        bm.kill_block(res["block_id"])
 
     def test_06_orphan_hedge_preservation_on_sl_exit(self):
         """When short SL triggers, long hedge remains open as ORPHAN."""
@@ -216,8 +242,72 @@ class TestV5OldAndGold(unittest.TestCase):
         h_after = db.get_strike(h_id)
         self.assertEqual(h_after["status"], "CLOSED")
 
-        # Clean up
-        bm.kill_block(block_id)
+    def test_07_multi_unit_isolation_m1_m2(self):
+        """M1 and M2 operate with dedicated master anchors without interference."""
+        test_expiry = "25-Mar-2027"
+        
+        # Deploy M1 with Master Anchor 24000 (Bullish at Spot 24300)
+        res_m1 = bm.deploy_unified_master_unit(
+            expiry_date=test_expiry,
+            anchor_unit_name="M1",
+            master_anchor_price=24000.0,
+            recommended_lots=1,
+            ce_sell_strike=24800,
+            ce_sell_anchor=80.0,
+            pe_sell_strike=23500,
+            pe_sell_anchor=80.0,
+            execute_live=True,
+            current_spot=24300.0
+        )
+        self.assertTrue(res_m1["ok"])
+        self.assertEqual(res_m1["executed_side"], "PUT", "M1 (Spot 24300 >= Anchor 24000) should be BULLISH / PUT")
+
+        # Deploy M2 with Master Anchor 24600 (Bearish at Spot 24300)
+        res_m2 = bm.deploy_unified_master_unit(
+            expiry_date=test_expiry,
+            anchor_unit_name="M2",
+            master_anchor_price=24600.0,
+            recommended_lots=1,
+            ce_sell_strike=25000,
+            ce_sell_anchor=85.0,
+            pe_sell_strike=23800,
+            pe_sell_anchor=85.0,
+            execute_live=True,
+            current_spot=24300.0
+        )
+        self.assertTrue(res_m2["ok"])
+        self.assertEqual(res_m2["executed_side"], "CALL", "M2 (Spot 24300 < Anchor 24600) should be BEARISH / CALL")
+
+        # Verify M1's PE sell is OPEN and M2's CE sell is OPEN
+        m1_pe = db.get_strike(res_m1["pe_sell_id"])
+        m2_ce = db.get_strike(res_m2["ce_sell_id"])
+        self.assertEqual(m1_pe["status"], "OPEN")
+        self.assertEqual(m2_ce["status"], "OPEN")
+
+    def test_08_explicit_25_pct_stop_loss_trigger(self):
+        """Stop-loss is explicitly calculated as entry + 25% and never placed at LTP."""
+        test_expiry = "29-Apr-2027"
+        res = bm.deploy_unified_master_unit(
+            expiry_date=test_expiry,
+            anchor_unit_name="V5_SL_TEST",
+            master_anchor_price=24000.0,
+            recommended_lots=1,
+            ce_sell_strike=24600,
+            ce_sell_anchor=100.0,  # 100.00
+            ce_sl_pct=25.0,        # 25%
+            pe_sell_strike=23600,
+            pe_sell_anchor=100.0,  # 100.00
+            pe_sl_pct=25.0,        # 25%
+            execute_live=False
+        )
+        self.assertTrue(res["ok"])
+
+        ce_sell = db.get_strike(res["ce_sell_id"])
+        pe_sell = db.get_strike(res["pe_sell_id"])
+
+        # SL price must be exactly 100.0 * 1.25 = 125.0
+        self.assertEqual(float(ce_sell["sl_price"]), 125.0, "CE Stop-loss trigger must be at 125.0 (25% away from 100.0)")
+        self.assertEqual(float(pe_sell["sl_price"]), 125.0, "PE Stop-loss trigger must be at 125.0 (25% away from 100.0)")
 
 
 if __name__ == "__main__":

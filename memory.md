@@ -1,5 +1,5 @@
-# Zerodha Option Selling App — Permanent Memory
-_Last updated: 17-Jun-2026_
+# Zerodha Option Selling App — Permanent Memory (V5.0 "Old & Gold" Architecture)
+_Last updated: 08-Sep-2026_
 
 ## 🖥️ VPN & IP Settings
 - **Whitelisted IP (PERMANENT — NEVER CHANGE)**: `5.75.250.104`
@@ -9,14 +9,14 @@ _Last updated: 17-Jun-2026_
 ## 🧱 Lego System Convention
 - **lego0_diagnose.py**: VPS diagnostics (logs, status, connections, port checks).
 - **lego1_deploy.py**: Laptop-to-VPS SSH deployment script.
+- **lego2_rollover.py**: Monthly contract rollover helper.
 
 ## ⚙️ Ports and Services
 - **Dashboard Port**: `9007` (PERMANENT — reserved strictly for Zerodha OS. Do not change!)
 - **Dashboard URL**: http://5.75.250.104:9007
-- **Systemd Services**: `zerodha_engine.service`, `zerodha_dashboard.service`
+- **Systemd Services**: `zerodha_engine.service`, `zerodha_dashboard.service`, `zerodha_commodity.service`
 - **VPS Remote Path**: `/root/BHARAT-SYSTEMS/ZERODHA-OS`
 - **⚠️ CRITICAL PORT RULE (DO NOT TOUCH PORT 9004):** Port `9004` is strictly reserved for the operator's stable HDFC option selling system (`hdfc_dashboard.service` and `hdfc_engine.service` located in `/root/BHARAT-SYSTEMS/HDFC-OPTIONSELLING`). Never stop, disable, modify, or host anything on port 9004, and never touch the HDFC system running outside the current Zerodha OS directory!
-
 
 ## 🔑 Broker — ZERODHA KITE CONNECT ONLY
 - **Developer Portal**: https://developer.kite.trade/
@@ -44,6 +44,7 @@ kite.place_order(
 ```
 **CRITICAL NOTES:**
 - **Product type**: F&O overnight positions must be placed using `PRODUCT_NRML` in Zerodha.
+- **Hedge-First Rule**: The BUY hedge leg is ALWAYS placed and confirmed BEFORE the SELL leg to ensure margin relief and capital safety.
 - **Market Protection**: To prevent slippage, MARKET orders are converted to LIMIT orders in `kite_executor.py` using live LTP quotes with a maximum 10% buffer.
 
 ### Local Instruments Cache
@@ -55,30 +56,50 @@ kite.place_order(
 - **Exchange**: NFO (Zerodha uses NFO for derivatives)
 - **Product**: NRML (multi-day holding)
 - **Lot Size**: 65 (as of Jun 2026)
-- **P&L Refresh Interval**: 30 seconds (1800 seconds fallback)
+- **P&L Refresh Interval**: 30 seconds
 
 ## 📱 Notifications (Telegram + ntfy)
 - Dual alert channel delivery: Telegram alerts duplicate to `https://ntfy.sh/<NTFY_TOPIC>` if configured, serving as a reliable fallback for operators.
 
-## 🔄 Daily Auto-Reset and Re-entry Logic (5-Minute Rule)
-- **Auto-Entry Rule (5-Minute Delay Below Anchor)**: During market hours (09:15 to 15:15 IST), the engine monitors `PENDING` strikes. When an option price drops below its `anchor_price` (LTP < anchor_price), the engine starts a **5-minute countdown (300 seconds)**. It executes entry only after the price remains continuously below anchor for 5 minutes (morning entries trigger at 09:20 AM after market opening at 09:15 AM).
-- **Auto Re-entry Rule (5-Minute Delay Below Anchor)**: When a closed strike price drops below its anchor price (LTP < anchor_price), the engine starts a **5-minute countdown (300 seconds)**. It automatically re-enters the sell leg using the retained hedge after 5 continuous minutes below anchor.
-- **Stop Loss Rule**: Exit triggers immediately on tick cycle (every 30 seconds) if `LTP >= Anchor Price + Buffer Tolerance (Default ₹2.00)`.
-- **Max Same-Day Re-entries Rule**: Maximum **5 re-entries per strike per trading day**.
-- **Hedge Retention Rule (PERMANENT)**: Hedges are **NEVER automatically exited** when a SELL leg hits Stop-Loss (`auto_close_eod_hedge: OFF`). The hedge stays permanently active to retain margin benefit and support safe re-entry.
-- **Resolved Symbol Lookup**: The engine uses the exact trading symbol resolved from the cache master instead of hand-constructed symbols for live LTP lookup, guaranteeing correct pricing queries.
+---
 
-## 🛡️ Strict Macro Regime Execution Guard (M1 / M2 / M3 Governor)
-- **Hard Single-Directional Rule on ALL Execution (Manual & Automated)**:
-  - **BEARISH Regime (Live Spot < Master Anchor)**:
-    - **CALL (CE) Selling**: Aligned with Bearish trend $\rightarrow$ **Executes on the spot**.
-    - **PUT (PE) Selling**: Against trend $\rightarrow$ **STRICTLY MUTED & HELD IN PENDING (Armed)**. Even if the operator presses the manual execute button, PE trades will NOT place orders on the broker. They remain paused/pending until a valid Bullish regime signal occurs.
-  - **BULLISH Regime (Live Spot >= Master Anchor)**:
-    - **PUT (PE) Selling**: Aligned with Bullish trend $\rightarrow$ **Executes on the spot**.
-    - **CALL (CE) Selling**: Against trend $\rightarrow$ **STRICTLY MUTED & HELD IN PENDING (Armed)**. CE trades will NOT place orders on the broker. They remain paused/pending until a valid Bearish regime signal occurs.
-  - **Kill & Flip Transition**: When Spot crosses the Master Anchor level (with $\pm 15$ pt buffer), the opposing side is immediately market-covered and the newly permitted side in PENDING is deployed.
-  - **Anti-Whipsaw**: 5-minute cooldown after SL exit + 5-minute continuous hold below anchor before any auto entry/re-entry.
+## 🏛️ V5.0 "OLD & GOLD" ARCHITECTURE & GOLDEN INVARIANTS
 
+### 1. Isolated Unit Master Anchors (M1, M2, M3...):
+- **NO Single Global Master Anchor**: There is no universal anchor for the whole application.
+- **Each Unit is Independent**: `M1` has its own Master Anchor Price, `M2` has its own Master Anchor Price. Every unit operates as an autonomous pod.
+- **Anchor Fixed for the Day**: Once an M-unit is deployed, its Master Anchor price is fixed and not dynamically recalculated during the day.
 
+### 2. Unified Single-Window Deployment ("Ek Hi Jagah Saari Chijen"):
+- Trader configures Expiry, Unit Master Anchor, Lots, Call Wing (CE Sell + Hedge + 25% SL), and Put Wing (PE Sell + Hedge + 25% SL) on a single screen.
+- **Selective 1-Click Execution**:
+  - **Bullish (Live Spot >= Unit Master Anchor)**: Executes **PUT Wing LIVE** on Zerodha (Buy Hedge -> Sell PE leg). The **CALL Wing** is placed into `PENDING` (armed on sidelines).
+  - **Bearish (Live Spot < Unit Master Anchor)**: Executes **CALL Wing LIVE** on Zerodha (Buy Hedge -> Sell CE leg). The **PUT Wing** is placed into `PENDING` (armed on sidelines).
 
+### 3. Decoupled Stop-Loss Engine (25% Away from Entry):
+- Each sold option has its own independent risk trigger:
+  $$\text{SL Trigger Price} = P_{\text{entry}} \times \left(1 + \frac{\text{SL}_{\%}}{100}\right)$$
+- **Default SL**: **25%** (Configurable: 10%, 20%, 25%, 30%, Custom).
+- Stop loss is **NEVER placed at LTP**. It is at least 25% away from entry price to give room for normal market noise.
+- When SL is hit, **only the short leg is covered**.
 
+### 4. The Orphan Hedge Invariant (Capital Shield):
+- When a short leg hits Stop-Loss, the linked long hedge is **NEVER auto-liquidated**.
+- It remains active as an **Orphan Hedge** (`trade_state = "ORPHAN"`) to protect against runaway market moves.
+- Operator can lock in profits at any time using the 1-click **Manual Profit Lock** button on the dashboard.
+
+### 5. Intraday Decoupling (No Kill & Flip Whipsaws):
+- Intraday Spot crossings over/under the Master Anchor do **NOT** exit positions.
+- Short positions are held peacefully from 09:15 to 14:59 IST to harvest theta decay.
+
+### 6. The 3:00 PM Continuation Decision (15:00 IST):
+- Evaluated once daily at 15:00 IST:
+  - Compares Live Spot vs each Unit's Master Anchor:
+    - **Bullish (Spot >= Anchor)**: **PUT Sell is marked `CONTINUED` and carried forward overnight (Positional Trade)**. Opposing Call Sell + paired hedge are squared off.
+    - **Bearish (Spot < Anchor)**: **CALL Sell is marked `CONTINUED` and carried forward overnight (Positional Trade)**. Opposing Put Sell + paired hedge are squared off.
+  - **Positional trades are NEVER closed at EOD** — they carry forward overnight as designed.
+  - Stranded orphan hedges are cleaned up at EOD or preserved as per policy.
+
+### 7. 5-Minute Auto Re-Entry Guard:
+- When an SL-hit strike cools down below its Anchor price (LTP < Anchor), a 5-minute countdown starts.
+- If it stays continuously below anchor for 5 minutes, auto re-entry executes using the retained hedge.

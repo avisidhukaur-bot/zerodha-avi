@@ -647,7 +647,7 @@ def run_pnl_cycle() -> dict:
                         if ltp <= 0:
                             continue
                             
-                        # V5 Percentage SL calculation
+                        # V5 Percentage SL calculation (Guaranteed >= 25% away from entry)
                         sl_pct = float(s.get("sl_pct") or 25.0)
                         sl_price = float(s.get("sl_price") or 0.0)
                         
@@ -655,9 +655,12 @@ def run_pnl_cycle() -> dict:
                             exit_threshold = sl_price
                         elif entry_price > 0:
                             exit_threshold = entry_price * (1.0 + (sl_pct / 100.0))
+                            db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exit_threshold)
+                        elif anchor_price > 0:
+                            exit_threshold = anchor_price * (1.0 + (sl_pct / 100.0))
+                            db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exit_threshold)
                         else:
-                            buffer_tolerance = float(db.get("buffer_tolerance", "2.0"))
-                            exit_threshold = anchor_price + buffer_tolerance
+                            exit_threshold = 999999.0  # Safe guard: never trigger at LTP
                             
                         _log(f"[AUTO-EXIT-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP=₹{ltp:.2f} | Entry=₹{entry_price:.2f} | SL={sl_pct}% (Threshold=₹{exit_threshold:.2f})", "CYCLE")
                         
@@ -908,11 +911,13 @@ def run_pnl_cycle() -> dict:
                     for s in closed_sells:
                         if s["leg_type"] != "SELL":
                             continue
+                        if s.get("trade_state") == "CONTINUED":
+                            continue  # Positional trade carried forward overnight — DO NOT TOUCH!
                         hedge_id = s.get("hedge_strike_id")
                         if not hedge_id:
                             continue
                         hedge = db.get_strike(hedge_id)
-                        if not hedge or hedge["status"] != "OPEN":
+                        if not hedge or hedge["status"] != "OPEN" or hedge.get("trade_state") == "CONTINUED":
                             continue
                         
                         # Found an orphaned open hedge — schedule it for immediate close

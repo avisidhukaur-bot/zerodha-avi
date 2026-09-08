@@ -791,6 +791,10 @@ def add_strike(
         print(f"[DB] ERR Block {block_id} not found.")
         return -1
 
+    # ── Auto-compute sl_price if not explicitly provided ─────────────────────
+    if leg_type == "SELL" and sl_price <= 0 and anchor_price > 0:
+        sl_price = anchor_price * (1.0 + (float(sl_pct) / 100.0))
+
     try:
         with _lock:
             conn = _conn()
@@ -811,7 +815,7 @@ def add_strike(
         print(
             f"[DB] OK Strike added -> strike_id={strike_id} | "
             f"Block {block_id} | {strike_price} {option_type} {leg_type} | "
-            f"Anchor=₹{anchor_price:.2f} | Lots={lots} | Expiry={expiry_date} | SL={sl_pct}%"
+            f"Anchor=₹{anchor_price:.2f} | Lots={lots} | Expiry={expiry_date} | SL={sl_pct}% (Trigger=₹{sl_price:.2f})"
         )
         return strike_id
     except Exception as e:

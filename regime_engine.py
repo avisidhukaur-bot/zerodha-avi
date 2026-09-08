@@ -306,11 +306,18 @@ def execute_3pm_master_anchor_decision(current_spot: Optional[float] = None, for
             opt_type = s["option_type"].upper()
             leg_type = s["leg_type"].upper()
 
-            # Winning side sell leg -> Mark CONTINUED
+            # Winning side sell leg -> Mark CONTINUED (Positional overnight carry forward)
             if leg_type == "SELL" and opt_type == continued_opt and status == "OPEN":
                 db.update_strike_trade_state(s_id, "CONTINUED")
+                h_id = s.get("hedge_strike_id")
+                if h_id:
+                    db.update_strike_trade_state(h_id, "CONTINUED")
                 continued_count += 1
-                _log(f"[3PM-DECISION] Unit {unit_name}: {s['strike_price']} {opt_type} SELL marked CONTINUED for overnight holding.", "OK")
+                _log(f"[3PM-DECISION] Unit {unit_name}: {s['strike_price']} {opt_type} SELL & Hedge marked CONTINUED for overnight holding.", "OK")
+
+            # Winning side hedge leg -> Mark CONTINUED
+            elif leg_type == "HEDGE_BUY" and opt_type == continued_opt and status == "OPEN":
+                db.update_strike_trade_state(s_id, "CONTINUED")
 
             # Losing side sell leg -> Close gracefully
             elif leg_type == "SELL" and opt_type == closed_opt and status == "OPEN":

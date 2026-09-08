@@ -51,8 +51,10 @@ FILES = [
     "secrets.txt",
     "ZERODHA_SETUP_GUIDE.md",
     "memory.md",
+    "PRODUCT_UPGRADE_V5_CLEAN.md",
     "UNIVERSAL_V5_UPGRADE_BLUEPRINT_FOR_ANTIGRAVITY.md",
     "V5_OLD_AND_GOLD_SIMPLE_GUIDE.html",
+    "HOW_TO_TRADE_V5_GUIDE.html",
     "test_v5_old_and_gold.py",
 ]
 

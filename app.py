@@ -961,8 +961,8 @@ def render_add_strike_form(block_id: int):
     else:
         st.warning("⚠️ Option symbol not found in Security Master.")
 
-    col_ap = st.columns([1])[0]
-    with col_ap:
+    col_ap1, col_ap2 = st.columns(2)
+    with col_ap1:
         use_live_anchor = st.checkbox("Use Live LTP as Anchor Price", value=True, key=f"use_live_ap_{block_id}")
         if use_live_anchor:
             anchor_price = sell_ltp if sell_ltp > 0 else 10.0  # safe default if LTP is 0 (closed market)
@@ -977,6 +977,23 @@ def render_add_strike_form(block_id: int):
                 format    = "%.2f",
                 key       = f"manual_ap_{block_id}"
             )
+    with col_ap2:
+        sl_choice = st.selectbox("Stop Loss %", options=["10%", "20%", "25% (Recommended)", "30%", "40%", "Custom"], index=2, key=f"sl_choice_{block_id}")
+        sl_pct = 25.0
+        if sl_choice == "10%": sl_pct = 10.0
+        elif sl_choice == "20%": sl_pct = 20.0
+        elif sl_choice == "25% (Recommended)": sl_pct = 25.0
+        elif sl_choice == "30%": sl_pct = 30.0
+        elif sl_choice == "40%": sl_pct = 40.0
+        elif sl_choice == "Custom":
+            sl_pct = st.number_input("Custom SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key=f"custom_sl_{block_id}")
+        sl_calc_price = float(anchor_price) * (1.0 + (float(sl_pct) / 100.0))
+        st.markdown(
+            f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:6px 10px;margin-top:4px;font-size:0.8rem;">'
+            f'🛑 <b>Auto SL Trigger:</b> <span style="color:#b91c1c;font-weight:800;">₹{sl_calc_price:,.2f}</span> (+{sl_pct:.0f}% on Entry)'
+            f'</div>',
+            unsafe_allow_html=True
+        )
 
     st.markdown("---")
 
@@ -1143,7 +1160,9 @@ def render_add_strike_form(block_id: int):
                 option_type  = option_type,
                 leg_type     = "SELL",
                 anchor_price = float(anchor_price),
-                lots         = int(lots)
+                lots         = int(lots),
+                sl_pct       = float(sl_pct),
+                sl_price     = float(sl_calc_price)
             )
             
             if not sell_res["ok"]:
@@ -1219,7 +1238,9 @@ def render_add_strike_form(block_id: int):
                 option_type  = option_type,
                 leg_type     = "SELL",
                 anchor_price = float(anchor_price),
-                lots         = int(lots)
+                lots         = int(lots),
+                sl_pct       = float(sl_pct),
+                sl_price     = float(sl_calc_price)
             )
             
             if not sell_res["ok"]:
@@ -1407,19 +1428,34 @@ def render_sub_block(block_pnl: dict, unit_name: str):
             else:
                 reg_status = "⚪ ALLOWED"
 
+            sl_p = float(s.get("sl_price") or 0.0)
+            sl_pct_val = float(s.get("sl_pct") or 25.0)
+            if s["leg_type"] == "SELL":
+                if sl_p > 0:
+                    sl_str = f"₹{sl_p:.2f} (+{sl_pct_val:.0f}%)"
+                elif s["anchor_price"] > 0:
+                    sl_str = f"₹{s['anchor_price'] * (1.0 + sl_pct_val / 100.0):.2f} (+{sl_pct_val:.0f}%)"
+                else:
+                    sl_str = f"+{sl_pct_val:.0f}%"
+            else:
+                sl_str = "🛡️ HEDGE"
+
+            trade_st = str(s.get("trade_state") or s.get("status") or "OPEN").upper()
+
             row = {
-                "Strike" : s["strike_price"],
-                "Type"   : s["option_type"],
-                "Leg"    : s["leg_type"],
-                "Regime" : reg_status,
-                "Anchor" : anchor_str,
-                "LTP"    : ltp_str,
-                "Lots"   : s["lots"],
-                "Qty"    : s.get("qty", s["lots"] * int(db.get("lot_size","65"))),
-                "P&L"    : pnl_str,
-                "P&L%"   : pct_str,
-                "Decay%" : decay_str,
-                "Status" : s["status"],
+                "Strike"     : s["strike_price"],
+                "Type"       : s["option_type"],
+                "Leg"        : s["leg_type"],
+                "Regime"     : reg_status,
+                "Anchor"     : anchor_str,
+                "LTP"        : ltp_str,
+                "SL Trigger" : sl_str,
+                "Lots"       : s["lots"],
+                "Qty"        : s.get("qty", s["lots"] * int(db.get("lot_size","65"))),
+                "P&L"        : pnl_str,
+                "P&L%"       : pct_str,
+                "Decay%"     : decay_str,
+                "State"      : trade_st,
             }
 
             if s["option_type"] == "CE":
@@ -1967,6 +2003,18 @@ def render_unified_v5_console():
 
         st.markdown('<hr style="margin:12px 0 16px 0;border:0;border-top:1px solid #e2e8f0;"/>', unsafe_allow_html=True)
 
+        # Helper to fetch live option LTP
+        def _fetch_opt_live_price(exp_date, strike, opt_type):
+            try:
+                sym_info = kite_executor.search_option_contract(exp_date, int(strike), opt_type)
+                if sym_info:
+                    p = kite_executor.get_ltp(sym_info.get("token"), sym_info.get("trading_symbol"))
+                    if p > 0:
+                        return float(p)
+            except Exception:
+                pass
+            return 0.0
+
         # Side-by-side Wings: LEFT = CALL WING, RIGHT = PUT WING
         col_call, col_put = st.columns(2)
 
@@ -1983,14 +2031,18 @@ def render_unified_v5_console():
             c_s1, c_s2 = st.columns(2)
             with c_s1:
                 ce_sell_strike = st.number_input("CE Sell Strike", min_value=0, max_value=100000, value=int(round(live_spot + 300, -2)) if live_spot > 0 else 24800, step=50, key="v5_ce_sell_strike")
+                ce_sell_live = _fetch_opt_live_price(expiry_val, ce_sell_strike, "CE")
             with c_s2:
-                ce_sell_anchor = st.number_input("CE Sell Anchor Price (₹)", min_value=0.0, max_value=5000.0, value=75.00, step=1.0, format="%.2f", key="v5_ce_sell_anchor")
+                default_ce_anchor = float(ce_sell_live) if ce_sell_live > 0 else 75.00
+                ce_sell_anchor = st.number_input("CE Sell Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=default_ce_anchor, step=0.5, format="%.2f", key="v5_ce_sell_anchor", help="Defaults to live market LTP. Trade triggers when LTP <= Anchor.")
 
             c_h1, c_h2 = st.columns(2)
             with c_h1:
                 ce_hedge_strike = st.number_input("CE Hedge Strike (OTM)", min_value=0, max_value=100000, value=int(ce_sell_strike + 300), step=50, key="v5_ce_hedge_strike")
+                ce_hedge_live = _fetch_opt_live_price(expiry_val, ce_hedge_strike, "CE")
             with c_h2:
-                ce_hedge_anchor = st.number_input("CE Hedge Anchor (₹)", min_value=0.0, max_value=5000.0, value=15.00, step=1.0, format="%.2f", key="v5_ce_hedge_anchor")
+                default_ce_h_anchor = float(ce_hedge_live) if ce_hedge_live > 0 else 15.00
+                ce_hedge_anchor = st.number_input("CE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=default_ce_h_anchor, step=0.5, format="%.2f", key="v5_ce_hedge_anchor", help="Defaults to live hedge market LTP.")
 
             c_sl1, c_sl2 = st.columns(2)
             with c_sl1:
@@ -2007,6 +2059,16 @@ def render_unified_v5_console():
                 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
                 ce_reentry = st.checkbox("Enable Auto Re-entry", value=True, key="v5_ce_reentry")
 
+            # Dynamic Live Metrics & 25% SL Preview Card
+            ce_calc_sl = ce_sell_anchor * (1.0 + (ce_sl_pct / 100.0))
+            st.markdown(
+                f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.82rem;">'
+                f'📈 <b>Live LTP:</b> ₹{ce_sell_live:,.2f} &nbsp;|&nbsp; 🛡️ <b>Hedge LTP:</b> ₹{ce_hedge_live:,.2f}<br/>'
+                f'🛑 <b>Auto Stop-Loss Trigger:</b> <span style="color:#b91c1c;font-weight:800;">₹{ce_calc_sl:,.2f}</span> (+{ce_sl_pct:.0f}% on Anchor)'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
         with col_put:
             st.markdown(
                 '<div style="background:#ecfdf5;border:2px solid #a7f3d0;border-radius:10px;padding:12px 16px;margin-bottom:12px;">'
@@ -2020,14 +2082,18 @@ def render_unified_v5_console():
             p_s1, p_s2 = st.columns(2)
             with p_s1:
                 pe_sell_strike = st.number_input("PE Sell Strike", min_value=0, max_value=100000, value=int(round(live_spot - 300, -2)) if live_spot > 0 else 24200, step=50, key="v5_pe_sell_strike")
+                pe_sell_live = _fetch_opt_live_price(expiry_val, pe_sell_strike, "PE")
             with p_s2:
-                pe_sell_anchor = st.number_input("PE Sell Anchor Price (₹)", min_value=0.0, max_value=5000.0, value=75.00, step=1.0, format="%.2f", key="v5_pe_sell_anchor")
+                default_pe_anchor = float(pe_sell_live) if pe_sell_live > 0 else 75.00
+                pe_sell_anchor = st.number_input("PE Sell Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=default_pe_anchor, step=0.5, format="%.2f", key="v5_pe_sell_anchor", help="Defaults to live market LTP. Trade triggers when LTP <= Anchor.")
 
             p_h1, p_h2 = st.columns(2)
             with p_h1:
                 pe_hedge_strike = st.number_input("PE Hedge Strike (OTM)", min_value=0, max_value=100000, value=int(pe_sell_strike - 300), step=50, key="v5_pe_hedge_strike")
+                pe_hedge_live = _fetch_opt_live_price(expiry_val, pe_hedge_strike, "PE")
             with p_h2:
-                pe_hedge_anchor = st.number_input("PE Hedge Anchor (₹)", min_value=0.0, max_value=5000.0, value=15.00, step=1.0, format="%.2f", key="v5_pe_hedge_anchor")
+                default_pe_h_anchor = float(pe_hedge_live) if pe_hedge_live > 0 else 15.00
+                pe_hedge_anchor = st.number_input("PE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=default_pe_h_anchor, step=0.5, format="%.2f", key="v5_pe_hedge_anchor", help="Defaults to live hedge market LTP.")
 
             p_sl1, p_sl2 = st.columns(2)
             with p_sl1:
@@ -2043,6 +2109,35 @@ def render_unified_v5_console():
             with p_sl2:
                 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
                 pe_reentry = st.checkbox("Enable Auto Re-entry", value=True, key="v5_pe_reentry")
+
+            # Dynamic Live Metrics & 25% SL Preview Card
+            pe_calc_sl = pe_sell_anchor * (1.0 + (pe_sl_pct / 100.0))
+            st.markdown(
+                f'<div style="background:#f0fdf4;border:1px dashed #22c55e;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.82rem;">'
+                f'📈 <b>Live LTP:</b> ₹{pe_sell_live:,.2f} &nbsp;|&nbsp; 🛡️ <b>Hedge LTP:</b> ₹{pe_hedge_live:,.2f}<br/>'
+                f'🛑 <b>Auto Stop-Loss Trigger:</b> <span style="color:#15803d;font-weight:800;">₹{pe_calc_sl:,.2f}</span> (+{pe_sl_pct:.0f}% on Anchor)'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+        # 📖 Embedded Student-Friendly Guide
+        with st.expander("📖 10TH CLASS STUDENT GUIDE — KAISE TRADE KAREIN & RULES (Click to Read)", expanded=False):
+            st.markdown(
+                """
+                ### 🌟 Bharat V5 Simple Trading Rules (10th/12th Class Level):
+                1. **Master Anchor (Direction):** 
+                   - Spot >= Anchor $\\rightarrow$ **BULLISH**: Put Wing Live bikega (Zerodha me order jayega), Call Wing wait karega.
+                   - Spot < Anchor $\\rightarrow$ **BEARISH**: Call Wing Live bikega (Zerodha me order jayega), Put Wing wait karega.
+                2. **Auto LTP & Anchor:**
+                   - System automatically Live Market Price (LTP) ko Anchor bana leta hai taaki trade turant execute ho sake.
+                3. **Hedge-First Safety:**
+                   - Zerodha me pehle Hedge Buy order execute hota hai taaki margin kam lage, fir Sell leg execute hoti hai.
+                4. **25% Stop Loss Rule:**
+                   - Agar ₹100 par option becha hai, toh ₹125 aate hi engine automatically exit kar dega. Hedge ko capital protection ke liye safe rakha jata hai.
+                5. **3:00 PM Continuation:**
+                   - 3:00 PM par agar trend aapke favor me hai toh overnight hold rahega, opposing side close ho jayegi.
+                """
+            )
 
         # Live Directional Indicator Banner
         is_bullish_preview = live_spot >= anchor_val

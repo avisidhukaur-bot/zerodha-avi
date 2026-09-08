@@ -62,7 +62,12 @@ def create_block(
     master_anchor_price: float = 0.0,
     regime_buffer: float = 15.0,
     custom_lots: int = 2,
-    current_regime: str = "NEUTRAL"
+    current_regime: str = "NEUTRAL",
+    recommended_lots: int = 1,
+    anchor_decision_time: str = "15:00",
+    orphan_hedge_policy: str = "PRESERVE",
+    auto_regime_enabled: int = 1,
+    **kwargs
 ) -> dict:
     """
     Creates a new trading block (V3.0 Autonomous Multi-Anchor Unit).
@@ -123,7 +128,11 @@ def create_block(
         master_anchor_price=master_anchor_price,
         regime_buffer=regime_buffer,
         custom_lots=custom_lots,
-        current_regime=current_regime
+        current_regime=current_regime,
+        auto_regime_enabled=auto_regime_enabled,
+        anchor_decision_time=anchor_decision_time,
+        recommended_lots=recommended_lots,
+        orphan_hedge_policy=orphan_hedge_policy
     )
     if block_id < 0:
         return {"ok": False, "message": "DB error creating block."}
@@ -271,6 +280,7 @@ def deploy_unified_master_unit(
     pe_s_id = None
 
     # Step 2: Attach Call Wing (if configured)
+    ce_sl_price = float(ce_sell_anchor) * (1.0 + (float(ce_sl_pct) / 100.0)) if float(ce_sell_anchor) > 0 else 0.0
     if ce_hedge_strike > 0:
         ce_h_id = db.add_strike(
             block_id=block_id,
@@ -293,6 +303,7 @@ def deploy_unified_master_unit(
             hedge_strike_id=ce_h_id,
             expiry_date=expiry_date,
             sl_pct=float(ce_sl_pct),
+            sl_price=float(ce_sl_price),
             reentry_enabled=int(ce_reentry_enabled),
             trade_state="PENDING"
         )
@@ -300,6 +311,7 @@ def deploy_unified_master_unit(
             link_hedge_to_sell(ce_s_id, ce_h_id)
 
     # Step 3: Attach Put Wing (if configured)
+    pe_sl_price = float(pe_sell_anchor) * (1.0 + (float(pe_sl_pct) / 100.0)) if float(pe_sell_anchor) > 0 else 0.0
     if pe_hedge_strike > 0:
         pe_h_id = db.add_strike(
             block_id=block_id,
@@ -322,6 +334,7 @@ def deploy_unified_master_unit(
             hedge_strike_id=pe_h_id,
             expiry_date=expiry_date,
             sl_pct=float(pe_sl_pct),
+            sl_price=float(pe_sl_price),
             reentry_enabled=int(pe_reentry_enabled),
             trade_state="PENDING"
         )
@@ -432,11 +445,16 @@ def exit_orphan_hedge(hedge_strike_id: int) -> dict:
     if open_leg:
         realized_pnl = (fill_price - open_leg["entry_price"]) * qty
         db.close_leg(leg_id, fill_price, realized_pnl)
-    else:
-        db.update_strike_status(strike["strike_id"], "CLOSED")
-
+    db.update_strike_status(strike["strike_id"], "CLOSED")
     db.update_strike_trade_state(strike["strike_id"], "CLOSED")
-    db.record_trade(strike["block_id"], strike["strike_id"], "CLOSE_HEDGE_PROFIT_LOCK", fill_price, strike["lots"], "COMPLETE")
+    db.log_trade(
+        block_id     = strike["block_id"],
+        strike_id    = strike["strike_id"],
+        action       = "CLOSE_HEDGE_PROFIT_LOCK",
+        price        = fill_price,
+        lots         = strike["lots"],
+        order_status = "SUCCESS"
+    )
 
     _log(f"💰 V5 Manual Profit Lock: Closed Orphan Hedge #{hedge_strike_id} ({strike['strike_price']} {strike['option_type']}) at ₹{fill_price:.2f}", "OK")
     return {"ok": True, "fill_price": fill_price, "realized_pnl": realized_pnl, "message": f"Successfully locked profit on Hedge {strike['strike_price']} {strike['option_type']} at ₹{fill_price:.2f}."}
@@ -610,6 +628,10 @@ def add_strike_to_block(
     anchor_price: float,
     lots:         int = 1,
     expiry_date:  str = None,
+    sl_pct:       float = 25.0,
+    sl_price:     float = 0.0,
+    reentry_enabled: int = 1,
+    trade_state:  str = "PENDING",
 ) -> dict:
     """
     Adds a strike (sell leg or hedge leg) to a block.
@@ -620,6 +642,7 @@ def add_strike_to_block(
       - CE / PE only
       - SELL / HEDGE_BUY only
       - Anchor price > 0 (manual entry required)
+      - V5 Invariant: SL is auto-computed as Anchor + 25% if not provided
 
     Returns: {"ok": bool, "strike_id": int, "message": str}
     """
@@ -639,13 +662,17 @@ def add_strike_to_block(
         return {"ok": False, "message": f"Block #{block['block_number']} is a PUT SIDE block. Only PE strikes are allowed."}
 
     strike_id = db.add_strike(
-        block_id     = block_id,
-        strike_price = strike_price,
-        option_type  = option_type,
-        leg_type     = leg_type,
-        anchor_price = anchor_price,
-        lots         = lots,
-        expiry_date  = expiry_date,
+        block_id        = block_id,
+        strike_price    = strike_price,
+        option_type     = option_type,
+        leg_type        = leg_type,
+        anchor_price    = anchor_price,
+        lots            = lots,
+        expiry_date     = expiry_date,
+        sl_pct          = float(sl_pct),
+        sl_price        = float(sl_price),
+        reentry_enabled = int(reentry_enabled),
+        trade_state     = str(trade_state).upper(),
     )
 
     if strike_id < 0:
@@ -1066,6 +1093,14 @@ def execute_strike(strike_id: int) -> dict:
             }
 
         _log(f"SELL confirmed: {strike['strike_price']} {strike['option_type']} @ Rs{sell_result['fill_price']:.2f}", "OK")
+
+        # V5.0 Invariant: Anchor Stop-Loss Trigger to exact Fill Price + 25%
+        fill_price = float(sell_result.get("fill_price", 0.0))
+        if fill_price > 0:
+            sl_pct = float(updated_strike.get("sl_pct") or 25.0)
+            exact_sl_price = fill_price * (1.0 + (sl_pct / 100.0))
+            db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exact_sl_price)
+            _log(f"[V5-SL-ANCHOR] Strike {strike['strike_price']} {strike['option_type']} SELL: Fill=₹{fill_price:.2f} -> SL Price set to ₹{exact_sl_price:.2f} (+{sl_pct:.0f}%)", "OK")
 
         # Log to trade history
         db.log_trade(
