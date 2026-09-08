@@ -961,15 +961,15 @@ def render_add_strike_form(block_id: int):
     else:
         st.warning("⚠️ Option symbol not found in Security Master.")
 
-    col_ap1, col_ap2 = st.columns(2)
+    col_ap1, col_ap2, col_ap3 = st.columns([1.5, 1.5, 1.2])
     with col_ap1:
-        use_live_anchor = st.checkbox("Use Live LTP as Anchor Price", value=True, key=f"use_live_ap_{block_id}")
+        use_live_anchor = st.checkbox("Use Live LTP as Anchor", value=True, key=f"use_live_ap_{block_id}")
         if use_live_anchor:
-            anchor_price = sell_ltp if sell_ltp > 0 else 10.0  # safe default if LTP is 0 (closed market)
-            st.markdown(f"**Anchor Price**: ₹{anchor_price:.2f}")
+            anchor_price = sell_ltp if sell_ltp > 0 else 10.0  # safe default if LTP is 0
+            st.markdown(f"**⚓ Anchor Price**: ₹{anchor_price:.2f}")
         else:
             anchor_price = st.number_input(
-                "Manual Anchor Price (Rs)",
+                "Manual Anchor Price (₹)",
                 min_value = 0.05,
                 max_value = 5000.00,
                 value     = sell_ltp if sell_ltp > 0 else 100.00,
@@ -978,22 +978,41 @@ def render_add_strike_form(block_id: int):
                 key       = f"manual_ap_{block_id}"
             )
     with col_ap2:
-        sl_choice = st.selectbox("Stop Loss %", options=["10%", "20%", "25% (Recommended)", "30%", "40%", "Custom"], index=2, key=f"sl_choice_{block_id}")
+        default_sl_p = float(anchor_price) * 1.25 if float(anchor_price) > 0 else 125.0
+        custom_sl_price = st.number_input(
+            "🛑 Stop Loss Price (₹)",
+            min_value = 0.05,
+            max_value = 10000.00,
+            value     = float(default_sl_p),
+            step      = 0.50,
+            format    = "%.2f",
+            key       = f"direct_sl_price_{block_id}",
+            help      = "Exact stop loss exit price in rupees (e.g. 61.00, 75.00)"
+        )
+    with col_ap3:
+        sl_choice = st.selectbox("SL % Presets", options=["25% (Standard)", "10%", "20%", "30%", "40%", "Custom"], index=0, key=f"sl_choice_{block_id}")
         sl_pct = 25.0
         if sl_choice == "10%": sl_pct = 10.0
         elif sl_choice == "20%": sl_pct = 20.0
-        elif sl_choice == "25% (Recommended)": sl_pct = 25.0
+        elif sl_choice == "25% (Standard)": sl_pct = 25.0
         elif sl_choice == "30%": sl_pct = 30.0
         elif sl_choice == "40%": sl_pct = 40.0
         elif sl_choice == "Custom":
             sl_pct = st.number_input("Custom SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key=f"custom_sl_{block_id}")
-        sl_calc_price = float(anchor_price) * (1.0 + (float(sl_pct) / 100.0))
-        st.markdown(
-            f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:6px 10px;margin-top:4px;font-size:0.8rem;">'
-            f'🛑 <b>Auto SL Trigger:</b> <span style="color:#b91c1c;font-weight:800;">₹{sl_calc_price:,.2f}</span> (+{sl_pct:.0f}% on Entry)'
-            f'</div>',
-            unsafe_allow_html=True
-        )
+        
+        sl_calc_price = float(custom_sl_price)
+        if float(anchor_price) > 0 and sl_calc_price > float(anchor_price):
+            sl_pct_display = ((sl_calc_price - float(anchor_price)) / float(anchor_price)) * 100.0
+        else:
+            sl_pct_display = float(sl_pct)
+
+    st.markdown(
+        f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:6px 12px;margin:4px 0 8px 0;font-size:0.82rem;">'
+        f'🛑 <b>Configured SL Trigger:</b> <span style="color:#b91c1c;font-weight:800;font-size:0.95rem;">₹{sl_calc_price:,.2f}</span> '
+        f'<span style="color:#64748b;">(+{sl_pct_display:.1f}% on Anchor ₹{float(anchor_price):,.2f})</span>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
     st.markdown("---")
 
@@ -1532,61 +1551,127 @@ def render_sub_block(block_pnl: dict, unit_name: str):
         render_add_strike_form(block_id)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Inline Strike Anchor & Lot Size Editor (Right inside Block) ──
+    # ── Inline Strike Anchor & Stop-Loss Price Editor (Right inside Block) ──
     all_b_strikes = db.get_strikes_by_block(block_id)
     if all_b_strikes:
-        with st.expander(f"⚙️ Quick Strike Settings: Anchor Price & Lots (Block {block_num})", expanded=False):
+        with st.expander(f"⚙️ Quick Edit Strikes: Anchor Price & Stop Loss (Block {block_num})", expanded=False):
             strike_map = {
-                f"{s['strike_price']} {s['option_type']} {s['leg_type']} (#{s['strike_id']}) — [{s['status']}] | Anchor: ₹{s['anchor_price']:.2f} | Lots: {s['lots']}": s["strike_id"]
+                f"{s['strike_price']} {s['option_type']} {s['leg_type']} (#{s['strike_id']}) — [{s['status']}] | Anchor: ₹{s['anchor_price']:.2f} | SL: ₹{float(s.get('sl_price') or (s['anchor_price']*1.25)):.2f}": s["strike_id"]
                 for s in all_b_strikes
             }
-            sel_s_label = st.selectbox("Select Strike to Edit", list(strike_map.keys()), key=f"inline_sel_strike_{block_id}")
+            sel_s_label = st.selectbox("Select Strike to Configure", list(strike_map.keys()), key=f"inline_sel_strike_{block_id}")
             sel_sid = strike_map[sel_s_label]
             target_s = db.get_strike(sel_sid)
 
             if target_s:
-                c_e1, c_e2, c_e3 = st.columns([1.5, 1.8, 1.2])
-                with c_e1:
-                    st.markdown(f"**⚓ Strike Anchor Price** (Current: ₹{target_s['anchor_price']:.2f})")
-                    new_anc = st.number_input(
-                        "New Anchor Price (₹)",
-                        min_value=0.05,
-                        value=float(target_s["anchor_price"]),
-                        step=0.05,
-                        format="%.2f",
-                        key=f"inline_anc_val_{sel_sid}"
-                    )
-                    if st.button("💾 Update Anchor", key=f"btn_save_inline_anc_{sel_sid}", use_container_width=True, type="primary"):
-                        res_anc = bm.update_strike_anchor_price(sel_sid, new_anc)
-                        if res_anc["ok"]:
-                            _flash(res_anc["message"], "success")
+                is_sell_leg = target_s.get("leg_type") == "SELL"
+                cur_anc = float(target_s.get("anchor_price") or 0.0)
+                cur_sl_p = float(target_s.get("sl_price") or 0.0)
+                cur_sl_pct = float(target_s.get("sl_pct") or 25.0)
+                if cur_sl_p <= 0 and cur_anc > 0:
+                    cur_sl_p = cur_anc * (1.0 + cur_sl_pct / 100.0)
+                
+                # Header card for the selected strike
+                st.markdown(
+                    f'<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;margin:8px 0 12px 0;">'
+                    f'<b>Selected Strike:</b> <span style="color:#0f172a;font-weight:800;">{target_s["strike_price"]} {target_s["option_type"]} {target_s["leg_type"]} (#{target_s["strike_id"]})</span> '
+                    f'| Status: <span style="font-weight:700;">{target_s["status"]}</span> '
+                    f'| Current Anchor: <b>₹{cur_anc:.2f}</b> '
+                    f'| Current SL Trigger: <b style="color:#b91c1c;">₹{cur_sl_p:.2f}</b> (+{cur_sl_pct:.1f}%)'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+                if is_sell_leg:
+                    c_e1, c_e2, c_e3, c_e4 = st.columns([1.5, 1.5, 1.2, 1.2])
+                    with c_e1:
+                        new_anc = st.number_input(
+                            "Anchor Price (₹)",
+                            min_value=0.05,
+                            max_value=10000.00,
+                            value=float(cur_anc),
+                            step=0.50,
+                            format="%.2f",
+                            key=f"inline_anc_val_{sel_sid}",
+                            help="Anchor price for entry calculation"
+                        )
+                    with c_e2:
+                        new_sl_p = st.number_input(
+                            "Stop Loss Price (₹)",
+                            min_value=0.05,
+                            max_value=20000.00,
+                            value=float(cur_sl_p),
+                            step=0.50,
+                            format="%.2f",
+                            key=f"inline_slp_val_{sel_sid}",
+                            help="Exact stop loss exit price in rupees"
+                        )
+                    with c_e3:
+                        new_sl_pct = st.number_input(
+                            "SL %",
+                            min_value=0.1,
+                            max_value=200.0,
+                            value=float(cur_sl_pct),
+                            step=1.0,
+                            format="%.1f",
+                            key=f"inline_slpct_val_{sel_sid}"
+                        )
+                    with c_e4:
+                        new_lots = st.number_input(
+                            "Lots",
+                            min_value=1,
+                            max_value=100,
+                            value=int(target_s["lots"]),
+                            step=1,
+                            key=f"inline_lots_val_{sel_sid}"
+                        )
+                else:
+                    c_e1, c_e2 = st.columns([2, 2])
+                    with c_e1:
+                        new_anc = st.number_input(
+                            "Hedge Anchor Price (₹)",
+                            min_value=0.05,
+                            max_value=10000.00,
+                            value=float(cur_anc),
+                            step=0.50,
+                            format="%.2f",
+                            key=f"inline_anc_val_{sel_sid}"
+                        )
+                        new_sl_p = 0.0
+                        new_sl_pct = 0.0
+                    with c_e2:
+                        new_lots = st.number_input(
+                            "Lots",
+                            min_value=1,
+                            max_value=100,
+                            value=int(target_s["lots"]),
+                            step=1,
+                            key=f"inline_lots_val_{sel_sid}"
+                        )
+
+                sync_zerodha = False
+                if target_s["status"] == "OPEN" and is_sell_leg:
+                    sync_zerodha = st.checkbox("Live Sync Lot Delta on Zerodha Broker", value=False, key=f"inline_sync_{sel_sid}", help="Places delta market order on Zerodha if lot count is changed")
+
+                col_act1, col_act2 = st.columns([3, 1])
+                with col_act1:
+                    if st.button("💾 Save Price, Stop-Loss & Lots Settings", key=f"btn_save_all_inline_{sel_sid}", use_container_width=True, type="primary"):
+                        res_update = bm.update_strike_price_and_sl(
+                            strike_id=sel_sid,
+                            new_anchor=float(new_anc),
+                            new_sl_price=float(new_sl_p) if is_sell_leg else None,
+                            new_sl_pct=float(new_sl_pct) if is_sell_leg else None,
+                            new_lots=int(new_lots)
+                        )
+                        if sync_zerodha and int(new_lots) != int(target_s["lots"]):
+                            bm.change_strike_lots(sel_sid, int(new_lots), sync_live=True)
+                        if res_update["ok"]:
+                            _flash(res_update["message"], "success")
                         else:
-                            _flash(res_anc["message"], "error")
+                            _flash(res_update["message"], "error")
                         st.rerun()
 
-                with c_e2:
-                    st.markdown(f"**🔢 Strike Lots** (Current: {target_s['lots']} lots)")
-                    new_lots = st.number_input(
-                        "New Lot Count",
-                        min_value=1,
-                        max_value=100,
-                        value=int(target_s["lots"]),
-                        step=1,
-                        key=f"inline_lots_val_{sel_sid}"
-                    )
-                    sync_zerodha = False
-                    if target_s["status"] == "OPEN":
-                        sync_zerodha = st.checkbox("Live Sync Order on Zerodha", value=False, key=f"inline_sync_{sel_sid}", help="Automatically places delta order on Zerodha broker")
-                    if st.button("💾 Update Lots", key=f"btn_save_inline_lots_{sel_sid}", use_container_width=True, type="primary"):
-                        res_lots = bm.change_strike_lots(sel_sid, int(new_lots), sync_live=sync_zerodha)
-                        if res_lots["ok"]:
-                            _flash(res_lots["message"], "success")
-                        else:
-                            _flash(res_lots["message"], "error")
-                        st.rerun()
-
-                with c_e3:
-                    st.markdown("**🗑 Strike Actions**")
+                with col_act2:
                     if target_s["status"] == "PENDING":
                         if st.button("🗑 Remove Strike", key=f"btn_del_strike_{sel_sid}", use_container_width=True):
                             res_del = bm.remove_strike(sel_sid)
@@ -1595,8 +1680,6 @@ def render_sub_block(block_pnl: dict, unit_name: str):
                             else:
                                 _flash(res_del["message"], "error")
                             st.rerun()
-                    elif target_s["status"] == "OPEN":
-                        st.caption("Live position. Use 'Close Strike' button below.")
 
             # Batch lot scaling for this block
             st.markdown("<hr style='margin:12px 0 8px 0;border:0;border-top:1px dashed #cbd5e1;'/>", unsafe_allow_html=True)
@@ -2044,27 +2127,44 @@ def render_unified_v5_console():
                 default_ce_h_anchor = float(ce_hedge_live) if ce_hedge_live > 0 else 15.00
                 ce_hedge_anchor = st.number_input("CE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=default_ce_h_anchor, step=0.5, format="%.2f", key="v5_ce_hedge_anchor", help="Defaults to live hedge market LTP.")
 
-            c_sl1, c_sl2 = st.columns(2)
+            c_sl1, c_sl2, c_sl3 = st.columns([1.5, 1.5, 1.0])
             with c_sl1:
-                ce_sl_choice = st.selectbox("CE Stop Loss %", options=["10%", "20%", "25% (Recommended)", "30%", "40%", "Custom"], index=2, key="v5_ce_sl_choice")
+                default_ce_sl = float(ce_sell_anchor) * 1.25 if float(ce_sell_anchor) > 0 else 93.75
+                ce_sl_price_val = st.number_input(
+                    "CE Stop Loss Price (₹)",
+                    min_value=0.05,
+                    max_value=10000.0,
+                    value=float(default_ce_sl),
+                    step=0.5,
+                    format="%.2f",
+                    key="v5_ce_sl_price_input",
+                    help="Exact SL trigger in rupees (e.g. 61.00, 75.00)"
+                )
+            with c_sl2:
+                ce_sl_choice = st.selectbox("CE SL % Presets", options=["25% (Standard)", "10%", "20%", "30%", "40%", "Custom"], index=0, key="v5_ce_sl_choice")
                 ce_sl_pct = 25.0
                 if ce_sl_choice == "10%": ce_sl_pct = 10.0
                 elif ce_sl_choice == "20%": ce_sl_pct = 20.0
-                elif ce_sl_choice == "25% (Recommended)": ce_sl_pct = 25.0
+                elif ce_sl_choice == "25% (Standard)": ce_sl_pct = 25.0
                 elif ce_sl_choice == "30%": ce_sl_pct = 30.0
                 elif ce_sl_choice == "40%": ce_sl_pct = 40.0
                 elif ce_sl_choice == "Custom":
                     ce_sl_pct = st.number_input("Custom CE SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key="v5_ce_custom_sl")
-            with c_sl2:
+                
+                if float(ce_sl_price_val) > float(ce_sell_anchor) and float(ce_sell_anchor) > 0:
+                    ce_effective_pct = ((float(ce_sl_price_val) - float(ce_sell_anchor)) / float(ce_sell_anchor)) * 100.0
+                else:
+                    ce_effective_pct = float(ce_sl_pct)
+            with c_sl3:
                 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-                ce_reentry = st.checkbox("Enable Auto Re-entry", value=True, key="v5_ce_reentry")
+                ce_reentry = st.checkbox("Re-entry", value=True, key="v5_ce_reentry")
 
-            # Dynamic Live Metrics & 25% SL Preview Card
-            ce_calc_sl = ce_sell_anchor * (1.0 + (ce_sl_pct / 100.0))
+            # Dynamic Live Metrics & SL Preview Card
             st.markdown(
                 f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.82rem;">'
                 f'📈 <b>Live LTP:</b> ₹{ce_sell_live:,.2f} &nbsp;|&nbsp; 🛡️ <b>Hedge LTP:</b> ₹{ce_hedge_live:,.2f}<br/>'
-                f'🛑 <b>Auto Stop-Loss Trigger:</b> <span style="color:#b91c1c;font-weight:800;">₹{ce_calc_sl:,.2f}</span> (+{ce_sl_pct:.0f}% on Anchor)'
+                f'🛑 <b>Stop-Loss Trigger:</b> <span style="color:#b91c1c;font-weight:800;font-size:0.95rem;">₹{float(ce_sl_price_val):,.2f}</span> '
+                f'<span style="color:#64748b;">(+{ce_effective_pct:.1f}% on Anchor ₹{float(ce_sell_anchor):,.2f})</span>'
                 f'</div>',
                 unsafe_allow_html=True
             )
@@ -2095,27 +2195,44 @@ def render_unified_v5_console():
                 default_pe_h_anchor = float(pe_hedge_live) if pe_hedge_live > 0 else 15.00
                 pe_hedge_anchor = st.number_input("PE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=default_pe_h_anchor, step=0.5, format="%.2f", key="v5_pe_hedge_anchor", help="Defaults to live hedge market LTP.")
 
-            p_sl1, p_sl2 = st.columns(2)
+            p_sl1, p_sl2, p_sl3 = st.columns([1.5, 1.5, 1.0])
             with p_sl1:
-                pe_sl_choice = st.selectbox("PE Stop Loss %", options=["10%", "20%", "25% (Recommended)", "30%", "40%", "Custom"], index=2, key="v5_pe_sl_choice")
+                default_pe_sl = float(pe_sell_anchor) * 1.25 if float(pe_sell_anchor) > 0 else 93.75
+                pe_sl_price_val = st.number_input(
+                    "PE Stop Loss Price (₹)",
+                    min_value=0.05,
+                    max_value=10000.0,
+                    value=float(default_pe_sl),
+                    step=0.5,
+                    format="%.2f",
+                    key="v5_pe_sl_price_input",
+                    help="Exact SL trigger in rupees (e.g. 61.00, 75.00)"
+                )
+            with p_sl2:
+                pe_sl_choice = st.selectbox("PE SL % Presets", options=["25% (Standard)", "10%", "20%", "30%", "40%", "Custom"], index=0, key="v5_pe_sl_choice")
                 pe_sl_pct = 25.0
                 if pe_sl_choice == "10%": pe_sl_pct = 10.0
                 elif pe_sl_choice == "20%": pe_sl_pct = 20.0
-                elif pe_sl_choice == "25% (Recommended)": pe_sl_pct = 25.0
+                elif pe_sl_choice == "25% (Standard)": pe_sl_pct = 25.0
                 elif pe_sl_choice == "30%": pe_sl_pct = 30.0
                 elif pe_sl_choice == "40%": pe_sl_pct = 40.0
                 elif pe_sl_choice == "Custom":
                     pe_sl_pct = st.number_input("Custom PE SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key="v5_pe_custom_sl")
-            with p_sl2:
+                
+                if float(pe_sl_price_val) > float(pe_sell_anchor) and float(pe_sell_anchor) > 0:
+                    pe_effective_pct = ((float(pe_sl_price_val) - float(pe_sell_anchor)) / float(pe_sell_anchor)) * 100.0
+                else:
+                    pe_effective_pct = float(pe_sl_pct)
+            with p_sl3:
                 st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-                pe_reentry = st.checkbox("Enable Auto Re-entry", value=True, key="v5_pe_reentry")
+                pe_reentry = st.checkbox("Re-entry", value=True, key="v5_pe_reentry", help="Auto re-entry upon SL trigger")
 
-            # Dynamic Live Metrics & 25% SL Preview Card
-            pe_calc_sl = pe_sell_anchor * (1.0 + (pe_sl_pct / 100.0))
+            # Dynamic Live Metrics & SL Preview Card
             st.markdown(
                 f'<div style="background:#f0fdf4;border:1px dashed #22c55e;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.82rem;">'
                 f'📈 <b>Live LTP:</b> ₹{pe_sell_live:,.2f} &nbsp;|&nbsp; 🛡️ <b>Hedge LTP:</b> ₹{pe_hedge_live:,.2f}<br/>'
-                f'🛑 <b>Auto Stop-Loss Trigger:</b> <span style="color:#15803d;font-weight:800;">₹{pe_calc_sl:,.2f}</span> (+{pe_sl_pct:.0f}% on Anchor)'
+                f'🛑 <b>Stop-Loss Trigger:</b> <span style="color:#15803d;font-weight:800;font-size:0.95rem;">₹{float(pe_sl_price_val):,.2f}</span> '
+                f'<span style="color:#64748b;">(+{pe_effective_pct:.1f}% on Anchor ₹{float(pe_sell_anchor):,.2f})</span>'
                 f'</div>',
                 unsafe_allow_html=True
             )
@@ -2130,10 +2247,10 @@ def render_unified_v5_console():
                    - Spot < Anchor $\\rightarrow$ **BEARISH**: Call Wing Live bikega (Zerodha me order jayega), Put Wing wait karega.
                 2. **Auto LTP & Anchor:**
                    - System automatically Live Market Price (LTP) ko Anchor bana leta hai taaki trade turant execute ho sake.
-                3. **Hedge-First Safety:**
+                3. **Stop Loss Customization:**
+                   - Aap chahein toh Stop Loss Price (₹) ko seedhe change kar sakte hain (jaise ₹60 ka anchor aur ₹61 ya ₹75 ka SL).
+                4. **Hedge-First Safety:**
                    - Zerodha me pehle Hedge Buy order execute hota hai taaki margin kam lage, fir Sell leg execute hoti hai.
-                4. **25% Stop Loss Rule:**
-                   - Agar ₹100 par option becha hai, toh ₹125 aate hi engine automatically exit kar dega. Hedge ko capital protection ke liye safe rakha jata hai.
                 5. **3:00 PM Continuation:**
                    - 3:00 PM par agar trend aapke favor me hai toh overnight hold rahega, opposing side close ho jayegi.
                 """
@@ -2145,14 +2262,14 @@ def render_unified_v5_console():
             preview_banner = (
                 f'<div style="background:#ecfdf5;border:2px solid #10b981;border-radius:10px;padding:12px 18px;margin:16px 0;text-align:center;">'
                 f'<span style="color:#065f46;font-weight:900;font-size:1.05rem;">🟢 LIVE BULLISH SIGNAL (Spot ₹{live_spot:,.2f} &ge; Anchor ₹{anchor_val:,.2f})</span><br/>'
-                f'<span style="color:#047857;font-size:0.85rem;font-weight:600;">⚡ <b>PUT WING</b> will execute LIVE (Buy Hedge ₹{pe_hedge_strike} ➔ Sell PE ₹{pe_sell_strike}). <b>CALL WING</b> will be held in PENDING (Armed).</span>'
+                f'<span style="color:#047857;font-size:0.85rem;font-weight:600;">⚡ <b>PUT WING</b> will execute LIVE (Buy Hedge ₹{pe_hedge_strike} ➔ Sell PE ₹{pe_sell_strike} | SL: ₹{float(pe_sl_price_val):,.2f}). <b>CALL WING</b> held in PENDING.</span>'
                 f'</div>'
             )
         else:
             preview_banner = (
                 f'<div style="background:#fef2f2;border:2px solid #ef4444;border-radius:10px;padding:12px 18px;margin:16px 0;text-align:center;">'
                 f'<span style="color:#991b1b;font-weight:900;font-size:1.05rem;">🔴 LIVE BEARISH SIGNAL (Spot ₹{live_spot:,.2f} &lt; Anchor ₹{anchor_val:,.2f})</span><br/>'
-                f'<span style="color:#b91c1c;font-size:0.85rem;font-weight:600;">⚡ <b>CALL WING</b> will execute LIVE (Buy Hedge ₹{ce_hedge_strike} ➔ Sell CE ₹{ce_sell_strike}). <b>PUT WING</b> will be held in PENDING (Armed).</span>'
+                f'<span style="color:#b91c1c;font-size:0.85rem;font-weight:600;">⚡ <b>CALL WING</b> will execute LIVE (Buy Hedge ₹{ce_hedge_strike} ➔ Sell CE ₹{ce_sell_strike} | SL: ₹{float(ce_sl_price_val):,.2f}). <b>PUT WING</b> held in PENDING.</span>'
                 f'</div>'
             )
         st.markdown(preview_banner, unsafe_allow_html=True)
@@ -2171,14 +2288,18 @@ def render_unified_v5_console():
                     ce_hedge_strike=int(ce_hedge_strike),
                     ce_hedge_anchor=float(ce_hedge_anchor),
                     ce_sl_pct=float(ce_sl_pct),
+                    ce_sl_price=float(ce_sl_price_val),
                     ce_reentry_enabled=1 if ce_reentry else 0,
                     pe_sell_strike=int(pe_sell_strike),
                     pe_sell_anchor=float(pe_sell_anchor),
                     pe_hedge_strike=int(pe_hedge_strike),
                     pe_hedge_anchor=float(pe_hedge_anchor),
                     pe_sl_pct=float(pe_sl_pct),
+                    pe_sl_price=float(pe_sl_price_val),
                     pe_reentry_enabled=1 if pe_reentry else 0,
                     execute_live=True,
+                    current_spot=live_spot
+                )
                     current_spot=live_spot
                 )
                 if res_dep.get("ok"):

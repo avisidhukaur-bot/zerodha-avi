@@ -76,11 +76,11 @@ kite.place_order(
   - **Bullish (Live Spot >= Unit Master Anchor)**: Executes **PUT Wing LIVE** on Zerodha (Buy Hedge -> Sell PE leg). The **CALL Wing** is placed into `PENDING` (armed on sidelines).
   - **Bearish (Live Spot < Unit Master Anchor)**: Executes **CALL Wing LIVE** on Zerodha (Buy Hedge -> Sell CE leg). The **PUT Wing** is placed into `PENDING` (armed on sidelines).
 
-### 3. Decoupled Stop-Loss Engine (25% Away from Entry):
+### 3. Decoupled Stop-Loss Engine (Configurable in ₹ Price and %):
 - Each sold option has its own independent risk trigger:
   $$\text{SL Trigger Price} = P_{\text{entry}} \times \left(1 + \frac{\text{SL}_{\%}}{100}\right)$$
-- **Default SL**: **25%** (Configurable: 10%, 20%, 25%, 30%, Custom).
-- Stop loss is **NEVER placed at LTP**. It is at least 25% away from entry price to give room for normal market noise.
+- **Dual Direct Inputs**: Operator can directly input either the exact **Stop Loss Price (₹)** (e.g. ₹61.00 when Anchor is ₹60.00) OR select a **Stop Loss %** (10%, 20%, 25%, 30%, Custom). Both variables are available and can be edited anytime.
+- **Default SL**: **25%** away from entry ($P_{\text{entry}} \times 1.25$), providing buffer against market noise.
 - When SL is hit, **only the short leg is covered**.
 
 ### 4. The Orphan Hedge Invariant (Capital Shield):

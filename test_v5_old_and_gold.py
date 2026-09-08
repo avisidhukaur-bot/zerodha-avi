@@ -309,6 +309,41 @@ class TestV5OldAndGold(unittest.TestCase):
         self.assertEqual(float(ce_sell["sl_price"]), 125.0, "CE Stop-loss trigger must be at 125.0 (25% away from 100.0)")
         self.assertEqual(float(pe_sell["sl_price"]), 125.0, "PE Stop-loss trigger must be at 125.0 (25% away from 100.0)")
 
+    def test_09_custom_rupee_stop_loss_price_and_dual_editing(self):
+        """User can set custom Anchor=60.00 and SL=61.00 directly, and edit both anytime."""
+        test_expiry = "27-May-2027"
+        res = bm.deploy_unified_master_unit(
+            expiry_date=test_expiry,
+            anchor_unit_name="V5_CUSTOM_SL",
+            master_anchor_price=24000.0,
+            recommended_lots=1,
+            ce_sell_strike=24600,
+            ce_sell_anchor=60.0,
+            ce_sl_price=61.0,  # User explicitly specified ₹61.00 Stop Loss Price
+            pe_sell_strike=23600,
+            pe_sell_anchor=60.0,
+            pe_sl_price=61.0,  # User explicitly specified ₹61.00 Stop Loss Price
+            execute_live=False
+        )
+        self.assertTrue(res["ok"])
+
+        ce_sell = db.get_strike(res["ce_sell_id"])
+        self.assertEqual(float(ce_sell["anchor_price"]), 60.0)
+        self.assertEqual(float(ce_sell["sl_price"]), 61.0, "Stop loss price must be explicitly preserved at ₹61.00")
+
+        # Now test dual editing via update_strike_price_and_sl
+        edit_res = bm.update_strike_price_and_sl(
+            strike_id=res["ce_sell_id"],
+            new_anchor=60.0,
+            new_sl_price=68.0,
+            new_lots=2
+        )
+        self.assertTrue(edit_res["ok"])
+        updated_ce = db.get_strike(res["ce_sell_id"])
+        self.assertEqual(float(updated_ce["anchor_price"]), 60.0)
+        self.assertEqual(float(updated_ce["sl_price"]), 68.0, "Updated SL price must be ₹68.00")
+        self.assertEqual(int(updated_ce["lots"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

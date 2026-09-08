@@ -23,6 +23,7 @@ import sqlite3
 import os
 import sys
 import threading
+from typing import Optional, List, Dict, Any, Union
 
 # Force UTF-8 output on Windows (prevents emoji/unicode crash on cp1252 terminals)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -909,6 +910,46 @@ def update_strike_sl_config(strike_id: int, sl_pct: float, sl_price: float = 0.0
         return True
     except Exception as e:
         print(f"[DB] ERR update_strike_sl_config() failed: {e}")
+        return False
+
+
+def update_strike_pricing_and_sl(
+    strike_id: int,
+    anchor_price: Optional[float] = None,
+    sl_price: Optional[float] = None,
+    sl_pct: Optional[float] = None,
+    lots: Optional[int] = None
+) -> bool:
+    """Updates strike's anchor price, stop loss price, stop loss percentage, and lots in one atomic query."""
+    try:
+        fields = []
+        params = []
+        if anchor_price is not None and anchor_price > 0:
+            fields.append("anchor_price=?")
+            params.append(float(anchor_price))
+        if sl_price is not None and sl_price >= 0:
+            fields.append("sl_price=?")
+            params.append(float(sl_price))
+        if sl_pct is not None and sl_pct > 0:
+            fields.append("sl_pct=?")
+            params.append(float(sl_pct))
+        if lots is not None and lots >= 1:
+            fields.append("lots=?")
+            params.append(int(lots))
+        
+        if not fields:
+            return True
+        
+        params.append(strike_id)
+        sql = f"UPDATE strikes SET {', '.join(fields)} WHERE strike_id=?"
+        with _lock:
+            conn = _conn()
+            conn.execute(sql, tuple(params))
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_strike_pricing_and_sl() failed: {e}")
         return False
 
 

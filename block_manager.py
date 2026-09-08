@@ -226,6 +226,7 @@ def deploy_unified_master_unit(
     ce_hedge_strike: int = 0,
     ce_hedge_anchor: float = 0.0,
     ce_sl_pct: float = 25.0,
+    ce_sl_price: float = 0.0,
     ce_reentry_enabled: int = 1,
     # Put wing
     pe_sell_strike: int = 0,
@@ -233,6 +234,7 @@ def deploy_unified_master_unit(
     pe_hedge_strike: int = 0,
     pe_hedge_anchor: float = 0.0,
     pe_sl_pct: float = 25.0,
+    pe_sl_price: float = 0.0,
     pe_reentry_enabled: int = 1,
     execute_live: bool = True,
     current_spot: Optional[float] = None,
@@ -280,7 +282,11 @@ def deploy_unified_master_unit(
     pe_s_id = None
 
     # Step 2: Attach Call Wing (if configured)
-    ce_sl_price = float(ce_sell_anchor) * (1.0 + (float(ce_sl_pct) / 100.0)) if float(ce_sell_anchor) > 0 else 0.0
+    if ce_sl_price <= 0 and float(ce_sell_anchor) > 0:
+        ce_sl_price = float(ce_sell_anchor) * (1.0 + (float(ce_sl_pct) / 100.0))
+    elif ce_sl_price > 0 and float(ce_sell_anchor) > 0 and ce_sl_pct == 25.0:
+        ce_sl_pct = max(0.1, ((ce_sl_price - float(ce_sell_anchor)) / float(ce_sell_anchor)) * 100.0)
+
     if ce_hedge_strike > 0:
         ce_h_id = db.add_strike(
             block_id=block_id,
@@ -311,7 +317,11 @@ def deploy_unified_master_unit(
             link_hedge_to_sell(ce_s_id, ce_h_id)
 
     # Step 3: Attach Put Wing (if configured)
-    pe_sl_price = float(pe_sell_anchor) * (1.0 + (float(pe_sl_pct) / 100.0)) if float(pe_sell_anchor) > 0 else 0.0
+    if pe_sl_price <= 0 and float(pe_sell_anchor) > 0:
+        pe_sl_price = float(pe_sell_anchor) * (1.0 + (float(pe_sl_pct) / 100.0))
+    elif pe_sl_price > 0 and float(pe_sell_anchor) > 0 and pe_sl_pct == 25.0:
+        pe_sl_pct = max(0.1, ((pe_sl_price - float(pe_sell_anchor)) / float(pe_sell_anchor)) * 100.0)
+
     if pe_hedge_strike > 0:
         pe_h_id = db.add_strike(
             block_id=block_id,
@@ -857,6 +867,58 @@ def update_strike_anchor_price(strike_id: int, new_anchor: float) -> dict:
         _log(f"Strike {strike_id} ({strike['strike_price']} {strike['option_type']}) anchor price updated: ₹{old_anc:.2f} -> ₹{new_anchor:.2f}", "OK")
         return {"ok": True, "message": f"Strike {strike['strike_price']} {strike['option_type']} anchor price updated to ₹{new_anchor:.2f}."}
     return {"ok": False, "message": f"Database error updating anchor price for strike {strike_id}."}
+
+
+def update_strike_price_and_sl(
+    strike_id: int,
+    new_anchor: Optional[float] = None,
+    new_sl_price: Optional[float] = None,
+    new_sl_pct: Optional[float] = None,
+    new_lots: Optional[int] = None
+) -> dict:
+    """
+    Updates a strike's Anchor Price, Stop-Loss Price (in rupees), Stop-Loss Percentage, and Lots in one atomic operation.
+    """
+    strike = db.get_strike(strike_id)
+    if not strike:
+        return {"ok": False, "message": f"Strike {strike_id} not found."}
+    
+    anc = float(new_anchor) if new_anchor is not None and new_anchor > 0 else float(strike.get("anchor_price") or 0.0)
+    
+    # Calculate SL price / % if one is provided
+    sl_p = float(new_sl_price) if new_sl_price is not None and new_sl_price > 0 else float(strike.get("sl_price") or 0.0)
+    sl_pct = float(new_sl_pct) if new_sl_pct is not None and new_sl_pct > 0 else float(strike.get("sl_pct") or 25.0)
+    
+    if new_sl_price is not None and new_sl_price > 0:
+        sl_p = float(new_sl_price)
+        if anc > 0:
+            sl_pct = max(0.1, ((sl_p - anc) / anc) * 100.0)
+    elif new_sl_pct is not None and new_sl_pct > 0 and anc > 0:
+        sl_pct = float(new_sl_pct)
+        sl_p = anc * (1.0 + (sl_pct / 100.0))
+    elif sl_p <= 0 and anc > 0:
+        sl_p = anc * (1.0 + (sl_pct / 100.0))
+        
+    lots = int(new_lots) if new_lots is not None and new_lots >= 1 else int(strike.get("lots") or 1)
+    
+    ok = db.update_strike_pricing_and_sl(
+        strike_id=strike_id,
+        anchor_price=anc,
+        sl_price=sl_p,
+        sl_pct=sl_pct,
+        lots=lots
+    )
+    if ok:
+        _log(f"Strike {strike_id} ({strike['strike_price']} {strike['option_type']}) updated: Anchor=₹{anc:.2f}, SL=₹{sl_p:.2f} (+{sl_pct:.1f}%), Lots={lots}", "OK")
+        return {
+            "ok": True,
+            "anchor_price": anc,
+            "sl_price": sl_p,
+            "sl_pct": sl_pct,
+            "lots": lots,
+            "message": f"Strike {strike['strike_price']} {strike['option_type']} updated: Anchor=₹{anc:.2f}, SL Trigger=₹{sl_p:.2f} (+{sl_pct:.1f}%), Lots={lots}."
+        }
+    return {"ok": False, "message": f"Database error updating strike {strike_id}."}
 
 
 def scale_block_lots(block_id: int, new_lots: int, sync_live: bool = False) -> dict:
