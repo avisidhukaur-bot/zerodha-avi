@@ -2300,8 +2300,6 @@ def render_unified_v5_console():
                     execute_live=True,
                     current_spot=live_spot
                 )
-                    current_spot=live_spot
-                )
                 if res_dep.get("ok"):
                     _flash(f"✅ {res_dep.get('message')}", "success")
                     st.rerun()
