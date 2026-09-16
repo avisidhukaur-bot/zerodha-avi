@@ -1075,6 +1075,11 @@ class KiteExecutor:
         print(f"[EXECUTOR][SM] Option NOT found: NIFTY {expiry_yyyy_mm_dd} {strike_price} {option_type}")
         return None
 
+    def search_option_contract(self, *args, **kwargs) -> Optional[dict]:
+        """Alias for search_option_symbol."""
+        return self.search_option_symbol(*args, **kwargs)
+
+
     def test_connection(self) -> dict:
         if not self.ensure_logged_in():
             return {

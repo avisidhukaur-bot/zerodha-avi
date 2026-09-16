@@ -1,100 +1,59 @@
-# 🚀 BHARAT SYSTEM V5.0 "OLD & GOLD" PRODUCT UPGRADE BLUEPRINT
-## **Clean Universal Production Standard (Zerodha Kite Connect)**
-_Date: 08-September-2026 | Version: V5.0 "Old & Gold" Architecture_
+# PRODUCT UPGRADE V5: CLEAN INPUTS & ZERO-DEFAULT DEPLOYMENT SAFEGUARD
+_Date: 11-Sep-2026 | Architecture: V5.0 "Old & Gold" Clean Edition_
 
 ---
 
-## 🔍 1. ROOT CAUSE ANALYSIS: WHY THE HYBRID / V3.0 SYSTEM FAILED ("Kyun Blunder Hua")
+## 🔍 1. Root Cause Diagnosis: Why Were Ghost / Unintended M1 Trades Happening?
 
-| # | Root Cause Issue | V3.0 Flaw / Hybrid Blender | V5.0 "Old & Gold" Clean Solution |
-|---|---|---|---|
-| **1** | **Global vs Unit Master Anchor** | V3.0 maintained a single global `master_nifty_anchor` at the app level. When building Unit `M2`, global anchor fallbacks conflicted with `M2`'s dedicated anchor. | **No Global Master Anchor**. Every unit (`M1`, `M2`, `M3`...) is an independent pod with its own dedicated `master_anchor_price`. |
-| **2** | **Stop Loss at LTP instead of 25% Away** | In manual forms, `sl_price` was not set, and engine fell back to `buffer_tolerance` (₹2.00 above LTP), triggering immediate exit right at LTP! | **Strict 25% Stop-Loss Invariant**: Trigger is explicitly calculated and stored as $P_{\text{entry}} \times 1.25$. No trade exits at LTP. |
-| **3** | **Intraday Kill & Flip Whipsaws** | V3.0 closed opposing positions every time Spot crossed the Anchor intraday, killing trades during normal market oscillations. | **Intraday Noise Decoupling**: Spot crossings between 09:15 and 14:59 IST **never close trades**. Positions breathe for theta decay. |
-| **4** | **3:00 PM vs EOD Positional Trade Loss** | EOD watchdog / background routines closed positional trades at 3:00 PM/3:36 PM instead of carrying them forward. | **3:00 PM Continuation Protocol**: Favorable side marked `CONTINUED` and carried forward overnight (Positional). Only counter side + stranded hedges cleaned up. |
-| **5** | **Multi-Window Operator Fatigue** | V3.0 required creating blocks first, then adding CE legs, then PE legs separately. | **Unified Single-Window Console ("Ek Hi Jagah Saari Chijen")**: Configure M1/M2 with CE Wing + PE Wing + Anchor on 1 screen $\rightarrow$ 1-Click Deploy! |
+### Problem A: Hardcoded Pre-filled Dummy Strikes & Fallback Anchors
+In the previous deployment console, strike inputs were pre-populated with arbitrary default values:
+- `CE Sell Strike` = `23600`, `CE Hedge Strike` = `23900`
+- `PE Sell Strike` = `23000`, `PE Hedge Strike` = `22700`
+- `Unit Pod` was defaulted to `M1` via a simple text input.
+- Because `search_option_contract` had an attribute name mismatch with `search_option_symbol` in `kite_executor.py`, live LTP returned `0.0`.
+- The system fell back to hardcoded dummy anchor prices: `CE Anchor = ₹75.00`, `CE Hedge = ₹15.00`, `PE Anchor = ₹75.00`, `PE Hedge = ₹15.00`.
 
----
-
-## 🏛️ 2. THE CORE GOLDEN INVARIANTS OF V5.0
-
-```mermaid
-graph TD
-    A["Operator Opens V5 Unified Console"] --> B["Enter Unit M1/M2 Anchor, Expiry, CE Wing & PE Wing"]
-    B --> C["1-Click Deploy Unit"]
-    C --> D{"Live Spot vs Unit Master Anchor"}
-    
-    D -->|"Spot >= Anchor (Bullish)"| E["🟢 PUT WING Executes LIVE on Zerodha<br/>(Buy Hedge ➔ Sell PE)<br/>🔴 CALL WING Held in PENDING (Armed)"]
-    D -->|"Spot < Anchor (Bearish)"| F["🔴 CALL WING Executes LIVE on Zerodha<br/>(Buy Hedge ➔ Sell CE)<br/>🟢 PUT WING Held in PENDING (Armed)"]
-    
-    E --> G["9:15 AM - 2:59 PM: Trades Breathe for Theta Decay<br/>• SL = Entry + 25%<br/>• Orphan Hedge Preserved on SL exit"]
-    F --> G
-    
-    G --> H["3:00 PM (15:00 IST) Continuation Decision"]
-    H -->|"Bullish"| I["✅ PUT Sell marked CONTINUED (Held Overnight)<br/>🛑 Counter CE closed"]
-    H -->|"Bearish"| J["✅ CALL Sell marked CONTINUED (Held Overnight)<br/>🛑 Counter PE closed"]
-```
+### Problem B: Premature Armed Execution
+When an operator opened the console or clicked deploy without explicit configuration:
+- The pre-filled dummy strikes and M1 unit name created a new Block 1 (M1) in SQLite.
+- The background daemon `zerodha_engine.service` detected `Status: ACTIVE` with `trade_state: OPEN`.
+- The auto re-entry guard and execution cycles immediately began placing live market/limit orders on Zerodha!
 
 ---
 
-## 🧭 3. DETAILED TECHNICAL SPECIFICATIONS
+## 🛠️ 2. Upgrades & Step-by-Step Corrections
 
-### A. Dedicated Unit Master Anchor (Per Unit Isolation)
-- `M1` has its own anchor (e.g. `24,850.00`).
-- `M2` has its own anchor (e.g. `24,500.00`).
-- Each unit independently checks its own anchor against live Spot. There is zero interference between `M1`, `M2`, and `M3`.
+### 1️⃣ Zero-Default Clean Inputs (No Auto Dummy Strikes)
+- Strike price fields (`ce_sell_strike`, `ce_hedge_strike`, `pe_sell_strike`, `pe_hedge_strike`) start at **`0`** (Blank).
+- The operator must explicitly type or step to the desired strike (e.g. `23700`).
+- No dummy trades can ever be formed by accident.
 
-### B. Single-Window Console ("Ek Hi Jagah Saari Chijen")
-- Top row: Expiry Date, Unit Name (`M1`/`M2`), Master Anchor Price (with 1-Click Spot sync), Lots.
-- Left Column: **Call Sell Wing** (CE Sell Strike, CE Hedge Strike, 25% SL Dropdown, Re-entry checkbox).
-- Right Column: **Put Sell Wing** (PE Sell Strike, PE Hedge Strike, 25% SL Dropdown, Re-entry checkbox).
-- Bottom Action: Single **🚀 DEPLOY UNIFIED MASTER UNIT NOW** button.
-- **Selective Execution**:
-  - If Bullish ($\text{Spot} \ge \text{Anchor}$): PE Hedge is bought first $\rightarrow$ PE Sell leg placed on Zerodha. Call Wing stored as `PENDING`.
-  - If Bearish ($\text{Spot} < \text{Anchor}$): CE Hedge is bought first $\rightarrow$ CE Sell leg placed on Zerodha. Put Wing stored as `PENDING`.
+### 2️⃣ Dynamic Real-Time LTP & Stop-Loss Auto Calculation
+- Fixed `_fetch_opt_live_price` to reliably resolve Zerodha instruments via `search_option_symbol`.
+- Added `search_option_contract = search_option_symbol` on `KiteExecutor` for full backward compatibility.
+- **Dynamic Trigger Behavior**:
+  - If Strike is `0`: Anchor and SL display `0.00`, preview states `⚪ Enter Strike Price above to fetch live LTP and SL`.
+  - As soon as Strike `> 0`:
+    1. Instantly queries Kite API for live LTP of that specific contract.
+    2. Auto-populates Anchor Price with Live LTP.
+    3. Auto-calculates exact Stop Loss price (₹) and percentage (+25% default or custom).
+    4. Displays live badge with live LTP, anchor, and SL trigger.
 
-### C. 25% Stop-Loss Invariant ($P_{\text{entry}} \times 1.25$)
-- Trigger price:
-  $$\text{SL Trigger Price} = P_{\text{entry}} \times \left(1 + \frac{\text{SL}_{\%}}{100}\right)$$
-- If sold at ₹100, SL trigger is ₹125.
-- Stored directly in `sl_price` in database.
-- Checked every 30-second cycle against option LTP.
-- When breached:
-  - Short leg is bought back / covered.
-  - Linked long hedge is **NEVER closed** (Orphan Hedge Invariant).
+### 3️⃣ Smart Unit Pod Selector (`M1`, `M2`, `M3`, `M4`, `M5`, `M6`)
+- Replaced the error-prone text input with a clean dropdown selectbox: `["M1", "M2", "M3", "M4", "M5", "M6"]`.
+- Automatically selects the next available unit (e.g. if M2 is active, default selection is `M3`).
 
-### D. The 3:00 PM Continuation Decision (15:00 IST)
-- At exactly 15:00 IST:
-  - Unit Spot vs Anchor is evaluated.
-  - Trend-aligned side is marked `trade_state = "CONTINUED"` for overnight multi-day positional holding (`PRODUCT_NRML`).
-  - Opposing side sell leg is closed.
-  - Paired opposing hedge is closed.
-  - Stranded orphan hedges are preserved or closed as per policy.
-  - **Positional trades remain open overnight**.
+### 4️⃣ Strict Pre-Deployment Validation Safeguard
+Before placing any order or creating any block in SQLite:
+- Checks if Sell Strike and Hedge Strike are `> 0`.
+- Checks if Anchor Price is `> 0`.
+- Validates that the contract exists in the security master.
+- If invalid/empty, blocks deployment with a clear operator error and takes ZERO broker action.
 
 ---
 
-## 🗑️ 4. COMPLETE REMOVAL OF V3.0 LEGACY FILES
-
-The following obsolete V3.0 files have been retired from the workspace:
-1. `RUN_ZERODHA_V3.bat`
-2. `STOP_ZERODHA_V3.bat`
-3. `START_V3_REPAIR.bat`
-4. `sister_v3_auto_repair.py`
-5. `SISTER_V3_REPAIR_AND_UPGRADE_GUIDE.md`
-6. `test_v3_multi_anchor.py`
-
-Clean V5.0 tools in use:
-- `RUN_ZERODHA_V5.bat`
-- `lego0_diagnose.py` (VPS Diagnostics)
-- `lego1_deploy.py` (VPS Deployment)
-- `test_v5_old_and_gold.py` (Verification Suite)
-
----
-
-## 🚀 5. VPS DEPLOYMENT & VERIFICATION CHECKLIST
-
-1. Run local test suite: `python test_v5_old_and_gold.py`
-2. Execute SSH deploy: `python lego1_deploy.py`
-3. Verify VPS health: `python lego0_diagnose.py`
-4. Access Dashboard: `http://5.75.250.104:9007`
+## 🧱 3. Lego Deployment & Verification Workflow
+1. **Local Implementation**: Update `app.py`, `kite_executor.py`, and test files.
+2. **Local Verification**: Run all unit tests and simulation scripts to verify 100% pass rate.
+3. **Lego Deployment**: Push clean package to VPS (`5.75.250.104:9007`) via `lego1_deploy.py`.
+4. **Service Health Check**: Verify `zerodha_dashboard.service` and `zerodha_engine.service` status on VPS via `lego0_diagnose.py`.

@@ -320,6 +320,10 @@ def calc_strike_pnl(strike: dict, ltp: float) -> dict:
         "ltp_available": ltp_avail if status == "OPEN" else (exit_price > 0),
         "hedge_strike_id": strike.get("hedge_strike_id"),
         "expiry_date"  : strike.get("expiry_date"),
+        "sl_price"     : float(strike.get("sl_price") or 0.0),
+        "sl_pct"       : float(strike.get("sl_pct") or 25.0),
+        "trade_state"  : strike.get("trade_state", "PENDING"),
+        "reentry_enabled": strike.get("reentry_enabled", 1),
     }
 
 

@@ -10,7 +10,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.zip
+extracted/
+v5_2_extracted/
+test_*.db
 
 # OS artifacts
 .DS_Store
 Thumbs.db
+

@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zerodha Option Engine — Re-Entry & Stop-Loss System Guide</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-main: #0B0E14;
+            --bg-card: #151A23;
+            --bg-card-sub: #1E2430;
+            --border: #2B3342;
+            --text-main: #F3F4F6;
+            --text-muted: #9CA3AF;
+            --primary: #FF5722;
+            --primary-glow: rgba(255, 87, 34, 0.2);
+            --green: #10B981;
+            --green-glow: rgba(16, 185, 129, 0.15);
+            --blue: #3B82F6;
+            --yellow: #F59E0B;
+            --red: #EF4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Header Header */
+        .header {
+            background: linear-gradient(135deg, #1E2530 0%, #151A23 100%);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 28px;
+            margin-bottom: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .header::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 150px;
+            height: 100%;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .tag-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .tag {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tag-live { background: var(--green-glow); color: var(--green); border: 1px solid var(--green); }
+        .tag-engine { background: rgba(59, 130, 246, 0.15); color: var(--blue); border: 1px solid var(--blue); }
+        .tag-warn { background: rgba(245, 158, 11, 0.15); color: var(--yellow); border: 1px solid var(--yellow); }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 800;
+            color: #FFFFFF;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+
+        /* Summary Card */
+        .summary-card {
+            background: rgba(255, 87, 34, 0.08);
+            border-left: 4px solid var(--primary);
+            border-radius: 0 12px 12px 0;
+            padding: 18px 20px;
+            margin-bottom: 24px;
+        }
+
+        .summary-card h3 {
+            color: #FF7043;
+            font-size: 16px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .summary-card p {
+            color: #E5E7EB;
+            font-size: 14px;
+        }
+
+        /* Section Cards */
+        .section-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #FFFFFF;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+        }
+
+        /* Steps Flow */
+        .step-item {
+            background: var(--bg-card-sub);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px 18px;
+            margin-bottom: 14px;
+            position: relative;
+        }
+
+        .step-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .step-badge {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--yellow);
+            background: rgba(245, 158, 11, 0.15);
+            padding: 3px 8px;
+            border-radius: 6px;
+        }
+
+        .step-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #FFFFFF;
+        }
+
+        .step-desc {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        /* Table */
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th, td {
+            padding: 12px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background: var(--bg-card-sub);
+            color: #D1D5DB;
+            font-weight: 600;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .highlight-green {
+            color: var(--green);
+            font-weight: 600;
+        }
+
+        .highlight-red {
+            color: var(--red);
+            font-weight: 600;
+        }
+
+        .code-pill {
+            font-family: 'JetBrains Mono', monospace;
+            background: #11141A;
+            color: #93C5FD;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        /* Grid */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        @media (max-width: 680px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .benefit-box {
+            background: var(--bg-card-sub);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .benefit-box h4 {
+            font-size: 15px;
+            color: #FFFFFF;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .benefit-box p {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .footer {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-top: 32px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    
+    <!-- Top Header -->
+    <div class="header">
+        <div class="tag-row">
+            <span class="tag tag-live">🟢 LIVE VERIFIED</span>
+            <span class="tag tag-engine">⚡ NIFTY OPTION SELLING</span>
+            <span class="tag tag-warn">🛡️ ANTI-WHIPSAW SYSTEM</span>
+        </div>
+        <h1>Zerodha Engine: Automated Re-Entry & SL Guide</h1>
+        <p class="subtitle">Complete technical explanation of Stop-Loss, Cooldown Timers, Price Thresholds, and Re-Entry Points.</p>
+    </div>
+
+    <!-- Executive Summary -->
+    <div class="summary-card">
+        <h3>🎯 Main Point (सरल शब्दों में)</h3>
+        <p>Jab kisi strike ka Stop-Loss hit hota hai, toh algorithm <strong>turant jump nahi karta</strong>. System <strong>15–17 minute</strong> wait karta hai taaki market me spike aane par trader ko <em>"Double Stop-Loss"</em> na lage. Jaise hi price wapas stable discount par settle hota hai, system automatically best price par fresh SELL order place kar deta hai.</p>
+    </div>
+
+    <!-- Step-by-Step Mechanism -->
+    <div class="section-card">
+        <div class="section-title">
+            <span>🛡️</span> Re-Entry Ke 3 Sequential Safety Filters
+        </div>
+
+        <div class="step-item">
+            <div class="step-header">
+                <span class="step-title">1. Post-Exit Cooldown (5 Minutes / 300 Sec)</span>
+                <span class="step-badge">STEP 1</span>
+            </div>
+            <p class="step-desc">SL hit hote hi market me buying spike hoti hai. Engine agle <strong>5 minute</strong> tak entry ko freeze rakhta hai taaki spike me dobara loss na ho.</p>
+        </div>
+
+        <div class="step-item">
+            <div class="step-header">
+                <span class="step-title">2. Price Threshold Check (Anchor - ₹1 Buffer)</span>
+                <span class="step-badge">STEP 2</span>
+            </div>
+            <p class="step-desc">Re-entry tabhi scan hoti hai jab LTP <span class="code-pill">Anchor (₹39.00) - ₹1.00 = ₹38.00</span> ya uske neeche aaye. Jab tak price ₹38 se upar hai, system wait karta hai.</p>
+        </div>
+
+        <div class="step-item">
+            <div class="step-header">
+                <span class="step-title">3. 5-Min Continuous Hold Confirmation (300 Sec)</span>
+                <span class="step-badge">STEP 3</span>
+            </div>
+            <p class="step-desc">LTP ₹38 ke neeche aane par price ko <strong>lagatar 5 minute (300 seconds)</strong> tak wahi sustain karna zaroori hai. Agar beech me spike aaya toh timer 0 ho jayega. Full 5 min stable rehne par hi SELL re-entry execute hoti hai.</p>
+        </div>
+    </div>
+
+    <!-- Live Case Study -->
+    <div class="section-card">
+        <div class="section-title">
+            <span>📊</span> Live Case Study: Strike 24300 CE (09-Sep-2026)
+        </div>
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time (IST)</th>
+                        <th>Event</th>
+                        <th>Price</th>
+                        <th>Result / Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>10:24:26 AM</strong></td>
+                        <td>SL Exit Triggered</td>
+                        <td>₹40.65</td>
+                        <td><span class="highlight-green">+₹6,064.50 Profit Booked</span> (Leg 191 Closed)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>10:24 — 10:29 AM</strong></td>
+                        <td>5-Min Cooldown</td>
+                        <td>₹40.00+</td>
+                        <td>Engine freeze raha. Spike se bachaav kiya.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>10:29 — 10:36 AM</strong></td>
+                        <td>Threshold Check</td>
+                        <td>₹39.50 &rarr; ₹38.00</td>
+                        <td>Market ₹38.00 ke neeche aane ka wait kiya.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>10:36 — 10:41 AM</strong></td>
+                        <td>5-Min Confirmation Hold</td>
+                        <td>₹37.80 &rarr; ₹36.50</td>
+                        <td>Price 300 seconds tak continuous ₹38 ke neeche raha.</td>
+                    </tr>
+                    <tr>
+                        <td><strong>10:41:27 AM</strong></td>
+                        <td>Fresh SELL Re-entry</td>
+                        <td><strong>₹36.50</strong></td>
+                        <td><span class="highlight-green">Leg 194 Executed</span> | SL ₹42.00 active</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Stop Loss Rules -->
+    <div class="section-card">
+        <div class="section-title">
+            <span>🎯</span> Stop-Loss Rules & Calculation (SL Kaise Kaam Karta Hai)
+        </div>
+        <div class="grid-2">
+            <div class="benefit-box">
+                <h4>📌 Manual Rupee Stop-Loss</h4>
+                <p>Agar aapne form me manual SL enter kiya hai (jaise Anchor ₹39 par <strong>SL = ₹42</strong>), toh system manual SL ko 100% preserve karega aur +25% default se overwrite nahi hone dega.</p>
+            </div>
+            <div class="benefit-box">
+                <h4>⚙️ Default Rule (+25%)</h4>
+                <p>Agar manual SL blank choda jata hai, tabhi system default <strong>+25%</strong> rule use karta hai (e.g. ₹39 Anchor &rarr; SL = ₹48.75).</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Key Benefits -->
+    <div class="section-card">
+        <div class="section-title">
+            <span>💡</span> Is System Ke 4 Bade Fayde
+        </div>
+        <div class="grid-2">
+            <div class="benefit-box">
+                <h4>🛡️ 1. Double Stop-Loss Se Bachat</h4>
+                <p>Market me sudden spike aane par bina soche samjhe dobara entry lene par jo second SL lagta hai, usse 100% bachaav hota hai.</p>
+            </div>
+            <div class="benefit-box">
+                <h4>💰 2. Behtar Entry Price</h4>
+                <p>Pehla anchor ₹39 tha, confirmation ke baad ₹36.50 par fresh sell mila jo option seller ke liye zyada profitable hai.</p>
+            </div>
+            <div class="benefit-box">
+                <h4>🔒 3. Realized Profit Lock</h4>
+                <p>Pehli leg ka +₹6,064.50 profit safe lock ho chuka hai, nayi leg zero risk par fresh start hui.</p>
+            </div>
+            <div class="benefit-box">
+                <h4>⚡ 4. 100% Automated & Disciplined</h4>
+                <p>Traders emotions me aakar jaldi trade le lete hain, engine strict rule-based delay follow karta hai.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        Zerodha Automated Option Selling Engine • VPS Host: 5.75.250.104 • Document v1.0
+    </div>
+
+</div>
+
+</body>
+</html>

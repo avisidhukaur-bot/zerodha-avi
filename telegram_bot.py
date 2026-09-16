@@ -595,6 +595,30 @@ def alert_strike_lots_updated(block_number: int, strike_price: int, option_type:
     return send(msg, alert_key=f"lots_edit_{block_number}_{strike_price}_{option_type}")
 
 
+def alert_strike_anchor_updated(block_number: int, strike_price: int, option_type: str, old_anchor: float, new_anchor: float, new_sl: float = 0.0) -> bool:
+    """Sent when strike anchor price is updated."""
+    sl_info = f"\nStop Loss: <b>₹{new_sl:.2f}</b> (Auto-recalculated)" if new_sl > 0 else ""
+    msg = (
+        f"<b>⚓ STRIKE ANCHOR UPDATED</b>\n"
+        f"Block #{block_number} | {strike_price} {option_type}\n"
+        f"Anchor: ₹{old_anchor:.2f} ➔ <b>₹{new_anchor:.2f}</b>{sl_info}\n"
+        f"Time: {_ist_now()}"
+    )
+    return send(msg, alert_key=f"anc_edit_{block_number}_{strike_price}_{option_type}")
+
+
+def alert_strike_sl_updated(block_number: int, strike_price: int, option_type: str, old_sl: float, new_sl: float, new_pct: float = None) -> bool:
+    """Sent when strike stop-loss price is updated."""
+    pct_info = f" (+{new_pct:.1f}%)" if new_pct is not None else ""
+    msg = (
+        f"<b>🎯 STRIKE STOP LOSS UPDATED</b>\n"
+        f"Block #{block_number} | {strike_price} {option_type}\n"
+        f"Stop Loss: ₹{old_sl:.2f} ➔ <b>₹{new_sl:.2f}</b>{pct_info}\n"
+        f"Time: {_ist_now()}"
+    )
+    return send(msg, alert_key=f"sl_edit_{block_number}_{strike_price}_{option_type}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALERT 10: HEARTBEAT (periodic alive signal)
 # ─────────────────────────────────────────────────────────────────────────────

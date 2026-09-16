@@ -284,7 +284,7 @@ def deploy_unified_master_unit(
     # Step 2: Attach Call Wing (if configured)
     if ce_sl_price <= 0 and float(ce_sell_anchor) > 0:
         ce_sl_price = float(ce_sell_anchor) * (1.0 + (float(ce_sl_pct) / 100.0))
-    elif ce_sl_price > 0 and float(ce_sell_anchor) > 0 and ce_sl_pct == 25.0:
+    elif ce_sl_price > 0 and float(ce_sell_anchor) > 0:
         ce_sl_pct = max(0.1, ((ce_sl_price - float(ce_sell_anchor)) / float(ce_sell_anchor)) * 100.0)
 
     if ce_hedge_strike > 0:
@@ -319,7 +319,7 @@ def deploy_unified_master_unit(
     # Step 3: Attach Put Wing (if configured)
     if pe_sl_price <= 0 and float(pe_sell_anchor) > 0:
         pe_sl_price = float(pe_sell_anchor) * (1.0 + (float(pe_sl_pct) / 100.0))
-    elif pe_sl_price > 0 and float(pe_sell_anchor) > 0 and pe_sl_pct == 25.0:
+    elif pe_sl_price > 0 and float(pe_sell_anchor) > 0:
         pe_sl_pct = max(0.1, ((pe_sl_price - float(pe_sell_anchor)) / float(pe_sell_anchor)) * 100.0)
 
     if pe_hedge_strike > 0:
@@ -490,38 +490,10 @@ def rearm_block_strikes(block_id: int) -> dict:
 
 def kill_block(block_id: int) -> dict:
     """
-    Emergency Kill Unit: Market-closes all open SELL and HEDGE legs strictly for this block.
+    Emergency Kill Unit: Market-closes all open SELL and HEDGE legs and permanently deletes the block.
     """
-    block = db.get_block(block_id)
-    if not block:
-        return {"ok": False, "message": f"Block {block_id} not found."}
+    return execute_kill_block_full(block_id)
 
-    open_strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
-    closed_count = 0
-    errs = []
-    
-    # 1. Close Sell Legs first
-    for s in open_strikes:
-        if s["leg_type"] == "SELL":
-            res = close_strike(s["strike_id"], close_hedge=True)
-            if res.get("ok"):
-                closed_count += 1
-            else:
-                errs.append(f"Strike {s['strike_price']} {s['option_type']}: {res.get('message')}")
-
-    # 2. Close any remaining open Hedges
-    remaining_open = db.get_strikes_by_block(block_id, status_filter="OPEN")
-    for s in remaining_open:
-        res = close_strike(s["strike_id"], close_hedge=False)
-        if res.get("ok"):
-            closed_count += 1
-        else:
-            errs.append(f"Hedge {s['strike_price']} {s['option_type']}: {res.get('message')}")
-
-    _log(f"Emergency Kill Unit for Block #{block['block_number']} [Unit {block.get('anchor_unit_name', 'M1')}]: {closed_count} strikes closed.", "ALERT")
-    if errs:
-        return {"ok": False, "closed_count": closed_count, "message": f"Closed {closed_count} legs with errors: " + "; ".join(errs)}
-    return {"ok": True, "closed_count": closed_count, "message": f"Successfully killed Unit {block.get('anchor_unit_name', 'M1')} (Block #{block['block_number']}). {closed_count} legs closed."}
 
 
 def toggle_block_enabled(block_id: int, is_enabled: bool) -> dict:
@@ -671,6 +643,16 @@ def add_strike_to_block(
     if b_side == "PUT" and opt_upper != "PE":
         return {"ok": False, "message": f"Block #{block['block_number']} is a PUT SIDE block. Only PE strikes are allowed."}
 
+    # Ensure sl_pct accurately reflects manual sl_price if provided
+    anc_p = float(anchor_price) if anchor_price else 0.0
+    sl_p = float(sl_price) if sl_price else 0.0
+    calc_sl_pct = float(sl_pct) if sl_pct else 25.0
+    if leg_type == "SELL":
+        if sl_p > 0 and anc_p > 0:
+            calc_sl_pct = max(0.1, ((sl_p - anc_p) / anc_p) * 100.0)
+        elif sl_p <= 0 and anc_p > 0:
+            sl_p = anc_p * (1.0 + (calc_sl_pct / 100.0))
+
     strike_id = db.add_strike(
         block_id        = block_id,
         strike_price    = strike_price,
@@ -679,8 +661,8 @@ def add_strike_to_block(
         anchor_price    = anchor_price,
         lots            = lots,
         expiry_date     = expiry_date,
-        sl_pct          = float(sl_pct),
-        sl_price        = float(sl_price),
+        sl_pct          = float(calc_sl_pct),
+        sl_price        = float(sl_p),
         reentry_enabled = int(reentry_enabled),
         trade_state     = str(trade_state).upper(),
     )
@@ -853,20 +835,9 @@ def change_strike_lots(strike_id: int, new_lots: int, sync_live: bool = False) -
 
 def update_strike_anchor_price(strike_id: int, new_anchor: float) -> dict:
     """
-    Updates the anchor price of a strike.
+    Updates the anchor price of a strike, maintaining Stop-Loss configuration.
     """
-    strike = db.get_strike(strike_id)
-    if not strike:
-        return {"ok": False, "message": f"Strike {strike_id} not found."}
-    if new_anchor <= 0:
-        return {"ok": False, "message": "Anchor price must be > 0."}
-    
-    old_anc = float(strike.get("anchor_price") or 0.0)
-    ok = db.update_strike_anchor_price(strike_id, new_anchor)
-    if ok:
-        _log(f"Strike {strike_id} ({strike['strike_price']} {strike['option_type']}) anchor price updated: ₹{old_anc:.2f} -> ₹{new_anchor:.2f}", "OK")
-        return {"ok": True, "message": f"Strike {strike['strike_price']} {strike['option_type']} anchor price updated to ₹{new_anchor:.2f}."}
-    return {"ok": False, "message": f"Database error updating anchor price for strike {strike_id}."}
+    return update_strike_price_and_sl(strike_id=strike_id, new_anchor=new_anchor)
 
 
 def update_strike_price_and_sl(
@@ -1156,13 +1127,23 @@ def execute_strike(strike_id: int) -> dict:
 
         _log(f"SELL confirmed: {strike['strike_price']} {strike['option_type']} @ Rs{sell_result['fill_price']:.2f}", "OK")
 
-        # V5.0 Invariant: Anchor Stop-Loss Trigger to exact Fill Price + 25%
+        # V5.0 Invariant: Preserve manual Stop-Loss trigger if set, otherwise calculate Fill Price + 25%
         fill_price = float(sell_result.get("fill_price", 0.0))
         if fill_price > 0:
+            cur_sl_price = float(updated_strike.get("sl_price") or 0.0)
             sl_pct = float(updated_strike.get("sl_pct") or 25.0)
-            exact_sl_price = fill_price * (1.0 + (sl_pct / 100.0))
-            db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exact_sl_price)
-            _log(f"[V5-SL-ANCHOR] Strike {strike['strike_price']} {strike['option_type']} SELL: Fill=₹{fill_price:.2f} -> SL Price set to ₹{exact_sl_price:.2f} (+{sl_pct:.0f}%)", "OK")
+
+            if cur_sl_price > 0:
+                # Operator explicitly configured a manual Stop Loss Price -> PRESERVE IT
+                exact_sl_price = cur_sl_price
+                sl_pct = max(0.1, ((exact_sl_price - fill_price) / fill_price) * 100.0)
+                db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exact_sl_price)
+                _log(f"[V5-SL-PRESERVED] Strike {strike['strike_price']} {strike['option_type']} SELL: Fill=₹{fill_price:.2f} -> Preserved Manual SL Price ₹{exact_sl_price:.2f} (+{sl_pct:.1f}%)", "OK")
+            else:
+                # Stop loss was not manually set -> Auto-compute +25% away
+                exact_sl_price = fill_price * (1.0 + (sl_pct / 100.0))
+                db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exact_sl_price)
+                _log(f"[V5-SL-ANCHOR] Strike {strike['strike_price']} {strike['option_type']} SELL: Fill=₹{fill_price:.2f} -> SL Price set to ₹{exact_sl_price:.2f} (+{sl_pct:.0f}%)", "OK")
 
         # Log to trade history
         db.log_trade(
@@ -1718,14 +1699,6 @@ def get_portfolio_status() -> dict:
     }
 
 
-def update_strike_anchor_price(strike_id: int, anchor_price: float) -> dict:
-    """Updates the anchor price for a strike."""
-    ok = db.update_strike_anchor_price(strike_id, anchor_price)
-    if ok:
-        return {"ok": True, "message": f"Anchor updated for Strike {strike_id} to Rs{anchor_price:.2f}."}
-    return {"ok": False, "message": f"Failed to update anchor for Strike {strike_id}."}
-
-
 def close_hedge_strike_now(strike_id: int) -> dict:
     """
     Closes an open HEDGE_BUY strike immediately on the broker and locks realized profit.
@@ -2197,11 +2170,12 @@ def rearm_block_strikes(block_id: int) -> dict:
         return {"ok": False, "message": f"No CLOSED strikes found to re-arm in Block {block['block_number']}."}
 
 
-def kill_block(block_id: int) -> dict:
+def execute_kill_block_full(block_id: int) -> dict:
     """
     Kill Switch for a block:
-    1. Attempts to exit all open strikes (SELL and HEDGE_BUY) in the block.
-    2. Force deletes the block from the database regardless of exit success.
+    1. Disables re-entry and clears all trigger timers.
+    2. Attempts to exit all open strikes (SELL and HEDGE_BUY) in the block.
+    3. Force deletes the block from the database regardless of exit success.
     
     Returns: {"ok": bool, "message": str}
     """
@@ -2220,11 +2194,20 @@ def kill_block(block_id: int) -> dict:
         f"Attempting to exit all open positions immediately..."
     )
     
-    # Retrieve all strikes in the block
+    # Retrieve all strikes in the block and disable re-entry / timers
     strikes = db.get_strikes_by_block(block_id)
+    for s in strikes:
+        try:
+            db.update_strike_reentry(s["strike_id"], 0)
+            db.set(f"reentry_trigger_time_{s['strike_id']}", "0")
+            db.set(f"entry_trigger_time_{s['strike_id']}", "0")
+        except Exception as e:
+            _log(f"Error resetting re-entry for strike {s.get('strike_id')}: {e}", "WARN")
+
     open_strikes = [s for s in strikes if s["status"] in ("OPEN", "PENDING_CLOSE")]
     
     exited_strikes = []
+
     failed_strikes = []
     lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
     
@@ -2314,5 +2297,9 @@ def kill_block(block_id: int) -> dict:
         "ok": deleted,
         "message": f"Block {block_num} deleted successfully and all positions closed."
     }
+
+# Unified alias
+kill_block = execute_kill_block_full
+
 
 

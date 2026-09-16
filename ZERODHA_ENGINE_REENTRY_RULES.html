@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zerodha Engine — Re-Entry & Safety Rules</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --card-bg: #161b22;
+            --border-color: #30363d;
+            --text-primary: #c9d1d9;
+            --text-heading: #58a6ff;
+            --accent-green: #2ea043;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-blue: #388bfd;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 24px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 860px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 32px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        }
+        h1, h2, h3 {
+            color: var(--text-heading);
+            margin-top: 24px;
+        }
+        h1 {
+            font-size: 26px;
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-top: 0;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        .badge-green { background: rgba(46,160,67,0.2); color: #3fb950; border: 1px solid #2ea043; }
+        .badge-blue { background: rgba(56,139,253,0.2); color: #58a6ff; border: 1px solid #388bfd; }
+        .badge-yellow { background: rgba(210,153,34,0.2); color: #e3b341; border: 1px solid #d29922; }
+        .card {
+            background: #21262d;
+            border-left: 4px solid var(--accent-blue);
+            padding: 16px;
+            border-radius: 6px;
+            margin: 16px 0;
+        }
+        .step-box {
+            background: #1c2128;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .step-num {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--accent-yellow);
+            text-transform: uppercase;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        th, td {
+            border: 1px solid var(--border-color);
+            padding: 10px 14px;
+            text-align: left;
+            font-size: 14px;
+        }
+        th {
+            background-color: #21262d;
+            color: #f0f6fc;
+        }
+        tr:nth-child(even) {
+            background-color: #161b22;
+        }
+        code {
+            background: #282e33;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #79c0ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📊 Zerodha Option Selling Engine — Re-Entry & Safety Rules Guide</h1>
+        <div>
+            <span class="badge badge-green">LIVE VERIFIED</span>
+            <span class="badge badge-blue">DOC ID: ZERODHA-OS-REENTRY-v1.0</span>
+            <span class="badge badge-yellow">ANTI-WHIPSAW PROTECTION</span>
+        </div>
+
+        <div class="card">
+            <strong>🎯 Executive Summary:</strong><br>
+            Stop-Loss hit hone ke baad automated re-entry me ~15 se 17 minute ka jo gap aata hai, woh system ka ek deliberate <strong>Anti-Whipsaw Safety Mechanism</strong> hai jo trader ko <em>Double Stop-Loss (Spike me dobara phasne)</em> se protect karta hai.
+        </div>
+
+        <h2>🛡️ 3-Step Automated Re-Entry Safety Flow</h2>
+
+        <div class="step-box">
+            <div class="step-num">Step 1 • 5-Minute Post-Exit Cooldown (300s)</div>
+            <p>Jab SL hit hota hai, market me temporary spike hoti hai. Engine agle <strong>5 minute</strong> tak re-entry scan ko freeze rakhta hai taaki badhte hue premium me dobara trade na trigger ho.</p>
+        </div>
+
+        <div class="step-box">
+            <div class="step-num">Step 2 • Price Threshold Condition</div>
+            <p>Re-entry tabhi scan hoti hai jab option premium wapas discount level par aa jaye:<br>
+            <code>LTP &le; Anchor Price - ₹1.00 Buffer</code><br>
+            <em>Example:</em> Anchor ₹39 hai toh LTP ₹38 ya uske neeche aana anivarya hai.</p>
+        </div>
+
+        <div class="step-box">
+            <div class="step-num">Step 3 • 5-Minute Continuous Hold Confirmation (300s)</div>
+            <p>LTP ₹38 ke neeche aane par system turant sell nahi karta. Price ko <strong>lagatar 5 minute (300 seconds)</strong> tak ₹38 ke neeche tikna padta hai. Agar beech me price upar spike maarta hai, toh confirmation timer wapas 0 ho jata hai. Jab continuous 5 min complete hote hain, tabhi order place hota hai.</p>
+        </div>
+
+        <h2>📊 Live Execution Timeline: Strike 24300 CE (09-Sep-2026)</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Time (IST)</th>
+                    <th>Action</th>
+                    <th>Price</th>
+                    <th>Status & Outcome</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>10:24:26 AM</strong></td>
+                    <td>SL Exit Trigger</td>
+                    <td>₹40.65</td>
+                    <td>Leg 191 close hui. <strong>+₹6,064.50</strong> profit book hua.</td>
+                </tr>
+                <tr>
+                    <td><strong>10:24 — 10:29 AM</strong></td>
+                    <td>5-Min Cooldown</td>
+                    <td>₹40.00+</td>
+                    <td>Engine lock raha. Whipsaw protection active.</td>
+                </tr>
+                <tr>
+                    <td><strong>10:29 — 10:36 AM</strong></td>
+                    <td>Threshold Check</td>
+                    <td>₹39.50 &rarr; ₹38.00</td>
+                    <td>Market ₹38 ke neeche aane ka intezar kiya gaya.</td>
+                </tr>
+                <tr>
+                    <td><strong>10:36 — 10:41 AM</strong></td>
+                    <td>5-Min Hold Timer</td>
+                    <td>₹37.80 &rarr; ₹36.50</td>
+                    <td>Price lagatar 300s tak ₹38 ke neeche sustain hua.</td>
+                </tr>
+                <tr>
+                    <td><strong>10:41:27 AM</strong></td>
+                    <td>SELL Re-entry Executed</td>
+                    <td><strong>₹36.50</strong></td>
+                    <td>Leg 194 fresh open. SL <strong>₹42.00</strong> set ho gaya.</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>💡 Trader Ke Fayde (Benefits)</h2>
+        <ul>
+            <li><strong>Double SL Se Bachat:</strong> Spike me fast re-entry lene ka risk zero ho jata hai.</li>
+            <li><strong>Behtar Price:</strong> Anchor ₹39 tha, confirm hone ke baad ₹36.50 par better sell price mila.</li>
+            <li><strong>Profit Secure:</strong> Pehle trade ka +₹6,064.50 profit safe lock ho chuka hai.</li>
+            <li><strong>Manual SL Protection:</strong> Manual Stop-Loss (₹42.00) rule hamesha protected rehta hai.</li>
+        </ul>
+    </div>
+</body>
+</html>

@@ -220,6 +220,12 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def init_db() -> None:
+    """Initializes the database schema and columns."""
+    conn = _conn()
+    conn.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # In-Memory Secrets Store (credentials NEVER go to SQLite)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -430,6 +436,179 @@ def set_active_regime(regime: str) -> None:
     set("active_regime", str(regime).strip().upper())
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# OS (OPTION SELLING) PURE OPTION MOMENTUM HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_os_target_premium() -> float:
+    """Returns default target premium for OS engine (default 150.0)."""
+    try:
+        val = get("os_target_premium", "150.0")
+        return float(val)
+    except (ValueError, TypeError):
+        return 150.0
+
+
+def set_os_target_premium(premium: float) -> None:
+    """Sets default target premium for OS engine."""
+    set("os_target_premium", f"{float(premium):.2f}")
+
+
+def get_os_hedge_distance() -> int:
+    """Returns default hedge distance in points for OS engine (default 500)."""
+    try:
+        val = get("os_hedge_distance", "500")
+        return int(float(val))
+    except (ValueError, TypeError):
+        return 500
+
+
+def set_os_hedge_distance(dist: int) -> None:
+    """Sets default hedge distance in points for OS engine."""
+    set("os_hedge_distance", str(int(dist)))
+
+
+def get_os_sl_multiplier() -> float:
+    """Returns default SL multiplier for OS engine (default 1.382)."""
+    try:
+        val = get("os_sl_multiplier", "1.382")
+        return float(val)
+    except (ValueError, TypeError):
+        return 1.382
+
+
+def set_os_sl_multiplier(mult: float) -> None:
+    """Sets default SL multiplier for OS engine."""
+    set("os_sl_multiplier", f"{float(mult):.4f}")
+
+
+def get_os_strike_anchor(symbol: str) -> float:
+    """Returns yesterday's 3:00 PM anchor price for a specific option contract."""
+    try:
+        key = f"os_anchor_{str(symbol).strip().upper()}"
+        val = get(key, "0.0")
+        return float(val)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def set_os_strike_anchor(symbol: str, price: float) -> None:
+    """Saves yesterday's 3:00 PM anchor price for a specific option contract."""
+    key = f"os_anchor_{str(symbol).strip().upper()}"
+    set(key, f"{float(price):.2f}")
+
+
+def has_os_traded_today(unit_name: str) -> bool:
+    """
+    Checks if this OS unit has already executed a trade today.
+    Rule: 'Din mein sirf ek hi baar trade karna hai'.
+    """
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    key = f"os_traded_date_{str(unit_name).strip().upper()}"
+    return get(key, "") == today_str
+
+
+def mark_os_traded_today(unit_name: str) -> None:
+    """Marks that this OS unit has taken its daily trade today."""
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    key = f"os_traded_date_{str(unit_name).strip().upper()}"
+    set(key, today_str)
+
+
+def reset_os_daily_trade_flag(unit_name: str) -> None:
+    """Resets the daily trade flag for testing or operator override."""
+    key = f"os_traded_date_{str(unit_name).strip().upper()}"
+    set(key, "")
+
+
+def get_os_lot_size() -> int:
+    """Returns the user-decided lot size (e.g. 65, 75, 25, 50)."""
+    try:
+        val = get("lot_size", str(cfg.NIFTY_LOT_SIZE))
+        return int(val) if val else int(cfg.NIFTY_LOT_SIZE)
+    except Exception:
+        return int(cfg.NIFTY_LOT_SIZE)
+
+
+def set_os_lot_size(lot_size: int) -> None:
+    """Saves the user-decided manual lot size."""
+    set("lot_size", str(int(lot_size)))
+
+
+def is_os_settings_locked() -> bool:
+    """Checks if operator has explicitly locked the OS expiry, lots, and strike parameters."""
+    return get("os_settings_locked", "0") == "1"
+
+
+def get_os_settings() -> dict:
+    """Returns saved OS settings."""
+    return {
+        "locked": is_os_settings_locked(),
+        "horizon": get("os_locked_horizon", "Weekly Expiry"),
+        "expiry_date": get("os_locked_expiry", ""),
+        "lots": int(get("os_locked_lots", "1") or "1"),
+        "lot_size": int(get("os_locked_lot_size", str(cfg.NIFTY_LOT_SIZE)) or str(cfg.NIFTY_LOT_SIZE)),
+        "mode": get("os_locked_mode", "AUTO"),
+        "manual_ce": int(get("os_locked_manual_ce", "0") or "0") if get("os_locked_manual_ce", "0").isdigit() else 0,
+        "manual_pe": int(get("os_locked_manual_pe", "0") or "0") if get("os_locked_manual_pe", "0").isdigit() else 0,
+        "target_premium": float(get("os_locked_target_premium", "150.0") or "150.0"),
+        "locked_at": get("os_locked_at", "")
+    }
+
+
+def set_os_settings(
+    locked: bool,
+    horizon: str = "Weekly Expiry",
+    expiry_date: str = "",
+    lots: int = 1,
+    lot_size: int = 65,
+    mode: str = "AUTO",
+    manual_ce: int = 0,
+    manual_pe: int = 0,
+    target_premium: float = 150.0
+) -> None:
+    """Locks or saves OS parameters."""
+    set("os_settings_locked", "1" if locked else "0")
+    set("os_locked_horizon", str(horizon))
+    set("os_locked_expiry", str(expiry_date))
+    set("os_locked_lots", str(int(lots)))
+    set("os_locked_lot_size", str(int(lot_size)))
+    set("os_locked_mode", str(mode))
+    set("os_locked_manual_ce", str(int(manual_ce or 0)))
+    set("os_locked_manual_pe", str(int(manual_pe or 0)))
+    set("os_locked_target_premium", str(float(target_premium)))
+    if locked:
+        set("os_locked_at", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def unlock_os_settings() -> None:
+    """Unlocks OS parameters to allow user editing in draft mode."""
+    set("os_settings_locked", "0")
+
+
+def get_next_os_unit_name(expiry_date: str = None) -> str:
+    """Finds the next OS unit identifier (OS1, OS2, OS3...) for active blocks."""
+    try:
+        conn = _conn()
+        query = """
+            SELECT DISTINCT b.anchor_unit_name 
+            FROM blocks b
+            WHERE b.status = 'ACTIVE' 
+              AND UPPER(b.anchor_unit_name) LIKE 'OS%'
+              AND EXISTS (SELECT 1 FROM strikes s WHERE s.block_id = b.block_id AND s.status != 'CLOSED')
+        """
+        cur = conn.execute(query)
+        existing_units = [row["anchor_unit_name"].strip().upper() for row in cur.fetchall() if row["anchor_unit_name"]]
+        conn.close()
+
+        for i in range(1, 100):
+            cand = f"OS{i}"
+            if cand not in existing_units:
+                return cand
+        return "OS1"
+    except Exception as e:
+        print(f"[DB] ERR get_next_os_unit_name failed: {e}")
+        return "OS1"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

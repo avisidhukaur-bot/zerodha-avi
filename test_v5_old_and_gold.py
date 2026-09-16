@@ -344,6 +344,76 @@ class TestV5OldAndGold(unittest.TestCase):
         self.assertEqual(float(updated_ce["sl_price"]), 68.0, "Updated SL price must be ₹68.00")
         self.assertEqual(int(updated_ce["lots"]), 2)
 
+    def test_10_manual_sl_preserved_on_execution(self):
+        """User sets Anchor=55.0 and Manual SL=57.0 -> Execution MUST preserve SL at 57.0 (never overwrite to 68.75)."""
+        test_expiry = "24-Jun-2027"
+        # 1. Create Block
+        b_res = bm.create_block(expiry_date=test_expiry, expiry_type="MONTHLY", side_type="BOTH", master_anchor_price=24000.0, anchor_unit_name="V5_MANUAL_SL")
+        self.assertTrue(b_res["ok"])
+        bid = b_res["block_id"]
+
+        # 2. Add Sell strike with Anchor=55.0 and explicit manual SL=57.0
+        s_res = bm.add_strike_to_block(
+            block_id=bid,
+            strike_price=24300,
+            option_type="CE",
+            leg_type="SELL",
+            anchor_price=55.0,
+            lots=1,
+            sl_price=57.0,
+            sl_pct=25.0  # even if form sent 25.0, add_strike_to_block recalculates to match ₹57.0
+        )
+        self.assertTrue(s_res["ok"])
+        sid = s_res["strike_id"]
+
+        # Verify added strike has sl_price=57.0
+        added_s = db.get_strike(sid)
+        self.assertEqual(float(added_s["anchor_price"]), 55.0)
+        self.assertEqual(float(added_s["sl_price"]), 57.0)
+
+        # 3. Execute the strike (Mock fill_price at 55.0 and live LTP at 50.0)
+        with patch.object(kite_executor, "get_order_fill_price", return_value=55.0), \
+             patch.object(kite_executor, "get_ltp", return_value=50.0), \
+             patch.object(kite_executor, "get_live_ltp", return_value=50.0):
+            exec_res = bm.execute_strike(sid)
+            self.assertTrue(exec_res["ok"])
+
+        # 4. CRITICAL ASSERTION: The stop-loss trigger in the database MUST remain ₹57.00, NOT ₹68.75!
+        exec_s = db.get_strike(sid)
+        self.assertEqual(float(exec_s["anchor_price"]), 55.0)
+        self.assertEqual(float(exec_s["sl_price"]), 57.0, "Manual SL ₹57.00 was illegally overwritten by +25% calculation!")
+
+    def test_11_default_25_pct_when_sl_not_manually_set(self):
+        """When SL is NOT manually set (sl_price=0.0), execution auto-computes +25% (e.g. 55.0 * 1.25 = 68.75)."""
+        test_expiry = "24-Jun-2027"
+        b_res = bm.create_block(expiry_date=test_expiry, expiry_type="MONTHLY", side_type="BOTH", master_anchor_price=24000.0, anchor_unit_name="V5_AUTO_SL")
+        self.assertTrue(b_res["ok"])
+        bid = b_res["block_id"]
+
+        s_res = bm.add_strike_to_block(
+            block_id=bid,
+            strike_price=24300,
+            option_type="CE",
+            leg_type="SELL",
+            anchor_price=55.0,
+            lots=1,
+            sl_price=0.0,  # Not manually set
+            sl_pct=25.0
+        )
+        self.assertTrue(s_res["ok"])
+        sid = s_res["strike_id"]
+
+        with patch.object(kite_executor, "get_order_fill_price", return_value=55.0), \
+             patch.object(kite_executor, "get_ltp", return_value=50.0), \
+             patch.object(kite_executor, "get_live_ltp", return_value=50.0):
+            exec_res = bm.execute_strike(sid)
+            self.assertTrue(exec_res["ok"])
+
+        exec_s = db.get_strike(sid)
+        self.assertEqual(float(exec_s["anchor_price"]), 55.0)
+        self.assertEqual(float(exec_s["sl_price"]), 68.75, "Auto SL must be 55.0 * 1.25 = 68.75 when not manually specified")
+
 
 if __name__ == "__main__":
     unittest.main()
+

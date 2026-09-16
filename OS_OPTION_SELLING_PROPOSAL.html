@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OS (Option Selling) — 2-Step Operator Workflow & Pure Option Momentum Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0f1d;
+            --bg-secondary: #111827;
+            --bg-card: #1e293b;
+            --bg-card-hover: #26354a;
+            --border-color: #334155;
+            --accent-orange: #ff5722;
+            --accent-orange-light: #ff8a65;
+            --accent-green: #10b981;
+            --accent-green-bg: rgba(16, 185, 129, 0.12);
+            --accent-red: #ef4444;
+            --accent-red-bg: rgba(239, 68, 68, 0.12);
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-yellow: #f59e0b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding-bottom: 70px;
+        }
+
+        .top-navbar {
+            background: linear-gradient(135deg, #1e1e2f 0%, #0f172a 100%);
+            border-bottom: 2px solid var(--accent-orange);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        .brand { display: flex; align-items: center; gap: 14px; }
+        .brand-logo {
+            background: linear-gradient(135deg, #ff5722, #e64a19);
+            color: white;
+            font-size: 1.5rem;
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(255, 87, 34, 0.4);
+        }
+
+        .brand-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        .brand-badge {
+            background: rgba(255, 87, 34, 0.18);
+            border: 1px solid var(--accent-orange);
+            color: var(--accent-orange-light);
+            font-size: 0.72rem;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        .container { max-width: 1200px; margin: 0 auto; padding: 28px 24px; }
+
+        .hero-banner {
+            background: radial-gradient(circle at top right, rgba(255, 87, 34, 0.18), transparent 60%),
+                        linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 36px 32px;
+            margin-bottom: 28px;
+        }
+
+        .hero-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 2.1rem;
+            font-weight: 800;
+            line-height: 1.25;
+            background: linear-gradient(90deg, #ffffff 0%, #ff8a65 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 12px;
+        }
+
+        .hero-subtitle {
+            font-size: 1.05rem;
+            color: var(--text-secondary);
+            max-width: 950px;
+            margin-bottom: 20px;
+        }
+
+        .hero-tags { display: flex; flex-wrap: wrap; gap: 10px; }
+        .hero-tag {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #cbd5e1;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .hero-tag.highlight {
+            background: rgba(255, 87, 34, 0.2);
+            border-color: var(--accent-orange);
+            color: #ff8a65;
+            font-weight: 600;
+        }
+
+        .hero-tag.green {
+            background: rgba(16, 185, 129, 0.15);
+            border-color: var(--accent-green);
+            color: #34d399;
+            font-weight: 600;
+        }
+
+        /* Callout Box */
+        .callout {
+            border-radius: 12px;
+            padding: 18px 22px;
+            margin: 20px 0;
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+        }
+
+        .callout-highlight {
+            background: rgba(255, 87, 34, 0.1);
+            border: 1.5px solid var(--accent-orange);
+            color: #ffccbc;
+        }
+
+        .callout-icon { font-size: 1.4rem; flex-shrink: 0; }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 36px;
+            margin-bottom: 20px;
+        }
+
+        .section-icon { font-size: 1.4rem; }
+        .section-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.45rem;
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        /* 2-Step Interactive Simulator Box */
+        .sim-box {
+            background: linear-gradient(145deg, #182234, #0d1525);
+            border: 2px solid var(--accent-orange);
+            border-radius: 16px;
+            padding: 28px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+            margin-bottom: 36px;
+        }
+
+        .sim-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        .sim-desc {
+            font-size: 0.88rem;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+        }
+
+        .step-badge {
+            background: var(--accent-orange);
+            color: #fff;
+            font-weight: 700;
+            font-size: 0.75rem;
+            padding: 3px 10px;
+            border-radius: 6px;
+            margin-right: 8px;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .form-input {
+            background: #070c16;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: #fff;
+            padding: 10px 14px;
+            font-size: 0.95rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            outline: none;
+        }
+
+        .btn-fetch {
+            background: linear-gradient(135deg, #ff5722 0%, #e64a19 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 1rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 14px rgba(255, 87, 34, 0.4);
+            transition: all 0.2s;
+            margin-bottom: 24px;
+        }
+
+        .btn-fetch:hover {
+            opacity: 0.92;
+            transform: translateY(-1px);
+        }
+
+        .inspection-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .inspection-grid { grid-template-columns: 1fr; }
+        }
+
+        .wing-inspect-card {
+            background: #0e1626;
+            border: 1.5px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .wing-inspect-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .badge-pill {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .badge-bullish { background: var(--accent-green-bg); color: var(--accent-green); border: 1px solid var(--accent-green); }
+        .badge-bearish { background: var(--accent-red-bg); color: var(--accent-red); border: 1px solid var(--accent-red); }
+        .badge-orange  { background: rgba(255, 87, 34, 0.15); color: var(--accent-orange-light); border: 1px solid var(--accent-orange); }
+
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 0.88rem;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+        }
+
+        .metric-row:last-child { border-bottom: none; }
+        .metric-label { color: var(--text-secondary); }
+        .metric-val { font-family: 'JetBrains Mono', monospace; font-weight: 700; color: #fff; }
+
+        .actions-row {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .btn-action-primary {
+            background: #10b981;
+            color: #fff;
+            border: none;
+            padding: 12px 22px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-action-arm {
+            background: rgba(255, 255, 255, 0.08);
+            color: #cbd5e1;
+            border: 1px solid var(--border-color);
+            padding: 12px 22px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+        }
+
+        .flow-container {
+            background: #0e1626;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            padding: 24px;
+            margin-bottom: 28px;
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .flow-step:last-child { margin-bottom: 0; }
+
+        .step-num {
+            background: var(--accent-orange);
+            color: white;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.95rem;
+            flex-shrink: 0;
+            box-shadow: 0 0 12px rgba(255, 87, 34, 0.4);
+        }
+
+        .step-content h4 { font-size: 1.05rem; color: #fff; margin-bottom: 4px; }
+        .step-content p { font-size: 0.88rem; color: var(--text-secondary); }
+    </style>
+</head>
+<body>
+
+    <header class="top-navbar">
+        <div class="brand">
+            <div class="brand-logo">📈</div>
+            <div>
+                <span class="brand-title">BHARAT TRADING PLATFORM</span>
+                <span class="brand-badge">UPDATED 2-STEP WORKFLOW</span>
+            </div>
+        </div>
+        <div style="font-size: 0.85rem; color: #cbd5e1;">
+            Target Brokers: <b style="color: #ff8a65;">Zerodha</b> ➔ <b style="color: #60a5fa;">Kotak Neo</b> ➔ <b style="color: #34d399;">HDFC Sky</b>
+        </div>
+    </header>
+
+    <div class="container">
+
+        <!-- Banner -->
+        <div class="hero-banner">
+            <h1 class="hero-title">OS (Option Selling) — Operator 2-Step Workflow & 3:00 PM Engine</h1>
+            <p class="hero-subtitle">
+                Designed around the operator's precise trading protocol: Select <b>Weekly/Monthly Expiry</b> &rarr; Click <b>"Fetch Relevant Strike & Hedge"</b> &rarr; Audit today vs yesterday option price decay &rarr; Execute anytime (with <b>Max 1 trade/day guard</b>) or Arm for 3:00 PM &rarr; Continuous <b>1.382 Stop Loss "Stopwatch"</b> &rarr; 3:00 PM automated continuation/exit with manual override.
+            </p>
+            <div class="hero-tags">
+                <span class="hero-tag highlight">🎯 2-Step Interactive UI</span>
+                <span class="hero-tag green">📅 Weekly & Monthly Expiries</span>
+                <span class="hero-tag">🔍 "Fetch Relevant Strikes" Button</span>
+                <span class="hero-tag">⏱️ Anytime Execution (Morning, 1 PM, 2 PM, 3 PM)</span>
+                <span class="hero-tag">🛡️ Din Mein Sirf 1 Hi Baar Trade</span>
+                <span class="hero-tag">🛑 1.382 Stop Loss Stopwatch</span>
+                <span class="hero-tag">⏰ 3:00 PM Line-Cross Exit</span>
+            </div>
+        </div>
+
+        <!-- Section 1: The Operator 2-Step Live Simulator -->
+        <div class="section-header">
+            <span class="section-icon">🎛️</span>
+            <h2 class="section-title">Interactive 2-Step Workflow Simulator</h2>
+        </div>
+
+        <div class="sim-box">
+            <div class="sim-title">Step 1: Choose Contract Horizon & Fetch Relevant Strikes</div>
+            <div class="sim-desc">
+                Select whether you want to trade a Weekly or Monthly expiry, enter your target premium (&le; ₹150 in 100 multiples), choose your <b>Lots</b> &amp; <b>Manual Lot Size</b>, and click the fetch button.
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Expiry Horizon</label>
+                    <select id="exp_horizon" class="form-input" onchange="updateExpiries()">
+                        <option value="WEEKLY">Weekly Expiry (e.g. 22-Sep-2026)</option>
+                        <option value="MONTHLY" selected>Monthly Expiry (e.g. 29-Sep-2026)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Selected Expiry Date</label>
+                    <input type="text" id="exp_date_display" class="form-input" value="2026-09-29 (Monthly)" readonly>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Lots</label>
+                    <input type="number" id="trade_lots" class="form-input" value="1" min="1" max="100" oninput="updateQtyCalc()">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Lot Size (Manual by User)</label>
+                    <input type="number" id="trade_lot_size" class="form-input" value="65" min="1" max="5000" step="5" oninput="updateQtyCalc()">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Target Premium (≤ ₹)</label>
+                    <input type="number" id="target_prem" class="form-input" value="150" step="10">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Hedge Distance (Points)</label>
+                    <input type="number" id="hedge_dist" class="form-input" value="500" step="100">
+                </div>
+            </div>
+
+            <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 10px 18px; margin-bottom: 20px; font-size: 0.88rem; color: #93c5fd; display: flex; justify-content: space-between; align-items: center;">
+                <span>📦 <b>Manual Position Sizing:</b> <span id="lots_disp">1</span> Lot(s) &times; <span id="lot_size_disp">65</span> Qty/Lot</span>
+                <span style="background: #1e3a8a; color: #bfdbfe; font-weight: 700; padding: 3px 12px; border-radius: 12px;" id="total_qty_disp">Total Order Qty: 65 units</span>
+            </div>
+
+            <button class="btn-fetch" onclick="simulateFetchStrikes()">
+                <span>🔍</span> Click to Fetch Relevant Strike Price & Hedge Price
+            </button>
+
+            <!-- Inspection Cards -->
+            <div class="inspection-grid" id="inspect_cards" style="display: none;">
+                <!-- CALL WING -->
+                <div class="wing-inspect-card" id="ce_inspect_card">
+                    <div class="wing-inspect-header">
+                        <span style="font-weight:700; font-size:1.05rem; color:#fff;">📞 CALL WING (CE)</span>
+                        <span id="ce_badge" class="badge-pill badge-bullish">DECAYING</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Strike Selected (100 Mult)</span>
+                        <span class="metric-val" id="ce_strike_val">23500 CE</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Current Option LTP</span>
+                        <span class="metric-val" id="ce_ltp_val">₹117.35</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Yesterday Reference Price</span>
+                        <span class="metric-val" id="ce_yest_val">₹130.50</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Decay / Momentum Status</span>
+                        <span class="metric-val" id="ce_status_val" style="color:#34d399;">-₹13.15 (Decaying)</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">500-pt Protective Hedge</span>
+                        <span class="metric-val" id="ce_hedge_val" style="color:#60a5fa;">24000 CE (BUY)</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">1.382 Stop Loss Trigger</span>
+                        <span class="metric-val" id="ce_sl_val" style="color:#f87171;">₹162.18 (+38.2%)</span>
+                    </div>
+                </div>
+
+                <!-- PUT WING -->
+                <div class="wing-inspect-card" id="pe_inspect_card">
+                    <div class="wing-inspect-header">
+                        <span style="font-weight:700; font-size:1.05rem; color:#fff;">📉 PUT WING (PE)</span>
+                        <span id="pe_badge" class="badge-pill badge-bullish">DECAYING</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Strike Selected (100 Mult)</span>
+                        <span class="metric-val" id="pe_strike_val">23100 PE</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Current Option LTP</span>
+                        <span class="metric-val" id="pe_ltp_val">₹149.10</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Yesterday Reference Price</span>
+                        <span class="metric-val" id="pe_yest_val">₹158.00</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">Decay / Momentum Status</span>
+                        <span class="metric-val" id="pe_status_val" style="color:#34d399;">-₹8.90 (Decaying)</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">500-pt Protective Hedge</span>
+                        <span class="metric-val" id="pe_hedge_val" style="color:#60a5fa;">22600 PE (BUY)</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">1.382 Stop Loss Trigger</span>
+                        <span class="metric-val" id="pe_sl_val" style="color:#f87171;">₹206.06 (+38.2%)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Execution Actions -->
+            <div id="exec_panel" style="display: none;">
+                <div style="background: rgba(16, 185, 129, 0.08); border: 1px dashed #10b981; border-radius: 8px; padding: 12px 18px; margin-bottom: 16px; font-size: 0.9rem; color: #a7f3d0;">
+                    🛡️ <b>Daily Guard</b>: Din mein sirf ek hi baar trade execute hoga. Execution will buy the 500-pt Hedge FIRST on broker, then short sell with 1.382 SL.
+                </div>
+                <div class="actions-row">
+                    <button class="btn-action-primary" onclick="simulateExecute()">
+                        🚀 Execute Qualified Decaying Trade(s) Now (Morning, 1 PM, 2 PM, Evening)
+                    </button>
+                    <button class="btn-action-arm" onclick="simulateArm3PM()">
+                        ⏱️ Arm for 3:00 PM Auto-Decision Only
+                    </button>
+                </div>
+                <div id="exec_result_msg" style="margin-top: 14px; font-weight: 600; font-size: 0.95rem;"></div>
+            </div>
+        </div>
+
+        <!-- Section 2: Step-by-Step Execution Rules -->
+        <div class="section-header">
+            <span class="section-icon">📜</span>
+            <h2 class="section-title">The Complete Operational Lifecycle</h2>
+        </div>
+
+        <div class="flow-container">
+            <div class="flow-step">
+                <div class="step-num">1</div>
+                <div class="step-content">
+                    <h4>Step 1: Choose Horizon & Click "Fetch Relevant Strikes"</h4>
+                    <p>Operator chooses Weekly or Monthly expiry from dropdown. Clicks <b>"Fetch Relevant Strike Price & Hedge Price"</b>. The engine scans 100-multiple strikes &le; ₹150, queries yesterday's closing reference price, and determines which wing(s) are decaying.</p>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-num">2</div>
+                <div class="step-content">
+                    <h4>Step 2: Anytime Execution with 1-Trade-Per-Day Guard</h4>
+                    <p>Operator can click execute at any time of day (morning, 1:00 PM, 2:00 PM, or evening). The system strictly enforces: <b>Din mein sirf ek hi baar trade karna hai</b>. If Call is decaying &rarr; Sells CE. If Put is decaying &rarr; Sells PE. If both decaying &rarr; Sells Both. Long hedge is verified and bought FIRST.</p>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-num">3</div>
+                <div class="step-content">
+                    <h4>Step 3: Autonomous "Stopwatch" (1.382 Stop Loss)</h4>
+                    <p>Once entered, leave it running ("rang chhod dena hai"). The background daemon acts as a stopwatch monitoring the individual 1.382 Stop Loss trigger. If the premium expands to 1.382x entry, it auto-exits the short leg to protect capital. The protective orphan hedge stays open.</p>
+                </div>
+            </div>
+
+            <div class="flow-step">
+                <div class="step-num">4</div>
+                <div class="step-content">
+                    <h4>Step 4: 3:00 PM Line Decision & Next Day</h4>
+                    <p>At 15:00 IST daily: If the trade is still running below yesterday's line &rarr; <b>CONTINUATION</b> into Day 2, 3, 4! If the price cuts above the line &rarr; <b>AUTO-CLOSE</b> at market. Full manual override allows the operator to exit or adjust anytime.</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function updateQtyCalc() {
+            const lots = parseInt(document.getElementById('trade_lots').value) || 1;
+            const lotSize = parseInt(document.getElementById('trade_lot_size').value) || 65;
+            const total = lots * lotSize;
+            document.getElementById('lots_disp').innerText = lots;
+            document.getElementById('lot_size_disp').innerText = lotSize;
+            document.getElementById('total_qty_disp').innerText = `Total Order Qty: ${total} units`;
+        }
+
+        function updateExpiries() {
+            const h = document.getElementById('exp_horizon').value;
+            if (h === 'WEEKLY') {
+                document.getElementById('exp_date_display').value = '2026-09-22 (Weekly)';
+            } else {
+                document.getElementById('exp_date_display').value = '2026-09-29 (Monthly)';
+            }
+        }
+
+        function simulateFetchStrikes() {
+            document.getElementById('inspect_cards').style.display = 'grid';
+            document.getElementById('exec_panel').style.display = 'block';
+            document.getElementById('exec_result_msg').innerHTML = '<span style="color:#60a5fa;">✅ Relevant strikes and 500-pt hedges fetched! Review decay status above and choose execution action.</span>';
+        }
+
+        function simulateExecute() {
+            const lots = parseInt(document.getElementById('trade_lots').value) || 1;
+            const lotSize = parseInt(document.getElementById('trade_lot_size').value) || 65;
+            const total = lots * lotSize;
+            document.getElementById('exec_result_msg').innerHTML = `<span style="color:#10b981;">🚀 LIVE EXECUTED (${lots} Lots &times; ${lotSize} Lot Size = ${total} Total Qty): Bought 24000 CE Hedge (+500 pts), Sold 23500 CE @ ₹117.35 (SL: ₹162.18) | Bought 22600 PE Hedge (-500 pts), Sold 23100 PE @ ₹149.10 (SL: ₹206.06). Today's 1-trade quota locked!</span>`;
+        }
+
+        function simulateArm3PM() {
+            const lots = parseInt(document.getElementById('trade_lots').value) || 1;
+            const lotSize = parseInt(document.getElementById('trade_lot_size').value) || 65;
+            const total = lots * lotSize;
+            document.getElementById('exec_result_msg').innerHTML = `<span style="color:#f59e0b;">⏱️ ARMED FOR 3:00 PM (${lots} Lots &times; ${lotSize} Lot Size = ${total} Total Qty): Pod armed in PENDING state. Background daemon will audit decay at 15:00 IST and execute qualified wings automatically.</span>`;
+        }
+    </script>
+</body>
+</html>
