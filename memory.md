@@ -113,4 +113,14 @@ kite.place_order(
 - **Independent Strike Evaluation**: Each strike (Call and Put) is evaluated 100% on its OWN option premium decay against its locked yesterday/anchor price.
 - **Simultaneous Dual-Sided Trading**: If both Call and Put option premiums decay below their respective anchors, BOTH sides can trade simultaneously (Short Strangle / Iron Condor theta capture). Single-directional muting is permanently disabled.
 
+### 10. Autonomous Pending Wing Execution (Option Selling Pods - OS1/M-Units):
+- **Eligibility Criteria**: A pending Sell strike (e.g. Put wing `22700 PE` or Call wing `24000 CE`) is eligible for execution if and only if:
+  $$\text{Live Strike LTP} \le \text{Locked Yesterday Anchor Price}$$
+- **5-Minute Continuous Hold Confirmation**: When LTP drops $\le$ Anchor, the 5-minute countdown starts. If price stays below anchor continuously, the engine triggers:
+  1. Buy Hedge Leg First (`HEDGE_BUY`)
+  2. Sell Short Leg (`SELL`)
+  3. Activate Stop-Loss trigger
+- **Continuous Monitoring**: The engine runs this check every 30 seconds automatically in the background as long as `algo_running = ON`.
+
+
 

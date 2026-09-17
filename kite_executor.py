@@ -1175,3 +1175,47 @@ class KiteExecutor:
 
 # Singleton instance
 kite_executor = KiteExecutor()
+
+# ─────────────────────────────────────────────────────────────────────────
+# Module-level convenience wrappers (delegates to singleton kite_executor)
+# ─────────────────────────────────────────────────────────────────────────
+def get_kite_client():
+    kite_executor.ensure_logged_in()
+    return kite_executor.kite
+
+def get_positions():
+    return kite_executor.get_positions()
+
+def get_net_position_qty(trading_symbol: str) -> int:
+    return kite_executor.get_net_position_qty(trading_symbol)
+
+def get_ltp(symbol_token: str, trading_symbol: str = "") -> float:
+    return kite_executor.get_ltp(symbol_token, trading_symbol)
+
+def get_live_ltp(symbol_token: str, trading_symbol: str = "") -> float:
+    return kite_executor.get_live_ltp(symbol_token, trading_symbol)
+
+def get_nifty_spot(force_refresh: bool = False) -> float:
+    return kite_executor.get_nifty_spot(force_refresh)
+
+def place_order(*args, **kwargs):
+    return kite_executor.place_order(*args, **kwargs)
+
+def cancel_order(order_id: str, variety: str = "regular") -> bool:
+    return kite_executor.cancel_order(order_id, variety)
+
+def get_order_status(order_id: str) -> str:
+    return kite_executor.get_order_status(order_id)
+
+def get_order_fill_price(order_id: str) -> float:
+    return kite_executor.get_order_fill_price(order_id)
+
+def execute_sell_and_confirm(trading_symbol: str, symbol_token: str, qty: int, limit_price: float = 0.0) -> tuple:
+    return kite_executor.execute_sell_and_confirm(trading_symbol, symbol_token, qty, limit_price)
+
+def execute_buy_and_confirm(trading_symbol: str, symbol_token: str, qty: int, limit_price: float = 0.0) -> tuple:
+    return kite_executor.execute_buy_and_confirm(trading_symbol, symbol_token, qty, limit_price)
+
+def search_option_symbol(underlying: str, expiry_date: str, strike_price: float, option_type: str) -> dict:
+    return kite_executor.search_option_symbol(underlying, expiry_date, strike_price, option_type)
+
