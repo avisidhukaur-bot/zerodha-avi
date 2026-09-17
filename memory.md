@@ -108,3 +108,9 @@ kite.place_order(
 - **Broker is the Single Source of Truth (SSOT)**: Before placing ANY order (Entry, Re-Entry, Scaling, Exit), the engine directly queries `kite.positions()['net']` to verify the live quantity held on the broker.
 - **Zero Assumption**: The engine NEVER assumes open quantity from local DB alone. If the target short or hedge quantity is already open on the broker, duplicate orders are strictly blocked and DB is synchronized.
 
+### 9. Pure Option Price Independence Invariant (Dual-Sided Option Selling):
+- **Independent of Nifty Index Spot**: Option Selling entries and re-entries do NOT depend on whether Nifty Spot is above or below an anchor.
+- **Independent Strike Evaluation**: Each strike (Call and Put) is evaluated 100% on its OWN option premium decay against its locked yesterday/anchor price.
+- **Simultaneous Dual-Sided Trading**: If both Call and Put option premiums decay below their respective anchors, BOTH sides can trade simultaneously (Short Strangle / Iron Condor theta capture). Single-directional muting is permanently disabled.
+
+

@@ -50,59 +50,24 @@ def get_current_nifty_spot() -> float:
 
 def is_strike_allowed_by_regime(option_type: str, block: Optional[dict] = None) -> Tuple[bool, str]:
     """
-    Checks if a given option_type ('CE' or 'PE') is permitted under Master Regime.
-    In V3.0, prioritizes the block's own Unit Master Anchor and regime state.
-    Returns: (is_allowed: bool, reason: str)
+    Checks if a given option_type ('CE' or 'PE') is permitted.
+    PURE OPTION MOMENTUM INVARIANT:
+    Option Selling is independent of Nifty Spot index price. Both Call (CE) and Put (PE)
+    wings are allowed simultaneously based strictly on each strike's individual option premium decay.
     """
-    mode = db.get_regime_mode()
-    if mode == "OFF":
-        return True, "Regime governor is OFF (Dual-sided allowed)"
-
     opt_type_upper = str(option_type).strip().upper()
 
-    # 1. Block-Level Unit Regime (V3.0 Autonomous Pods)
+    # If block is strictly single-sided (e.g. user created a pure 'CALL' or pure 'PUT' container):
     if block:
-        if not block.get("auto_regime_enabled", 1):
-            return True, f"Unit {block.get('anchor_unit_name', 'M')} auto-governor is disabled"
+        b_side = (block.get("side_type") or "BOTH").strip().upper()
+        if b_side == "CALL" and opt_type_upper != "CE":
+            return False, f"Block is configured for CALL side only (PE not permitted in this block)"
+        if b_side == "PUT" and opt_type_upper != "PE":
+            return False, f"Block is configured for PUT side only (CE not permitted in this block)"
+        return True, f"🟢 ALLOWED: Dual-Sided Pure Option Price Action Active ({opt_type_upper})"
 
-        b_anchor = float(block.get("master_anchor_price") or 0.0)
-        if b_anchor > 0:
-            b_regime = (block.get("current_regime") or "NEUTRAL").strip().upper()
-            unit_name = block.get("anchor_unit_name") or f"M{block.get('block_number', '')}"
-            if b_regime == "BULLISH":
-                if opt_type_upper == "PE":
-                    return True, f"🟢 BULLISH Unit {unit_name}: PE Selling Active"
-                else:
-                    return False, f"🔴 MUTED: Unit {unit_name} is BULLISH (Only PE selling allowed, CE muted)"
-            elif b_regime == "BEARISH":
-                if opt_type_upper == "CE":
-                    return True, f"🔴 BEARISH Unit {unit_name}: CE Selling Active"
-                else:
-                    return False, f"🟢 MUTED: Unit {unit_name} is BEARISH (Only CE selling allowed, PE muted)"
-            else:
-                return True, f"⚪ NEUTRAL Unit {unit_name}: Dual-sided allowed"
+    return True, f"🟢 ALLOWED: Pure Option Price Action Active ({opt_type_upper})"
 
-    # 2. Global Master Anchor Fallback (V2.0 Legacy)
-    anchor = db.get_master_nifty_anchor()
-    if anchor <= 0:
-        return True, "Master Anchor not set (Dual-sided allowed)"
-
-    active_regime = db.get_active_regime()
-
-    if active_regime == "BULLISH":
-        if opt_type_upper == "PE":
-            return True, "🟢 BULLISH Regime: PE Selling Active"
-        else:
-            return False, "🔴 MUTED: Regime is BULLISH (Only PE selling allowed, CE muted)"
-
-    elif active_regime == "BEARISH":
-        if opt_type_upper == "CE":
-            return True, "🔴 BEARISH Regime: CE Selling Active"
-        else:
-            return False, "🟢 MUTED: Regime is BEARISH (Only CE selling allowed, PE muted)"
-
-    # NEUTRAL
-    return True, "NEUTRAL Regime (Both sides allowed)"
 
 
 def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, force_eval: bool = False) -> Dict[str, Any]:
