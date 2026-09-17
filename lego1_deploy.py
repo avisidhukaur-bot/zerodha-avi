@@ -37,6 +37,7 @@ FILES = [
     "db.py",
     "block_manager.py",
     "kite_executor.py",
+    "os_engine.py",
     "pnl_engine.py",
     "regime_engine.py",
     "equity_200dma_engine.py",
@@ -58,6 +59,8 @@ FILES = [
     "V5_OLD_AND_GOLD_SIMPLE_GUIDE.html",
     "HOW_TO_TRADE_V5_GUIDE.html",
     "test_v5_old_and_gold.py",
+    "test_os_engine.py",
+    "test_os_strike_shield.py",
 ]
 
 print("=" * 60)

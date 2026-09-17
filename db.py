@@ -549,6 +549,7 @@ def get_os_settings() -> dict:
         "lots": int(get("os_locked_lots", "1") or "1"),
         "lot_size": int(get("os_locked_lot_size", str(cfg.NIFTY_LOT_SIZE)) or str(cfg.NIFTY_LOT_SIZE)),
         "mode": get("os_locked_mode", "AUTO"),
+        "step_size": get("os_locked_step_size", "AUTO"),
         "manual_ce": int(get("os_locked_manual_ce", "0") or "0") if get("os_locked_manual_ce", "0").isdigit() else 0,
         "manual_pe": int(get("os_locked_manual_pe", "0") or "0") if get("os_locked_manual_pe", "0").isdigit() else 0,
         "target_premium": float(get("os_locked_target_premium", "150.0") or "150.0"),
@@ -563,6 +564,7 @@ def set_os_settings(
     lots: int = 1,
     lot_size: int = 65,
     mode: str = "AUTO",
+    step_size: str = "AUTO",
     manual_ce: int = 0,
     manual_pe: int = 0,
     target_premium: float = 150.0
@@ -574,6 +576,7 @@ def set_os_settings(
     set("os_locked_lots", str(int(lots)))
     set("os_locked_lot_size", str(int(lot_size)))
     set("os_locked_mode", str(mode))
+    set("os_locked_step_size", str(step_size))
     set("os_locked_manual_ce", str(int(manual_ce or 0)))
     set("os_locked_manual_pe", str(int(manual_pe or 0)))
     set("os_locked_target_premium", str(float(target_premium)))

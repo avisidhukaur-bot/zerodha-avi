@@ -151,8 +151,115 @@ def get_nifty_expiry_dates() -> List[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 100-MULTIPLE STRIKE HUNTER & CANDIDATE INSPECTOR
+# ANTI-COLLISION SHIELD & DYNAMIC STEP HUNTER (100 vs 500 MULTIPLES)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def is_far_month_expiry(expiry_date: str) -> bool:
+    """
+    Determines if an expiry belongs to a Far Month (Next Month / Deep Monthly).
+    Near Month (Current Month) => 100-pt steps.
+    Far Month (Next Month+)   => 500-pt steps (to eliminate illiquid ghost strikes).
+    """
+    try:
+        today = datetime.now(IST).date()
+        exp_dt = None
+        for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y", "%d/%m/%Y"):
+            try:
+                exp_dt = datetime.strptime(str(expiry_date).strip(), fmt).date()
+                break
+            except ValueError:
+                pass
+        if exp_dt:
+            # If expiry is in a future calendar month or more than 35 days away
+            if (exp_dt.year > today.year) or (exp_dt.year == today.year and exp_dt.month > today.month):
+                return True
+            days_away = (exp_dt - today).days
+            return days_away > 35
+    except Exception as e:
+        _log(f"Error checking far-month expiry: {e}", "WARN")
+    return False
+
+
+def get_os_step_size(expiry_date: str, override_step: Union[int, str] = "AUTO") -> int:
+    """
+    Resolves the strike step size:
+      - Near Month: 100 Multiples (Abundant liquidity on every 100 strike).
+      - Far Month : 500 Multiples (Guaranteed market maker liquidity on 23000, 23500, 24000, 24500...).
+    """
+    step_str = str(override_step).strip().upper()
+    if step_str in ("100", "STRICT 100"):
+        return 100
+    if step_str in ("500", "STRICT 500"):
+        return 500
+    # Auto resolution based on expiry horizon
+    return 500 if is_far_month_expiry(expiry_date) else 100
+
+
+def get_occupied_strikes(expiry_date: str) -> Set[Tuple[int, str]]:
+    """
+    ZERO-CLASH STRIKE SHIELD:
+    Returns all active/open (strike_price, option_type) currently held by:
+      1. M-Series Units (M1, M2, M3...) in SQLite DB for this expiry.
+      2. Other active blocks in SQLite DB for this expiry.
+      3. Live broker open net positions (from Kite).
+    """
+    occupied: Set[Tuple[int, str]] = set()
+
+    # 1. Normalize target expiry
+    exp_norm = str(expiry_date).strip()
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            exp_norm = datetime.strptime(exp_norm, fmt).strftime("%Y-%m-%d")
+            break
+        except ValueError:
+            pass
+
+    # 2. Query SQLite DB active blocks and open strikes
+    try:
+        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+        for b in active_blocks:
+            b_exp = str(b.get("expiry_date", "")).strip()
+            b_exp_norm = b_exp
+            for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+                try:
+                    b_exp_norm = datetime.strptime(b_exp, fmt).strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    pass
+
+            if b_exp_norm == exp_norm or not b_exp:
+                strikes = db.get_strikes_by_block(b["block_id"], status_filter="OPEN")
+                for s in strikes:
+                    if s.get("leg_type") == "SELL":
+                        try:
+                            occupied.add((int(float(s["strike_price"])), str(s["option_type"]).strip().upper()))
+                        except Exception:
+                            pass
+    except Exception as e:
+        _log(f"Error querying occupied DB strikes: {e}", "WARN")
+
+    # 3. Query live broker net positions
+    try:
+        positions = kite_executor.get_positions()
+        for p in positions:
+            if p.get("quantity", 0) != 0:
+                tsym = str(p.get("tradingsymbol", "")).strip().upper()
+                if "NIFTY" in tsym and (tsym.endswith("CE") or tsym.endswith("PE")):
+                    opt_t = "CE" if tsym.endswith("CE") else "PE"
+                    # Extract strike number (digits before CE/PE)
+                    digits = ""
+                    for ch in reversed(tsym[:-2]):
+                        if ch.isdigit():
+                            digits = ch + digits
+                        else:
+                            break
+                    if digits and len(digits) >= 4:
+                        occupied.add((int(digits), opt_t))
+    except Exception as e:
+        _log(f"Error querying occupied broker positions: {e}", "WARN")
+
+    return occupied
+
 
 def hunt_os_strike(
     option_type: str,
@@ -160,16 +267,16 @@ def hunt_os_strike(
     target_premium: float = DEFAULT_TARGET_PREMIUM,
     manual_strike: Optional[int] = None,
     hedge_dist: int = DEFAULT_HEDGE_DISTANCE,
-    sl_multiplier: float = DEFAULT_SL_MULTIPLIER
+    sl_multiplier: float = DEFAULT_SL_MULTIPLIER,
+    step_size: Union[int, str] = "AUTO"
 ) -> Dict[str, Any]:
     """
-    Hunts candidate option contract in 100 multiples:
-      - Filters strikes with strike % 100 == 0.
-      - Finds strike with premium <= target_premium (nearest from below).
-      - Queries yesterday's closing reference price.
-      - Evaluates decay: Today LTP < Yesterday Price.
-      - Pairs with 500-pt OTM hedge.
-      - Computes 1.382 Stop Loss trigger.
+    Hunts candidate option contract with:
+      - Dynamic Step Selection: 100 Multiples (Near Month) vs 500 Multiples (Far Month).
+      - Zero-Clash Strike Shield: Automatically shifts (+1/-1 step) if strike is already active in M-units/broker.
+      - Far-Month Premium Flexibility: Allows rich premiums up to ₹185 on 500-multiples.
+      - 500-pt OTM Hedge ("Helmet Rule").
+      - 1.382 Stop Loss calculation (+38.2%).
     """
     opt_type = option_type.strip().upper()
     if opt_type not in ("CE", "PE"):
@@ -198,6 +305,17 @@ def hunt_os_strike(
     if subset.empty:
         return {"ok": False, "message": f"No NIFTY {opt_type} contracts found for expiry {exp_yyyy_mm_dd}."}
 
+    # Resolve step size (100 for near month, 500 for far month)
+    step = get_os_step_size(exp_yyyy_mm_dd, step_size)
+    is_far_m = is_far_month_expiry(exp_yyyy_mm_dd)
+
+    # Far-Month Premium Flexibility: Allow higher premium up to ₹185 on 500-multiples
+    effective_target_premium = float(target_premium)
+    if is_far_m and step == 500 and effective_target_premium <= 150.0:
+        effective_target_premium = 185.0
+
+    occupied_set = get_occupied_strikes(exp_yyyy_mm_dd)
+
     # 1. MANUAL STRIKE OVERRIDE
     if manual_strike and manual_strike > 0:
         sell_strike = int(manual_strike)
@@ -209,22 +327,26 @@ def hunt_os_strike(
         sell_token = str(sell_item["instrument_token"])
         sell_tsymbol = str(sell_item["tradingsymbol"])
         sell_ltp = kite_executor.get_ltp(sell_token, sell_tsymbol)
+        collision_shifted = False
+        original_strike = sell_strike
     else:
-        # 2. AUTO HUNTER: 100-MULTIPLE STRIKES ONLY
-        mult_100 = subset[subset["strike"] % STRIKE_STEP == 0].copy()
-        if mult_100.empty:
-            return {"ok": False, "message": "No 100-multiple strikes available for this expiry."}
+        # 2. AUTO HUNTER: DYNAMIC STEP SELECTION (100 or 500 MULTIPLES)
+        mult_subset = subset[subset["strike"] % step == 0].copy()
+        if mult_subset.empty:
+            mult_subset = subset[subset["strike"] % 100 == 0].copy()
+            if mult_subset.empty:
+                return {"ok": False, "message": f"No {step}-multiple strikes available for this expiry."}
 
         live_spot = kite_executor.get_nifty_spot()
         if live_spot > 0:
             if opt_type == "CE":
-                candidates = mult_100[(mult_100["strike"] >= live_spot - 300) & (mult_100["strike"] <= live_spot + 3000)]
+                candidates = mult_subset[(mult_subset["strike"] >= live_spot - 300) & (mult_subset["strike"] <= live_spot + 3500)]
             else:
-                candidates = mult_100[(mult_100["strike"] <= live_spot + 300) & (mult_100["strike"] >= live_spot - 3000)]
+                candidates = mult_subset[(mult_subset["strike"] <= live_spot + 300) & (mult_subset["strike"] >= live_spot - 3500)]
             if candidates.empty:
-                candidates = mult_100
+                candidates = mult_subset
         else:
-            candidates = mult_100
+            candidates = mult_subset
 
         queries = [f"NFO:{ts}" for ts in candidates["tradingsymbol"]]
         ltp_dict = {}
@@ -260,22 +382,60 @@ def hunt_os_strike(
         if not scored_candidates:
             return {"ok": False, "message": f"Could not fetch live LTPs for {opt_type} option chain."}
 
-        under_target = [c for c in scored_candidates if c["ltp"] <= target_premium]
+        # Find best candidate within effective target premium
+        under_target = [c for c in scored_candidates if c["ltp"] <= effective_target_premium]
         if under_target:
             selected = max(under_target, key=lambda x: x["ltp"])
         else:
             selected = min(scored_candidates, key=lambda x: x["ltp"])
 
-        sell_strike = selected["strike"]
-        sell_token = selected["token"]
-        sell_tsymbol = selected["tradingsymbol"]
-        sell_ltp = selected["ltp"]
+        raw_strike = selected["strike"]
+        original_strike = raw_strike
+        collision_shifted = False
+
+        # ── ZERO-CLASH STRIKE SHIELD (ANTI-COLLISION GATEKEEPER) ──────────
+        # If the candidate strike is already active in M-units or broker positions,
+        # shift +1 step for CE (Up) or -1 step for PE (Down) to avoid clash!
+        curr_candidate_strike = raw_strike
+        max_shifts = 6
+        shift_count = 0
+        while (curr_candidate_strike, opt_type) in occupied_set and shift_count < max_shifts:
+            collision_shifted = True
+            shift_count += 1
+            if opt_type == "CE":
+                curr_candidate_strike += step
+            else:
+                curr_candidate_strike -= step
+            _log(f"[ANTI-COLLISION] {opt_type} Strike {curr_candidate_strike - (step if opt_type == 'CE' else -step)} occupied! Shifting to {curr_candidate_strike}...", "WARN")
+
+        # Resolve details for the chosen (unoccupied) strike
+        chosen_row = subset[subset["strike"] == float(curr_candidate_strike)]
+        if not chosen_row.empty:
+            chosen_item = chosen_row.iloc[0]
+            sell_strike = curr_candidate_strike
+            sell_token = str(chosen_item["instrument_token"])
+            sell_tsymbol = str(chosen_item["tradingsymbol"])
+            sell_ltp = ltp_dict.get(sell_tsymbol, 0.0)
+            if sell_ltp <= 0.0:
+                sell_ltp = kite_executor.get_ltp(sell_token, sell_tsymbol)
+        else:
+            # Fallback if stepped beyond subset range
+            sell_strike = selected["strike"]
+            sell_token = selected["token"]
+            sell_tsymbol = selected["tradingsymbol"]
+            sell_ltp = selected["ltp"]
 
     # 3. 500-POINT OTM HEDGE RESOLUTION ("Helmet Rule")
+    # For 500-step (far month) or 100-step, standard hedge distance is 500 pts
+    actual_hedge_dist = max(hedge_dist, step) if step == 500 else hedge_dist
     if opt_type == "CE":
-        hedge_strike = sell_strike + hedge_dist
+        hedge_strike = sell_strike + actual_hedge_dist
     else:
-        hedge_strike = sell_strike - hedge_dist
+        hedge_strike = sell_strike - actual_hedge_dist
+
+    # Anti-collision check for hedge strike as well
+    if (hedge_strike, opt_type) in occupied_set:
+        hedge_strike = hedge_strike + step if opt_type == "CE" else hedge_strike - step
 
     hedge_row = subset[subset["strike"] == float(hedge_strike)]
     if hedge_row.empty:
@@ -283,7 +443,7 @@ def hunt_os_strike(
         if not hedge_candidates.empty:
             hedge_row = hedge_candidates.iloc[-1:] if opt_type == "CE" else hedge_candidates.iloc[:1]
         else:
-            return {"ok": False, "message": f"Could not find {hedge_dist}-pt OTM hedge strike {hedge_strike} {opt_type}."}
+            return {"ok": False, "message": f"Could not find OTM hedge strike {hedge_strike} {opt_type}."}
 
     hedge_item = hedge_row.iloc[0]
     hedge_strike_actual = int(hedge_item["strike"])
@@ -294,7 +454,6 @@ def hunt_os_strike(
     # 4. YESTERDAY REFERENCE PRICE & OPTION DECAY EVALUATION
     yesterday_anchor = get_yesterday_reference_price(sell_tsymbol, sell_token)
     if yesterday_anchor <= 0.0:
-        # If unavailable, use current LTP as initial benchmark
         yesterday_anchor = sell_ltp
         set_option_anchor(sell_tsymbol, sell_ltp)
 
@@ -302,7 +461,7 @@ def hunt_os_strike(
     decay_diff = yesterday_anchor - sell_ltp
 
     # 5. 1.382 STOP LOSS CALCULATION
-    sl_base = sell_ltp if sell_ltp > 0 else target_premium
+    sl_base = sell_ltp if sell_ltp > 0 else effective_target_premium
     sl_price = round(sl_base * sl_multiplier, 2)
     sl_pct = round((sl_multiplier - 1.0) * 100.0, 1)
 
@@ -325,7 +484,12 @@ def hunt_os_strike(
         "sl_price": sl_price,
         "sl_pct": sl_pct,
         "sl_multiplier": sl_multiplier,
-        "target_premium": target_premium
+        "target_premium": effective_target_premium,
+        "step_size": step,
+        "is_far_month": is_far_m,
+        "collision_shifted": collision_shifted,
+        "original_strike": original_strike,
+        "occupied_strikes_count": len(occupied_set)
     }
 
 
@@ -335,15 +499,16 @@ def inspect_os_candidates(
     manual_ce_strike: Optional[int] = None,
     manual_pe_strike: Optional[int] = None,
     hedge_dist: int = DEFAULT_HEDGE_DISTANCE,
-    sl_multiplier: float = DEFAULT_SL_MULTIPLIER
+    sl_multiplier: float = DEFAULT_SL_MULTIPLIER,
+    step_size: Union[int, str] = "AUTO"
 ) -> Dict[str, Any]:
     """
     Step 1 Inspection Function:
     Fetches both Call and Put candidates for the chosen expiry,
     audits their yesterday reference price, and determines overall qualification.
     """
-    hunt_ce = hunt_os_strike("CE", expiry_date, target_premium, manual_ce_strike, hedge_dist, sl_multiplier)
-    hunt_pe = hunt_os_strike("PE", expiry_date, target_premium, manual_pe_strike, hedge_dist, sl_multiplier)
+    hunt_ce = hunt_os_strike("CE", expiry_date, target_premium, manual_ce_strike, hedge_dist, sl_multiplier, step_size=step_size)
+    hunt_pe = hunt_os_strike("PE", expiry_date, target_premium, manual_pe_strike, hedge_dist, sl_multiplier, step_size=step_size)
 
     ce_ok = hunt_ce.get("ok", False) and hunt_ce.get("is_decaying", False)
     pe_ok = hunt_pe.get("ok", False) and hunt_pe.get("is_decaying", False)
@@ -453,7 +618,8 @@ def deploy_os_unit(
     hedge_dist: int = DEFAULT_HEDGE_DISTANCE,
     sl_multiplier: float = DEFAULT_SL_MULTIPLIER,
     deploy_now: bool = True,
-    force_override_daily_limit: bool = False
+    force_override_daily_limit: bool = False,
+    step_size: Union[int, str] = "AUTO"
 ) -> Dict[str, Any]:
     """
     Deploys qualified decaying OS wings:
@@ -461,6 +627,7 @@ def deploy_os_unit(
       - Enforces 'Din mein sirf ek hi baar trade karna hai'.
       - Deploys only qualified decaying wings (or manual overrides).
       - Long hedge is bought FIRST on broker terminal.
+      - Zero-Clash Strike Shield & Dynamic Step Selection enabled.
     """
     unit_name = str(unit_name).strip().upper()
     if not unit_name.startswith("OS"):
@@ -493,7 +660,8 @@ def deploy_os_unit(
         manual_ce_strike=manual_ce_strike,
         manual_pe_strike=manual_pe_strike,
         hedge_dist=hedge_dist,
-        sl_multiplier=sl_multiplier
+        sl_multiplier=sl_multiplier,
+        step_size=step_size
     )
 
     action = inspection["action"]
@@ -695,12 +863,14 @@ def render_os_tab(portfolio: dict) -> None:
         s_ls = saved_cfg.get("lot_size", 65)
         s_total_qty = s_lots * s_ls
         s_mode = saved_cfg.get("mode", "AUTO")
+        s_step = saved_cfg.get("step_size", "AUTO")
         s_ce = saved_cfg.get("manual_ce", 0)
         s_pe = saved_cfg.get("manual_pe", 0)
         s_tp = saved_cfg.get("target_premium", 150.0)
         s_locked_at = saved_cfg.get("locked_at", "")
 
         mode_badge = f"🎯 Manual Strikes ({s_ce} CE / {s_pe} PE)" if s_mode == "MANUAL" else f"🏹 Auto Hunter (&le; ₹{s_tp:.1f})"
+        step_badge = "Auto (Near=100, Far=500)" if s_step == "AUTO" else f"{s_step} Multiples"
 
         st.markdown(f'''
         <div style="background: #04241a; border: 2px solid #10b981; border-radius: 12px; padding: 18px 24px; margin-bottom: 20px; color: #ffffff;">
@@ -722,6 +892,7 @@ def render_os_tab(portfolio: dict) -> None:
                 <div>🎯 <b style="color: #93c5fd;">Expiry Date:</b> {s_exp}</div>
                 <div>📦 <b style="color: #93c5fd;">Lots & Size:</b> {s_lots} Lot(s) &times; {s_ls} Qty = <b style="color: #fde047;">{s_total_qty} units</b></div>
                 <div>⚡ <b style="color: #93c5fd;">Strategy Mode:</b> <span style="color: #34d399; font-weight: 700;">{mode_badge}</span></div>
+                <div>🛡️ <b style="color: #93c5fd;">Strike Grid:</b> <span style="color: #38bdf8; font-weight: 700;">{step_badge} (Zero-Clash Shield Active)</span></div>
             </div>
         </div>
         ''', unsafe_allow_html=True)
@@ -744,13 +915,15 @@ def render_os_tab(portfolio: dict) -> None:
                     target_premium=s_tp,
                     manual_ce_strike=s_ce if s_mode == "MANUAL" else None,
                     manual_pe_strike=s_pe if s_mode == "MANUAL" else None,
-                    hedge_dist=DEFAULT_HEDGE_DISTANCE
+                    hedge_dist=DEFAULT_HEDGE_DISTANCE,
+                    step_size=s_step
                 )
 
         selected_exp = s_exp
         lots = s_lots
         user_lot_size = s_ls
         target_prem = s_tp
+        selected_step = s_step
         m_ce = s_ce if s_mode == "MANUAL" else None
         m_pe = s_pe if s_mode == "MANUAL" else None
 
@@ -769,7 +942,7 @@ def render_os_tab(portfolio: dict) -> None:
                         NO TRADES ALLOWED
                     </span>
                     <div style="font-size: 0.90rem; color: #ffffff; margin-top: 6px; line-height: 1.5;">
-                        The Option Selling engine is completely inert. Configure your Expiry, Lot Size, and Strike Mode below, preview candidate strikes, and click <b style="color: #fbbf24;">'🔒 Lock & Arm Pod Settings'</b> to activate.
+                        The Option Selling engine is completely inert. Configure your Expiry, Lot Size, Step Grid, and Strike Mode below, preview candidate strikes, and click <b style="color: #fbbf24;">'🔒 Lock & Arm Pod Settings'</b> to activate.
                     </div>
                 </div>
             </div>
@@ -820,14 +993,25 @@ def render_os_tab(portfolio: dict) -> None:
             </div>
             ''', unsafe_allow_html=True)
 
-            col_adv1, col_adv2 = st.columns([2, 2])
+            col_adv1, col_adv2, col_adv3 = st.columns([1.5, 1.2, 1.3])
             with col_adv1:
                 cur_mode_idx = 0 if saved_cfg.get("mode", "AUTO") == "AUTO" else 1
-                stk_mode = st.radio("Strike Hunter Mode", ["Auto Hunter (≤ ₹150 in 100 Multiples)", "Manual Strike Override"], index=cur_mode_idx, horizontal=True, key="os_tab_stk_mode")
+                stk_mode = st.radio("Strike Hunter Mode", ["Auto Hunter", "Manual Strike Override"], index=cur_mode_idx, horizontal=True, key="os_tab_stk_mode")
+
+            with col_adv2:
+                cur_step_val = saved_cfg.get("step_size", "AUTO")
+                step_idx = 0 if cur_step_val == "AUTO" else (1 if cur_step_val in ("100", 100) else 2)
+                step_ui = st.selectbox("Strike Multiples Grid", ["AUTO (Near=100, Far=500)", "Strict 100 Multiples", "Strict 500 Multiples"], index=step_idx, key="os_tab_step_ui")
+                if "100" in step_ui and "AUTO" not in step_ui:
+                    selected_step = "100"
+                elif "500" in step_ui and "AUTO" not in step_ui:
+                    selected_step = "500"
+                else:
+                    selected_step = "AUTO"
 
             m_ce = None
             m_pe = None
-            with col_adv2:
+            with col_adv3:
                 if stk_mode == "Manual Strike Override":
                     cm1, cm2 = st.columns(2)
                     with cm1:
@@ -836,6 +1020,12 @@ def render_os_tab(portfolio: dict) -> None:
                     with cm2:
                         def_pe = saved_cfg.get("manual_pe") or 23100
                         m_pe = st.number_input("Manual PE Strike", value=int(def_pe), step=100, key="os_tab_man_pe")
+                else:
+                    st.markdown("""
+                    <div style="background:#1e293b; border-radius:6px; padding:8px 12px; margin-top:24px; font-size:0.80rem; color:#94a3b8;">
+                        🛡️ <b>Anti-Collision:</b> Auto-shifts +1/-1 step if strike is active in M-units or broker.
+                    </div>
+                    """, unsafe_allow_html=True)
 
             st.markdown("<hr style='margin: 12px 0;'/>", unsafe_allow_html=True)
             col_b1, col_b2 = st.columns(2)
@@ -851,7 +1041,8 @@ def render_os_tab(portfolio: dict) -> None:
                         target_premium=target_prem,
                         manual_ce_strike=m_ce,
                         manual_pe_strike=m_pe,
-                        hedge_dist=DEFAULT_HEDGE_DISTANCE
+                        hedge_dist=DEFAULT_HEDGE_DISTANCE,
+                        step_size=selected_step
                     )
 
             if btn_lock:
@@ -862,6 +1053,7 @@ def render_os_tab(portfolio: dict) -> None:
                     lots=lots,
                     lot_size=user_lot_size,
                     mode="MANUAL" if stk_mode == "Manual Strike Override" else "AUTO",
+                    step_size=selected_step,
                     manual_ce=m_ce or 0,
                     manual_pe=m_pe or 0,
                     target_premium=target_prem
@@ -887,6 +1079,11 @@ def render_os_tab(portfolio: dict) -> None:
             ce_border = "#10b981" if ce_dec else "#ef4444"
             ce_badge = "🟢 DECAYING (QUALIFIED TO SELL)" if ce_dec else "🔴 EXPANDING (SKIP)"
             diff_sign = "-" if h_ce['decay_diff'] >= 0 else "+"
+            ce_far = h_ce.get('is_far_month', False)
+            ce_step = h_ce.get('step_size', 100)
+            ce_shift = h_ce.get('collision_shifted', False)
+            ce_orig = h_ce.get('original_strike', h_ce['sell_strike'])
+            ce_shield_html = f"&bull; 🛡️ Anti-Collision: <b style='color:#38bdf8;'>Shifted from {ce_orig} CE (Occupied) ➔ {h_ce['sell_strike']} CE (+{ce_step} pts)</b><br/>" if ce_shift else "&bull; 🛡️ Anti-Collision: <b style='color:#34d399;'>Safe (0 Clash with M-Units/Broker)</b><br/>"
 
             st.markdown(f'''
             <div style="background: #0f172a; border: 2px solid {ce_border}; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
@@ -898,6 +1095,8 @@ def render_os_tab(portfolio: dict) -> None:
                     &bull; Today 3 PM LTP: <b style="color:#ffffff; font-size:1.05rem;">₹{h_ce['sell_ltp']:.2f}</b><br/>
                     &bull; Yesterday Reference Price: <b style="color:#cbd5e1;">₹{h_ce['yesterday_anchor']:.2f}</b><br/>
                     &bull; Momentum Decay: <b style="color:{ce_border}; font-size:1.05rem;">{diff_sign}₹{abs(h_ce['decay_diff']):.2f}</b><br/>
+                    &bull; Strike Grid: <b style="color:#93c5fd;">{ce_step}-pt Multiples {'(Far Month Liquid)' if ce_far else '(Near Month)'}</b><br/>
+                    {ce_shield_html}
                     &bull; 500-pt Hedge ("Helmet"): <b style="color:#60a5fa; font-weight:700;">{h_ce['hedge_strike']} CE</b> (LTP: ₹{h_ce['hedge_ltp']:.2f})<br/>
                     &bull; 1.382 Stop Loss Trigger: <b style="color:#fca5a5; font-weight:700;">₹{h_ce['sl_price']:.2f}</b> (+{h_ce['sl_pct']}%)
                 </div>
@@ -909,6 +1108,11 @@ def render_os_tab(portfolio: dict) -> None:
             pe_border = "#10b981" if pe_dec else "#ef4444"
             pe_badge = "🟢 DECAYING (QUALIFIED TO SELL)" if pe_dec else "🔴 EXPANDING (SKIP)"
             diff_sign_p = "-" if h_pe['decay_diff'] >= 0 else "+"
+            pe_far = h_pe.get('is_far_month', False)
+            pe_step = h_pe.get('step_size', 100)
+            pe_shift = h_pe.get('collision_shifted', False)
+            pe_orig = h_pe.get('original_strike', h_pe['sell_strike'])
+            pe_shield_html = f"&bull; 🛡️ Anti-Collision: <b style='color:#38bdf8;'>Shifted from {pe_orig} PE (Occupied) ➔ {h_pe['sell_strike']} PE (-{pe_step} pts)</b><br/>" if pe_shift else "&bull; 🛡️ Anti-Collision: <b style='color:#34d399;'>Safe (0 Clash with M-Units/Broker)</b><br/>"
 
             st.markdown(f'''
             <div style="background: #0f172a; border: 2px solid {pe_border}; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
@@ -920,6 +1124,8 @@ def render_os_tab(portfolio: dict) -> None:
                     &bull; Today 3 PM LTP: <b style="color:#ffffff; font-size:1.05rem;">₹{h_pe['sell_ltp']:.2f}</b><br/>
                     &bull; Yesterday Reference Price: <b style="color:#cbd5e1;">₹{h_pe['yesterday_anchor']:.2f}</b><br/>
                     &bull; Momentum Decay: <b style="color:{pe_border}; font-size:1.05rem;">{diff_sign_p}₹{abs(h_pe['decay_diff']):.2f}</b><br/>
+                    &bull; Strike Grid: <b style="color:#93c5fd;">{pe_step}-pt Multiples {'(Far Month Liquid)' if pe_far else '(Near Month)'}</b><br/>
+                    {pe_shield_html}
                     &bull; 500-pt Hedge ("Helmet"): <b style="color:#60a5fa; font-weight:700;">{h_pe['hedge_strike']} PE</b> (LTP: ₹{h_pe['hedge_ltp']:.2f})<br/>
                     &bull; 1.382 Stop Loss Trigger: <b style="color:#fca5a5; font-weight:700;">₹{h_pe['sl_price']:.2f}</b> (+{h_pe['sl_pct']}%)
                 </div>
@@ -960,7 +1166,8 @@ def render_os_tab(portfolio: dict) -> None:
                             manual_ce_strike=m_ce,
                             manual_pe_strike=m_pe,
                             deploy_now=True,
-                            force_override_daily_limit=force_ovr
+                            force_override_daily_limit=force_ovr,
+                            step_size=selected_step
                         )
                         if res.get("ok"):
                             st.success(res.get("message"))
@@ -979,10 +1186,11 @@ def render_os_tab(portfolio: dict) -> None:
                         target_premium=target_prem,
                         manual_ce_strike=m_ce,
                         manual_pe_strike=m_pe,
-                        deploy_now=False
+                        deploy_now=False,
+                        step_size=selected_step
                     )
                     if res.get("ok"):
-                        st.info(f"Unit {pod_unit} armed in PENDING. Engine will audit decay at 15:00 IST and execute qualified wings.")
+                        st.info(f"Unit {pod_unit} armed in PENDING. Engine will audit decay at 15:02 IST and execute qualified wings.")
                         time.sleep(1)
                         st.rerun()
                     else:

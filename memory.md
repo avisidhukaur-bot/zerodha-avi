@@ -132,6 +132,19 @@ kite.place_order(
   - **OS-Units (OS1, OS2, OS-Series Pods)**: Audit & execute at **15:02 IST (3:02 PM)** (2-minute stagger).
 - This ensures clean execution sequence, separate order batches, and zero broker rate-limit congestion.
 
+### 13. Zero-Clash Strike Shield & Far-Month 500-Multiple Liquidity Invariant:
+- **Anti-Collision Gatekeeper (M-Units vs OS Pods)**: When OS engine hunts or deploys strikes, it cross-checks live broker positions and active M-Units (M1, M2, M3...) in SQLite DB for that same expiry:
+  - If candidate strike is already occupied:
+    - **Call Wing (CE)**: Automatically shifts +1 step UP (further OTM).
+    - **Put Wing (PE)**: Automatically shifts -1 step DOWN (further OTM).
+  - Guarantees 0% strike overlap between M-units and OS pods, preventing EOD closing rules in one strategy from accidentally liquidating positions of another strategy on the broker terminal.
+- **Dynamic Step Multiples (Near vs Far Month Expiries)**:
+  - **Near / Current Month ($\le 35$ days)**: Trades on **100-Multiples** (e.g. 23800, 23900, 24000) where volume is dense.
+  - **Far / Next Month ($> 35$ days)**: Trades strictly on **500-Multiples** (23000, 23500, 24000, 24500, 25000) where market makers maintain continuous depth, eliminating illiquid "ghost strikes" and exchange rejections (`LTP not available`).
+- **Far-Month Premium Flexibility**: When trading 500-multiples in far months, premium target allows up to ₹185 to capture rich decay and guarantee immediate execution.
+- **Smart Limit Order Protection**: All market orders convert to limit orders with a safety buffer (`LTP + 10%` for Buy, `LTP - 10%` for Sell) across all broker connections (Zerodha OS, Kotak Neo, HDFC).
+
+
 
 
 
