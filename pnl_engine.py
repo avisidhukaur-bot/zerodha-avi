@@ -849,11 +849,14 @@ def run_pnl_cycle() -> dict:
                             strike_id = s["strike_id"]
                             anchor_price = float(s["anchor_price"])
 
-                            # MODE 2 GUARD (3:00 PM Auto Mode):
-                            # In Mode 2 (Automated 3:00 PM Mode), automated background entry is held until 15:00 IST.
+                            # MODE 2 GUARD (Time-Staggered Anti-Overcrowding):
+                            # M-units (M1, M2, M3...) execute at 15:00 IST.
+                            # OS-units (OS1, OS2...) execute at 15:02 IST (Staggered by 2 mins to prevent broker order clashes).
                             # Manual entry, modifications, and cuts from Dashboard remain 100% available anytime.
                             auto_entry_mode = db.get("auto_entry_mode", "MODE_2_3PM").upper()
-                            if auto_entry_mode in ("MODE_2_3PM", "3PM_ONLY") and now_time_str < "15:00":
+                            is_os_unit = (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")
+                            target_auto_time = "15:02" if is_os_unit else "15:00"
+                            if auto_entry_mode in ("MODE_2_3PM", "3PM_ONLY") and now_time_str < target_auto_time:
                                 continue
 
                             # MASTER REGIME GOVERNOR CHECK (V3.0 Multi-Unit Pod Gating)

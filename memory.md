@@ -126,6 +126,13 @@ kite.place_order(
 - **Mode 2 (Default Active Setting)**: Background automated entry runs strictly at around **3:00 PM (15:00 IST)**. The engine does NOT auto-enter new trades during morning/afternoon hours without 3:00 PM confirmation.
 - **Full Intraday Manual Freedom**: The user/operator can manually execute any trade, modify targets/SL, or square off / cut positions at ANY time of day from the Dashboard console without restriction.
 
+### 12. Time-Staggered Anti-Overcrowding Invariant (M @ 3:00 PM vs OS @ 3:02 PM):
+- **Anti-Overcrowding Architecture**: To eliminate Kite API rate limits, order collisions, and broker order queue overcrowding:
+  - **M-Units (M1, M2, M3... Anchor Pods)**: Audit & execute at **15:00 IST (3:00 PM)**.
+  - **OS-Units (OS1, OS2, OS-Series Pods)**: Audit & execute at **15:02 IST (3:02 PM)** (2-minute stagger).
+- This ensures clean execution sequence, separate order batches, and zero broker rate-limit congestion.
+
+
 
 
 

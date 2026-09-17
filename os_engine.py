@@ -576,13 +576,13 @@ def deploy_os_unit(
 
 def evaluate_os_3pm_decision() -> Dict[str, Any]:
     """
-    Evaluates running trades and candidate options at 15:00 IST:
+    Evaluates running trades and candidate options at 15:02 IST (Staggered 2 min after M-series 15:00):
       1. Running Trades:
-         - Today 3 PM LTP < Yesterday 3 PM Price => CONTINUATION (Hold for Day 2, 3, 4).
-         - Today 3 PM LTP >= Yesterday 3 PM Price => AUTO-CLOSE (Cut above line).
-      2. Rolls over today's 3:00 PM price as tomorrow's anchor.
+         - Today 3:02 PM LTP < Yesterday 3:02 PM Price => CONTINUATION (Hold for Day 2, 3, 4).
+         - Today 3:02 PM LTP >= Yesterday 3:02 PM Price => AUTO-CLOSE (Cut above line).
+      2. Rolls over today's 3:02 PM price as tomorrow's anchor.
     """
-    _log("⏰ 15:00 IST: Running 3:00 PM Option Selling Line Audit...", "DECISION")
+    _log("⏰ 15:02 IST: Running 3:02 PM Option Selling Line Audit (Staggered Execution)...", "DECISION")
 
     active_blocks = db.get_all_blocks(status_filter="ACTIVE")
     os_blocks = [b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")]
