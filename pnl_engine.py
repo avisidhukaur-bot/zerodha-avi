@@ -849,6 +849,13 @@ def run_pnl_cycle() -> dict:
                             strike_id = s["strike_id"]
                             anchor_price = float(s["anchor_price"])
 
+                            # MODE 2 GUARD (3:00 PM Auto Mode):
+                            # In Mode 2 (Automated 3:00 PM Mode), automated background entry is held until 15:00 IST.
+                            # Manual entry, modifications, and cuts from Dashboard remain 100% available anytime.
+                            auto_entry_mode = db.get("auto_entry_mode", "MODE_2_3PM").upper()
+                            if auto_entry_mode in ("MODE_2_3PM", "3PM_ONLY") and now_time_str < "15:00":
+                                continue
+
                             # MASTER REGIME GOVERNOR CHECK (V3.0 Multi-Unit Pod Gating)
                             is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(s["option_type"], block=b)
                             if not is_allowed:

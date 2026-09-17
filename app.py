@@ -396,6 +396,22 @@ def render_sidebar():
             db.set("algo_running", "ON" if algo_toggle else "OFF")
             st.rerun()
 
+        # ── Auto Execution Mode: Mode 2 (3:00 PM Auto) vs Mode 1 (Real-Time Intraday) ──
+        curr_auto_mode = db.get("auto_entry_mode", "MODE_2_3PM").upper()
+        mode_idx = 0 if curr_auto_mode == "MODE_2_3PM" else 1
+        sel_mode = st.radio(
+            "Auto Execution Timing",
+            options=["Mode 2: 3:00 PM Auto Mode", "Mode 1: Real-Time Intraday"],
+            index=mode_idx,
+            key="sel_auto_entry_mode",
+            help="Mode 2: Background auto-entry triggers at 15:00 IST. Mode 1: Auto-entry triggers immediately when decaying. (Manual trade/exit available anytime in both modes)."
+        )
+        new_mode_val = "MODE_2_3PM" if "Mode 2" in sel_mode else "MODE_1_INTRADAY"
+        if new_mode_val != curr_auto_mode:
+            db.set("auto_entry_mode", new_mode_val)
+            _flash(f"Switched to {sel_mode}", "success")
+            st.rerun()
+
         alerts_on = db.get("NOTIFICATIONS_ENABLED", "YES") == "YES"
         alerts_toggle = st.toggle(
             "Master Alerts Enabled",

@@ -122,5 +122,10 @@ kite.place_order(
   3. Activate Stop-Loss trigger
 - **Continuous Monitoring**: The engine runs this check every 30 seconds automatically in the background as long as `algo_running = ON`.
 
+### 11. Mode 2 Default Invariant (3:00 PM Auto Execution with Full Manual Intraday Freedom):
+- **Mode 2 (Default Active Setting)**: Background automated entry runs strictly at around **3:00 PM (15:00 IST)**. The engine does NOT auto-enter new trades during morning/afternoon hours without 3:00 PM confirmation.
+- **Full Intraday Manual Freedom**: The user/operator can manually execute any trade, modify targets/SL, or square off / cut positions at ANY time of day from the Dashboard console without restriction.
+
+
 
 

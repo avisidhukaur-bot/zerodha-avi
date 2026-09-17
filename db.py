@@ -1679,10 +1679,14 @@ def init_db() -> None:
         "comm_stop_loss_pct"   : "0.0",
         "comm_carry_forward"   : "NO",
         "comm_last_check_candle_time": "",
+        "auto_entry_mode"      : "MODE_2_3PM",
     }
     for k, v in defaults.items():
         if not get(k):
             set(k, v)
+
+    # Force Mode 2 as current active operational setting
+    set("auto_entry_mode", "MODE_2_3PM")
 
     # ── Upgrade max_strikes_per_block from 5 to 50 if currently set to 5 ────
     if get("max_strikes_per_block") == "5":
