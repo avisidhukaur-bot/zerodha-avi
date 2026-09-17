@@ -800,6 +800,25 @@ class KiteExecutor:
             print(f"[EXECUTOR] Exception in get_positions: {e}")
             return []
 
+    def get_net_position_qty(self, trading_symbol: str) -> int:
+        """
+        BROKER GROUND TRUTH: Queries Zerodha Kite directly to return the exact real-time
+        net quantity currently open on the broker for trading_symbol.
+        Returns:
+            int: e.g. -65 (short 1 lot), +65 (long 1 lot), 0 (flat/no position).
+        """
+        if not self.ensure_logged_in():
+            return 0
+        try:
+            positions = self.get_positions()
+            sym_clean = trading_symbol.strip().upper()
+            for pos in positions:
+                if pos.get("tradingsymbol", "").strip().upper() == sym_clean:
+                    return int(pos.get("quantity", 0) or 0)
+        except Exception as e:
+            print(f"[EXECUTOR] Error querying net position for {trading_symbol}: {e}")
+        return 0
+
     def get_live_ltp(self, symbol_token: str, trading_symbol: str = "") -> float:
         if not self.ensure_logged_in():
             return 0.0

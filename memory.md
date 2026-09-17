@@ -103,3 +103,8 @@ kite.place_order(
 ### 7. 5-Minute Auto Re-Entry Guard:
 - When an SL-hit strike cools down below its Anchor price (LTP < Anchor), a 5-minute countdown starts.
 - If it stays continuously below anchor for 5 minutes, auto re-entry executes using the retained hedge.
+
+### 8. Broker-First Ground Truth Invariant (Zero-Assumption Trading):
+- **Broker is the Single Source of Truth (SSOT)**: Before placing ANY order (Entry, Re-Entry, Scaling, Exit), the engine directly queries `kite.positions()['net']` to verify the live quantity held on the broker.
+- **Zero Assumption**: The engine NEVER assumes open quantity from local DB alone. If the target short or hedge quantity is already open on the broker, duplicate orders are strictly blocked and DB is synchronized.
+

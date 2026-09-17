@@ -1264,15 +1264,28 @@ def reconcile_active_blocks() -> int:
 
 
 def _execute_sell_leg(strike: dict, qty: int) -> dict:
-    """Internal: resolves symbol and places SELL order."""
+    """Internal: resolves symbol and places SELL order with strict Broker Ground-Truth verification."""
     symbol_info = _resolve_symbol(strike)
     if not symbol_info:
         return {"ok": False, "message": f"Could not resolve symbol for {strike['strike_price']} {strike['option_type']}."}
 
-    # Reconciliation Guard: Check if matching order exists on broker first
+    tsymbol = symbol_info["trading_symbol"]
+    stoken = symbol_info["token"]
+
+    # ── BROKER GROUND TRUTH CHECK 1: Net Open Position on Broker ──
+    # If the broker ALREADY holds the short position (e.g. net_qty <= -qty),
+    # do NOT place another sell order! Re-use existing broker position.
+    broker_net_qty = kite_executor.get_net_position_qty(tsymbol)
+    if broker_net_qty <= -qty:
+        _log(f"[BROKER-GROUND-TRUTH] Strike {tsymbol} already held short on broker (Net Qty: {broker_net_qty}). Blocking duplicate SELL order.", "INFO")
+        fill_price = kite_executor.get_ltp(stoken, tsymbol) or strike["anchor_price"]
+        db.create_leg(strike["strike_id"], fill_price, "BROKER_EXISTING")
+        return {"ok": True, "order_id": "BROKER_EXISTING", "fill_price": fill_price}
+
+    # ── BROKER GROUND TRUTH CHECK 2: Order Book for Today ──
     order_id = _find_existing_broker_order(
-        token=symbol_info["token"],
-        trading_symbol=symbol_info["trading_symbol"],
+        token=stoken,
+        trading_symbol=tsymbol,
         transaction_type="SELL",
         qty=qty
     )
@@ -1281,8 +1294,8 @@ def _execute_sell_leg(strike: dict, qty: int) -> dict:
         filled = True
     else:
         order_id, filled = kite_executor.execute_sell_and_confirm(
-            trading_symbol = symbol_info["trading_symbol"],
-            symbol_token   = symbol_info["token"],
+            trading_symbol = tsymbol,
+            symbol_token   = stoken,
             qty            = qty,
         )
 
@@ -1293,7 +1306,7 @@ def _execute_sell_leg(strike: dict, qty: int) -> dict:
     # Record leg fill using actual execution price
     fill_price = kite_executor.get_order_fill_price(order_id)
     if fill_price <= 0:
-        fill_price = kite_executor.get_ltp(symbol_info["token"], symbol_info["trading_symbol"])
+        fill_price = kite_executor.get_ltp(stoken, tsymbol)
     if fill_price <= 0:
         fill_price = strike["anchor_price"]
     db.create_leg(strike["strike_id"], fill_price, order_id)
@@ -1302,15 +1315,28 @@ def _execute_sell_leg(strike: dict, qty: int) -> dict:
 
 
 def _execute_buy_leg(strike: dict, qty: int) -> dict:
-    """Internal: resolves symbol and places BUY order."""
+    """Internal: resolves symbol and places BUY order with strict Broker Ground-Truth verification."""
     symbol_info = _resolve_symbol(strike)
     if not symbol_info:
         return {"ok": False, "message": f"Could not resolve symbol for {strike['strike_price']} {strike['option_type']}."}
 
-    # Reconciliation Guard: Check if matching order exists on broker first
+    tsymbol = symbol_info["trading_symbol"]
+    stoken = symbol_info["token"]
+
+    # ── BROKER GROUND TRUTH CHECK 1: Net Open Position on Broker ──
+    # If the broker ALREADY holds the long hedge position (e.g. net_qty >= qty),
+    # do NOT buy another hedge! Re-use existing broker position.
+    broker_net_qty = kite_executor.get_net_position_qty(tsymbol)
+    if broker_net_qty >= qty:
+        _log(f"[BROKER-GROUND-TRUTH] Hedge {tsymbol} already held long on broker (Net Qty: {broker_net_qty}). Reusing existing hedge without new buy order.", "INFO")
+        fill_price = kite_executor.get_ltp(stoken, tsymbol) or strike["anchor_price"]
+        db.create_leg(strike["strike_id"], fill_price, "BROKER_EXISTING")
+        return {"ok": True, "order_id": "BROKER_EXISTING", "fill_price": fill_price}
+
+    # ── BROKER GROUND TRUTH CHECK 2: Order Book for Today ──
     order_id = _find_existing_broker_order(
-        token=symbol_info["token"],
-        trading_symbol=symbol_info["trading_symbol"],
+        token=stoken,
+        trading_symbol=tsymbol,
         transaction_type="BUY",
         qty=qty
     )
@@ -1319,8 +1345,8 @@ def _execute_buy_leg(strike: dict, qty: int) -> dict:
         filled = True
     else:
         order_id, filled = kite_executor.execute_buy_and_confirm(
-            trading_symbol = symbol_info["trading_symbol"],
-            symbol_token   = symbol_info["token"],
+            trading_symbol = tsymbol,
+            symbol_token   = stoken,
             qty            = qty,
         )
 
@@ -1330,7 +1356,7 @@ def _execute_buy_leg(strike: dict, qty: int) -> dict:
 
     fill_price = kite_executor.get_order_fill_price(order_id)
     if fill_price <= 0:
-        fill_price = kite_executor.get_ltp(symbol_info["token"], symbol_info["trading_symbol"])
+        fill_price = kite_executor.get_ltp(stoken, tsymbol)
     if fill_price <= 0:
         fill_price = strike["anchor_price"]
     db.create_leg(strike["strike_id"], fill_price, order_id)

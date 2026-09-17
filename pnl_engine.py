@@ -775,6 +775,16 @@ def run_pnl_cycle() -> dict:
                             if not hedge_strike or hedge_strike["status"] not in ("OPEN", "PENDING", "CLOSED"):
                                 continue
                             
+                            # BROKER GROUND TRUTH PRE-CHECK: Prevent duplicate re-entry if position already open on broker
+                            sym_info = bm._resolve_symbol(s)
+                            if sym_info:
+                                b_qty = kite_executor.get_net_position_qty(sym_info["trading_symbol"])
+                                if b_qty != 0:
+                                    _log(f"[BROKER-GROUND-TRUTH] Strike {sym_info['trading_symbol']} already held on broker (Qty: {b_qty}). Syncing DB to OPEN and skipping re-entry.", "INFO")
+                                    db.update_strike_status(strike_id, "OPEN")
+                                    db.update_strike_trade_state(strike_id, "ACTIVE")
+                                    continue
+
                             ltp = fetch_ltp(s, force_refresh=True)
                             if ltp <= 0:
                                 continue
@@ -844,6 +854,16 @@ def run_pnl_cycle() -> dict:
                             if not is_allowed:
                                 _log(f"[PENDING-ENTRY-MUTED] Strike {s['strike_price']} {s['option_type']} (Unit {b.get('anchor_unit_name', 'M')}): {regime_reason}. Skipping auto-entry.", "CYCLE")
                                 continue
+
+                            # BROKER GROUND TRUTH PRE-CHECK: Prevent duplicate entry if position already open on broker
+                            sym_info = bm._resolve_symbol(s)
+                            if sym_info:
+                                b_qty = kite_executor.get_net_position_qty(sym_info["trading_symbol"])
+                                if b_qty != 0:
+                                    _log(f"[BROKER-GROUND-TRUTH] Strike {sym_info['trading_symbol']} already held on broker (Qty: {b_qty}). Syncing DB to OPEN and skipping auto-entry.", "INFO")
+                                    db.update_strike_status(strike_id, "OPEN")
+                                    db.update_strike_trade_state(strike_id, "ACTIVE")
+                                    continue
 
                             ltp = fetch_ltp(s, force_refresh=True)
                             if ltp <= 0:
