@@ -40,6 +40,7 @@ files_to_deploy = [
     "commodity_executor.py",
     "equity_200dma_engine.py",
     "test_os_engine.py",
+    "test_os_strike_shield.py",
     "test_v5_old_and_gold.py",
     "test_strict_regime_execution_guard.py",
     "OS_OPTION_SELLING_PROPOSAL.html",
@@ -72,7 +73,7 @@ def run_cmd(cmd, desc):
         print("STDERR:", err)
 
 # 1. Run unit tests on VPS
-run_cmd(f"cd {remote_base} && python3 -m unittest test_os_engine.py test_v5_old_and_gold.py", "RUN UNIT TESTS ON VPS")
+run_cmd(f"cd {remote_base} && python3 -m unittest test_os_engine.py test_os_strike_shield.py test_v5_old_and_gold.py", "RUN UNIT TESTS ON VPS")
 
 # 2. Restart services
 run_cmd("systemctl restart zerodha_engine && systemctl restart zerodha_dashboard", "RESTART SYSTEMD SERVICES")

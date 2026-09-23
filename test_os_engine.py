@@ -42,7 +42,8 @@ class TestOSEngine(unittest.TestCase):
     def setUp(self):
         db.init_db()
 
-    def test_01_100_multiple_strike_hunter_and_hedge(self):
+    @patch("os_engine.get_occupied_strikes", return_value=set())
+    def test_01_100_multiple_strike_hunter_and_hedge(self, mock_occ):
         """Verify candidate strikes are strictly multiples of 100 with 500-pt hedge and 1.382 SL."""
         expiries = os_engine.get_nifty_expiry_dates()
         self.assertTrue(len(expiries) > 0, "Should have valid Nifty option expiries")
@@ -66,7 +67,8 @@ class TestOSEngine(unittest.TestCase):
         expected_pe_sl = round(hunt_pe["sell_ltp"] * 1.382, 2)
         self.assertEqual(hunt_pe["sl_price"], expected_pe_sl, "PE Stop Loss must follow 1.382 rule")
 
-    def test_02_manual_strike_override(self):
+    @patch("os_engine.get_occupied_strikes", return_value=set())
+    def test_02_manual_strike_override(self, mock_occ):
         """Verify operator can manually specify a strike in 100 multiples."""
         expiries = os_engine.get_nifty_expiry_dates()
         test_exp = expiries[0]
@@ -207,6 +209,39 @@ class TestOSEngine(unittest.TestCase):
             db.set_os_lot_size(orig_ls)
 
 
+    def test_09_wipeout_os_unit_now(self):
+        """Verify wipeout_os_unit_now closes open strikes, deletes block from DB, and unlocks settings."""
+        test_exp = "2026-10-29"
+        unit = "OS_WIPEOUT_TEST"
+
+        # 1. Create a block for this unit with a sell strike and hedge
+        b_res = bm.create_block(expiry_date=test_exp, expiry_type="MONTHLY", side_type="BOTH", anchor_unit_name=unit)
+        self.assertTrue(b_res["ok"])
+        bid = b_res["block_id"]
+
+        # Add strikes
+        s1 = db.add_strike(bid, 24100, "CE", "SELL", 120.0, lots=1, expiry_date=test_exp)
+        s2 = db.add_strike(bid, 24600, "CE", "HEDGE_BUY", 30.0, lots=1, expiry_date=test_exp)
+
+        db.set_os_settings(locked=True, expiry_date=test_exp, lots=1)
+        db.mark_os_traded_today(unit)
+
+        self.assertTrue(db.is_os_settings_locked())
+        self.assertTrue(db.has_os_traded_today(unit))
+        self.assertIsNotNone(db.get_block(bid))
+
+        # 2. Execute wipeout without live broker sync
+        w_res = os_engine.wipeout_os_unit_now(unit, sync_live=False)
+        self.assertTrue(w_res["ok"])
+        self.assertIn("completely wiped out and reset", w_res["message"])
+
+        # 3. Assert DB cleaned up
+        self.assertFalse(db.get_block(bid))
+        self.assertFalse(db.is_os_settings_locked())
+        self.assertFalse(db.has_os_traded_today(unit))
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

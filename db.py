@@ -589,6 +589,33 @@ def unlock_os_settings() -> None:
     set("os_settings_locked", "0")
 
 
+def wipeout_os_pod(unit_name: str = "OS1") -> bool:
+    """
+    Completely purges/wipes out an OS pod (OS1, OS2, etc.) from the database:
+      1. Force deletes all associated blocks, strikes, legs, and trades.
+      2. Resets the daily trade flag.
+      3. Unlocks OS settings returning UI to clean Draft Mode.
+    """
+    try:
+        clean_u = (unit_name or "OS1").strip().upper()
+        conn = _conn()
+        cur = conn.cursor()
+        cur.execute("SELECT block_id FROM blocks WHERE UPPER(anchor_unit_name)=?", (clean_u,))
+        bids = [r["block_id"] for r in cur.fetchall()]
+        conn.close()
+
+        for bid in bids:
+            force_delete_block(bid)
+
+        reset_os_daily_trade_flag(clean_u)
+        unlock_os_settings()
+        print(f"[DB] OK OS Pod {clean_u} wiped out successfully (blocks deleted: {bids}).")
+        return True
+    except Exception as e:
+        print(f"[DB] ERR wipeout_os_pod({unit_name}) failed: {e}")
+        return False
+
+
 def get_next_os_unit_name(expiry_date: str = None) -> str:
     """Finds the next OS unit identifier (OS1, OS2, OS3...) for active blocks."""
     try:
@@ -1611,7 +1638,16 @@ def check_and_expire_blocks() -> list:
     active_blocks = get_all_blocks(status_filter="ACTIVE")
     for block in active_blocks:
         try:
-            exp_date = datetime.strptime(block["expiry_date"], "%d-%b-%Y").date()
+            exp_str = str(block["expiry_date"]).strip()
+            exp_date = None
+            for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+                try:
+                    exp_date = datetime.strptime(exp_str, fmt).date()
+                    break
+                except ValueError:
+                    pass
+            if not exp_date:
+                raise ValueError(f"Unknown format for date string: '{exp_str}'")
             if exp_date < today:
                 update_block_status(block["block_id"], "EXPIRED")
                 expired_ids.append(block["block_id"])

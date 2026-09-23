@@ -621,15 +621,16 @@ def run_pnl_cycle() -> dict:
             now_time_str = now_ist.strftime("%H:%M")
             today_str = now_ist.strftime("%Y-%m-%d")
             
-            # ── 3:00 PM Continuation Decision Check (Runs once daily at 15:00 IST) ──
+            # ── 14:57–15:00 IST Continuation Decision Check (Runs once daily before 3:00 PM VWAP session) ──
             last_3pm_date = db.get("last_3pm_continuation_date", "")
-            if now_time_str >= "15:00" and now_time_str < "15:30" and last_3pm_date != today_str:
-                _log("⏰ [3PM-DECISION] Triggering 3:00 PM Master Anchor Continuation Decision...", "CYCLE")
+            m_start_time = getattr(cfg, "M_DECISION_WINDOW_START", "14:57")
+            if now_time_str >= m_start_time and now_time_str < "15:30" and last_3pm_date != today_str:
+                _log(f"⏰ [M-DECISION] Triggering {m_start_time} IST M-Unit Master Anchor Continuation Decision...", "CYCLE")
                 try:
                     re_eng.execute_3pm_master_anchor_decision()
                     db.set("last_3pm_continuation_date", today_str)
                 except Exception as e_3pm:
-                    _log(f"Error in 3PM Continuation decision: {e_3pm}", "ERROR")
+                    _log(f"Error in M-Unit Continuation decision: {e_3pm}", "ERROR")
 
             for b in blocks:
                 # Skip PAUSED blocks
@@ -850,12 +851,12 @@ def run_pnl_cycle() -> dict:
                             anchor_price = float(s["anchor_price"])
 
                             # MODE 2 GUARD (Time-Staggered Anti-Overcrowding):
-                            # M-units (M1, M2, M3...) execute at 15:00 IST.
-                            # OS-units (OS1, OS2...) execute at 15:02 IST (Staggered by 2 mins to prevent broker order clashes).
+                            # M-units (M1, M2, M3...) execute at 14:57 IST.
+                            # OS-units (OS1, OS2...) execute at 15:01 IST (Staggered by 4 mins to prevent broker order clashes).
                             # Manual entry, modifications, and cuts from Dashboard remain 100% available anytime.
                             auto_entry_mode = db.get("auto_entry_mode", "MODE_2_3PM").upper()
                             is_os_unit = (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")
-                            target_auto_time = "15:02" if is_os_unit else "15:00"
+                            target_auto_time = getattr(cfg, "OS_AUDIT_WINDOW_START", "15:01") if is_os_unit else getattr(cfg, "M_DECISION_WINDOW_START", "14:57")
                             if auto_entry_mode in ("MODE_2_3PM", "3PM_ONLY") and now_time_str < target_auto_time:
                                 continue
 

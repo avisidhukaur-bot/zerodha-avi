@@ -235,17 +235,18 @@ def start_engine_loop() -> None:
             # E. Monday Rollover check
             run_monday_rollover_check()
 
-            # E1. 15:02 IST OS Option Selling Line Audit & Momentum Decision (Staggered 2 min after M-series)
-            if "15:02" <= now_time_str < getattr(cfg, "FORCE_CLOSE_TIME", "15:36"):
+            # E1. 15:01 IST OS Option Selling Line Audit & Momentum Decision (Staggered Window Compliance)
+            os_start_time = getattr(cfg, "OS_AUDIT_WINDOW_START", "15:01")
+            if os_start_time <= now_time_str < getattr(cfg, "FORCE_CLOSE_TIME", "15:36"):
                 last_os_3pm_date = db.get("last_os_3pm_decision_date", "")
                 if last_os_3pm_date != today_str:
-                    utils.log("⏰ 15:02 IST Watchdog: Running 3:02 PM OS Option Selling Line Audit (Staggered Anti-Overcrowding)...", "DECISION")
+                    utils.log(f"⏰ {os_start_time} IST Watchdog: Running OS Option Selling Line Audit (Staggered Anti-Overcrowding)...", "DECISION")
                     try:
                         import os_engine
                         os_engine.evaluate_os_3pm_decision()
                         db.set("last_os_3pm_decision_date", today_str)
                     except Exception as os_err:
-                        utils.log(f"Error in OS 3:02 PM decision: {os_err}", "ERROR")
+                        utils.log(f"Error in OS {os_start_time} decision: {os_err}", "ERROR")
 
             # Process pending closes (Runs every loop iteration / 10s)
             bm.process_pending_closes()

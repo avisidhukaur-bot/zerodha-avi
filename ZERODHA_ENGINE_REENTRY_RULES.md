@@ -1,3 +1,4 @@
+23900 KA STOPLOS KITNE POINT PAR H
 # 📘 Zerodha Option Selling Engine — Re-Entry & Safety Rules Guide
 **Document Reference:** `ZERODHA-OS-REENTRY-RULES-v1.0`  
 **Date:** 09-Sept-2026  

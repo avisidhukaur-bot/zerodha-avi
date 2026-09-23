@@ -2019,7 +2019,7 @@ def render_master_regime_controller():
         '<span style="font-size:1.25rem;font-weight:900;color:#ffffff;letter-spacing:0.5px;">🎯 MASTER NIFTY CONTROLLER</span>'
         '<span style="background:#38bdf8;color:#0f172a;font-size:0.75rem;font-weight:800;padding:3px 10px;border-radius:12px;margin-left:8px;">V5.0 "OLD & GOLD" ARCHITECTURE</span>'
         '</div>'
-        '<div style="font-size:0.82rem;color:#cbd5e1;font-weight:500;">Unified Console • Decoupled M1 Anchor • 3:00 PM Continuation • Preserved Orphan Hedges</div>'
+        '<div style="font-size:0.82rem;color:#cbd5e1;font-weight:500;">Unified Console • Decoupled M1 Anchor • 14:57 IST M-Decision (15:01 OS1) • Even/Odd Parity Grid</div>'
         '</div>'
         '</div>',
         unsafe_allow_html=True
@@ -2103,7 +2103,7 @@ def render_unified_v5_console():
             '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">'
             '<div>'
             '<span style="font-size:1.15rem;font-weight:900;color:#38bdf8;">🚀 UNIFIED SINGLE-WINDOW V5.0 MASTER DEPLOYER</span>'
-            '<div style="font-size:0.8rem;color:#cbd5e1;margin-top:2px;">Configure Call Wing & Put Wing side-by-side with decoupled Unit Anchor & 3:00 PM Continuation.</div>'
+            '<div style="font-size:0.8rem;color:#cbd5e1;margin-top:2px;">Configure Call & Put Wings (EVEN Strikes Grid) • 14:57 IST Continuation • Decoupled M-Anchors.</div>'
             '</div>'
             f'<div style="background:#0284c7;color:#ffffff;padding:4px 12px;border-radius:20px;font-weight:800;font-size:0.85rem;">Live Spot: ₹{live_spot:,.2f}</div>'
             '</div>'

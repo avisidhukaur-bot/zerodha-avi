@@ -34,6 +34,17 @@ TRADING_CUTOFF_TIME = "15:36"  # Continue trading & re-entries till 15:36 IST
 ROLLOVER_TIME = "14:00"  # Monday hedge rollover check time
 FORCE_CLOSE_TIME = "15:36"  # Square off / EOD cutoff time
 
+# Staggered Decision & Audit Windows (New Exchange Closing Schedule Compliance)
+M_DECISION_WINDOW_START = "14:57"  # M-Units (M1, M2, M3...) audit & continuation window start
+M_DECISION_WINDOW_END   = "15:00"  # M-Units window end (before 3:00 PM VWAP session)
+OS_AUDIT_WINDOW_START   = "15:01"  # OS1 Option Selling Pod auto-audit window start
+OS_AUDIT_WINDOW_END     = "15:04"  # OS1 window end (staggered 2 min after M-units)
+
+# Strike Parity & Selection Rules
+OS_STRIKE_PARITY = "ODD"       # OS System trades strictly ODD strike multiples (e.g., 23100, 23300, 23500...)
+M_STRIKE_PARITY = "EVEN"       # M-Units trade strictly EVEN strike multiples (e.g., 23000, 23200, 23400...)
+OS_DEFAULT_TARGET_PREMIUM = 150.0  # Target premium for OS strike hunter (~₹150 nearest)
+
 # Fallback Settings
 YAHOO_TICKER = "^NSEI"  # Nifty 50 Spot ticker
 NSE_INDEX_NAME = "NIFTY 50"
@@ -54,6 +65,7 @@ DEFAULT_MASTER_NIFTY_ANCHOR = 0.0          # 0.0 = Not set (Unrestricted / Dual-
 DEFAULT_REGIME_BUFFER = 15.0               # Points buffer for hysteresis whipsaw guard (±15 pts)
 DEFAULT_REGIME_MODE = "AUTO"               # AUTO = Governed by Master Anchor, MANUAL = Fixed, OFF = Dual-sided
 DEFAULT_REGIME_AUTO_SNAPSHOT_915 = "ON"    # Auto-capture 9:15 AM spot as Anchor if not set
+
 
 
 

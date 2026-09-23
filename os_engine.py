@@ -28,7 +28,7 @@ Operational Workflow:
 import sys
 import time
 from datetime import datetime, date
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union, Set
 import pytz
 import pandas as pd
 import streamlit as st
@@ -330,10 +330,13 @@ def hunt_os_strike(
         collision_shifted = False
         original_strike = sell_strike
     else:
-        # 2. AUTO HUNTER: DYNAMIC STEP SELECTION (100 or 500 MULTIPLES)
-        mult_subset = subset[subset["strike"] % step == 0].copy()
-        if mult_subset.empty:
-            mult_subset = subset[subset["strike"] % 100 == 0].copy()
+        # 2. AUTO HUNTER: ODD STRIKE PARITY & DYNAMIC STEP SELECTION
+        # Rule: OS System trades strictly ODD Strike Multiples (e.g., 23100, 23300, 23500, 23700, 23900...)
+        odd_subset = subset[(subset["strike"] // 100) % 2 != 0].copy()
+        if not odd_subset.empty:
+            mult_subset = odd_subset
+        else:
+            mult_subset = subset[subset["strike"] % step == 0].copy()
             if mult_subset.empty:
                 return {"ok": False, "message": f"No {step}-multiple strikes available for this expiry."}
 
@@ -382,7 +385,7 @@ def hunt_os_strike(
         if not scored_candidates:
             return {"ok": False, "message": f"Could not fetch live LTPs for {opt_type} option chain."}
 
-        # Find best candidate within effective target premium
+        # Find best candidate closest to target premium (~₹150)
         under_target = [c for c in scored_candidates if c["ltp"] <= effective_target_premium]
         if under_target:
             selected = max(under_target, key=lambda x: x["ltp"])
@@ -393,20 +396,20 @@ def hunt_os_strike(
         original_strike = raw_strike
         collision_shifted = False
 
-        # ── ZERO-CLASH STRIKE SHIELD (ANTI-COLLISION GATEKEEPER) ──────────
-        # If the candidate strike is already active in M-units or broker positions,
-        # shift +1 step for CE (Up) or -1 step for PE (Down) to avoid clash!
+        # ── ZERO-CLASH STRIKE SHIELD (ANTI-COLLISION GATEKEEPER WITH ODD PARITY) ──
+        # Shift +200 for CE (Up) or -200 for PE (Down) to avoid clash while keeping ODD parity!
         curr_candidate_strike = raw_strike
+        shift_step = 200 if step == 100 else 500
         max_shifts = 6
         shift_count = 0
         while (curr_candidate_strike, opt_type) in occupied_set and shift_count < max_shifts:
             collision_shifted = True
             shift_count += 1
             if opt_type == "CE":
-                curr_candidate_strike += step
+                curr_candidate_strike += shift_step
             else:
-                curr_candidate_strike -= step
-            _log(f"[ANTI-COLLISION] {opt_type} Strike {curr_candidate_strike - (step if opt_type == 'CE' else -step)} occupied! Shifting to {curr_candidate_strike}...", "WARN")
+                curr_candidate_strike -= shift_step
+            _log(f"[ANTI-COLLISION] {opt_type} Strike {curr_candidate_strike - (shift_step if opt_type == 'CE' else -shift_step)} occupied! Shifting to {curr_candidate_strike}...", "WARN")
 
         # Resolve details for the chosen (unoccupied) strike
         chosen_row = subset[subset["strike"] == float(curr_candidate_strike)]
@@ -435,7 +438,8 @@ def hunt_os_strike(
 
     # Anti-collision check for hedge strike as well
     if (hedge_strike, opt_type) in occupied_set:
-        hedge_strike = hedge_strike + step if opt_type == "CE" else hedge_strike - step
+        hedge_shift = 200 if step == 100 else 500
+        hedge_strike = hedge_strike + hedge_shift if opt_type == "CE" else hedge_strike - hedge_shift
 
     hedge_row = subset[subset["strike"] == float(hedge_strike)]
     if hedge_row.empty:
@@ -739,18 +743,74 @@ def deploy_os_unit(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3:00 PM OPTION SELLING LINE AUDIT & CONTINUATION
+# OS POD COMPLETE WIPEOUT & RESET (1-Click Operator Reset for Next Month)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def wipeout_os_unit_now(unit_name: str = "OS1", sync_live: bool = True) -> Dict[str, Any]:
+    """
+    1-Click Operator Action:
+    Completely squares off any open live broker positions for the OS unit,
+    purges/deletes the block and strikes from SQLite DB,
+    and resets the daily trade flag and locked settings so the user can deploy fresh for next month.
+    """
+    clean_u = (unit_name or "OS1").strip().upper()
+    _log(f"[OS-WIPEOUT] Starting complete wipeout for unit {clean_u} (sync_live={sync_live})...", "ALERT")
+
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+    target_blocks = [b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == clean_u]
+
+    closed_orders = []
+
+    if sync_live:
+        for b in target_blocks:
+            bid = b["block_id"]
+            strikes = db.get_strikes_by_block(bid, status_filter="OPEN")
+
+            sell_strikes = [s for s in strikes if s.get("leg_type") == "SELL"]
+            hedge_strikes = [s for s in strikes if s.get("leg_type") == "HEDGE_BUY"]
+
+            for s in sell_strikes + hedge_strikes:
+                try:
+                    res = bm.close_strike(s["strike_id"], close_hedge=False)
+                    if res.get("ok"):
+                        closed_orders.append(f"{s['strike_price']} {s['option_type']}")
+                except Exception as e:
+                    _log(f"[OS-WIPEOUT] Error closing strike {s['strike_id']}: {e}", "ERROR")
+
+    # Wipe database records and reset settings
+    db.wipeout_os_pod(clean_u)
+
+    # Send Telegram Notification
+    try:
+        tg_msg = (
+            f"💥 <b>OS POD WIPED OUT & RESET</b> 💥\n"
+            f"Unit: <b>{clean_u}</b>\n"
+            f"Closed Positions: <b>{', '.join(closed_orders) if closed_orders else 'None (Clean DB Wipe)'}</b>\n"
+            f"Status: <b>Purged from Database & Ready for Next Month Deployment</b>"
+        )
+        tg.send(tg_msg)
+    except Exception as e:
+        _log(f"[OS-WIPEOUT] Telegram alert error: {e}", "WARN")
+
+    return {
+        "ok": True,
+        "message": f"Unit {clean_u} has been completely wiped out and reset. You can now deploy a fresh contract for next month."
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3:00 PM OPTION SELLING LINE AUDIT & CONTINUATION (15:01 – 15:04 IST)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def evaluate_os_3pm_decision() -> Dict[str, Any]:
     """
-    Evaluates running trades and candidate options at 15:02 IST (Staggered 2 min after M-series 15:00):
+    Evaluates running trades and candidate options at 15:01 - 15:04 IST (Staggered after M-series 14:57-15:00):
       1. Running Trades:
-         - Today 3:02 PM LTP < Yesterday 3:02 PM Price => CONTINUATION (Hold for Day 2, 3, 4).
-         - Today 3:02 PM LTP >= Yesterday 3:02 PM Price => AUTO-CLOSE (Cut above line).
-      2. Rolls over today's 3:02 PM price as tomorrow's anchor.
+         - Today 3 PM LTP < Yesterday Reference Price => CONTINUATION (Hold for Day 2, 3, 4).
+         - Today 3 PM LTP >= Yesterday Reference Price => AUTO-CLOSE (Cut above line).
+      2. Rolls over today's 3 PM price as tomorrow's anchor.
     """
-    _log("⏰ 15:02 IST: Running 3:02 PM Option Selling Line Audit (Staggered Execution)...", "DECISION")
+    _log("⏰ 15:01 IST: Running 3:01 PM OS Option Selling Line Audit (Staggered Window)...", "DECISION")
 
     active_blocks = db.get_all_blocks(status_filter="ACTIVE")
     os_blocks = [b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")]
@@ -787,14 +847,13 @@ def evaluate_os_3pm_decision() -> Dict[str, Any]:
                 else:
                     # AUTO-CLOSE (Cut above line)
                     _log(f"{unit_name}: 🛑 LINE CUT! {stk} {opt} SELL rose above 3:00 PM line (LTP Rs{ltp:.2f} >= Rs{yest_anchor:.2f}). Auto-closing...", "EXIT")
-                    bm.close_strike(s_id, close_hedge=False)
+                    bm.close_strike(s_id, close_hedge=True)
                     db.update_strike_trade_state(s_id, "CLOSED")
                     h_id = s.get("hedge_strike_id")
                     if h_id:
-                        bm.close_strike(h_id, close_hedge=False)
                         db.update_strike_trade_state(h_id, "CLOSED")
 
-                    results.append(f"• <b>{unit_name}</b>: 🛑 AUTO-CLOSED {stk} {opt} (LTP Rs{ltp:.2f} &ge; Line Rs{yest_anchor:.2f})")
+                    results.append(f"• <b>{unit_name}</b>: 🛑 AUTO-CLOSED {stk} {opt} + Hedge (LTP Rs{ltp:.2f} &ge; Line Rs{yest_anchor:.2f})")
 
                 if ltp > 0:
                     set_option_anchor(tsym, ltp)
@@ -802,7 +861,7 @@ def evaluate_os_3pm_decision() -> Dict[str, Any]:
     try:
         text = "\n".join(results) if results else "• No active OS pods with running positions."
         tg.send(
-            f"⏰ <b>15:00 IST OPTION SELLING LINE AUDIT</b> ⏰\n"
+            f"⏰ <b>15:01 IST OPTION SELLING LINE AUDIT</b> ⏰\n"
             f"Option Decay Evaluation Complete:\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"{text}"
@@ -811,6 +870,7 @@ def evaluate_os_3pm_decision() -> Dict[str, Any]:
         _log(f"Error sending 3PM TG alert: {e}", "WARN")
 
     return {"ok": True, "results": results}
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -831,10 +891,10 @@ def render_os_tab(portfolio: dict) -> None:
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
             <div>
                 <span style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">
-                    🎯 PURE OPTION MOMENTUM COCKPIT (3:00 PM LINE)
+                    🎯 PURE OPTION MOMENTUM COCKPIT (OS1 SYSTEM)
                 </span>
                 <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 4px;">
-                    Operator 2-Step Workflow &bull; Weekly / Monthly Expiries &bull; 100 Multiples &le; ₹150 &bull; 500-pt Hedge &bull; 1.382 Stop Loss Rule
+                    Operator 2-Step Workflow &bull; 15:01–15:04 Staggered Audit &bull; ODD Strike Parity (~₹150 Prem) &bull; 500-pt Hedge &bull; 1.382 SL Rule
                 </div>
             </div>
             <div style="margin-top: 8px;">
@@ -1262,7 +1322,7 @@ def render_os_tab(portfolio: dict) -> None:
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-            act_c1, act_c2, act_c3 = st.columns([1, 1, 2])
+            act_c1, act_c2, act_c3, act_c4 = st.columns([1.2, 1.2, 1.5, 2.2])
             with act_c1:
                 if st.button("💰 Lock Hedge Profit", key=f"btn_lock_h_{b['block_id']}", use_container_width=True):
                     hedges = [s for s in db.get_strikes_by_block(b["block_id"], status_filter="OPEN") if s["leg_type"] == "HEDGE_BUY"]
@@ -1276,9 +1336,19 @@ def render_os_tab(portfolio: dict) -> None:
                     st.warning(f"Pod {unit_id} squared off!")
                     st.rerun()
             with act_c3:
-                if st.button("🔄 Reset Daily Trade Flag", key=f"btn_reset_d_{b['block_id']}", use_container_width=True, help="Resets today's trade flag allowing another trade in this pod."):
+                if st.button("🔄 Reset Daily Flag", key=f"btn_reset_d_{b['block_id']}", use_container_width=True, help="Resets today's trade flag allowing another trade in this pod."):
                     db.reset_os_daily_trade_flag(unit_id)
                     st.success(f"Daily trade flag reset for {unit_id}.")
+                    st.rerun()
+            with act_c4:
+                if st.button(f"💥 Wipe Out & Reset {unit_id}", key=f"btn_wipeout_{b['block_id']}", use_container_width=True, type="primary", help="Closes live broker positions, deletes pod from DB, and unlocks settings for next month deployment."):
+                    with st.spinner(f"Wiping out {unit_id} on broker and DB..."):
+                        w_res = wipeout_os_unit_now(unit_id, sync_live=True)
+                    if w_res.get("ok"):
+                        st.success(w_res.get("message"))
+                    else:
+                        st.error(w_res.get("message"))
+                    time.sleep(1)
                     st.rerun()
 
             st.markdown('</div>', unsafe_allow_html=True)

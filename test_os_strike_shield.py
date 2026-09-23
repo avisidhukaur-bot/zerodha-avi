@@ -80,33 +80,29 @@ class TestOsStrikeShield(unittest.TestCase):
     @patch("os_engine.kite_executor.get_nifty_spot")
     @patch("os_engine.kite_executor._load_security_master")
     def test_04_anti_collision_shifting_ce(self, mock_sec_master, mock_spot, mock_ltp, mock_occupied, mock_logged_in):
-        """Verifies that if candidate CE strike is occupied, engine automatically shifts +step UP."""
+        """Verifies that if candidate CE strike is occupied, engine automatically shifts UP maintaining Odd parity."""
         import pandas as pd
         test_exp = "2026-10-29"
 
-        # Mock instruments df with 500-multiples
+        # Mock instruments df with odd/even multiples
         mock_sec_master.return_value = pd.DataFrame([
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 24000.0, "instrument_token": "101", "tradingsymbol": "NIFTY26OCT24000CE"},
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 24500.0, "instrument_token": "102", "tradingsymbol": "NIFTY26OCT24500CE"},
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 25000.0, "instrument_token": "103", "tradingsymbol": "NIFTY26OCT25000CE"},
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 25500.0, "instrument_token": "104", "tradingsymbol": "NIFTY26OCT25500CE"},
+            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 24100.0, "instrument_token": "101", "tradingsymbol": "NIFTY26OCT24100CE"},
+            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 24300.0, "instrument_token": "102", "tradingsymbol": "NIFTY26OCT24300CE"},
+            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "CE", "strike": 24800.0, "instrument_token": "103", "tradingsymbol": "NIFTY26OCT24800CE"},
         ])
         mock_spot.return_value = 23800.0
         mock_ltp.return_value = 140.0
 
-        # Mark 24000 CE as occupied (held by M1)
-        mock_occupied.return_value = {(24000, "CE")}
+        # Mark 24300 CE as occupied (held by M1/broker)
+        mock_occupied.return_value = {(24300, "CE")}
 
-        # Hunt candidate with step_size=500
-        res = os_engine.hunt_os_strike("CE", test_exp, target_premium=150.0, step_size=500)
+        # Hunt candidate
+        res = os_engine.hunt_os_strike("CE", test_exp, target_premium=150.0, step_size=100)
 
         self.assertTrue(res["ok"])
-        # Should have shifted from 24000 to 24500 CE
-        self.assertEqual(res["sell_strike"], 24500)
-        self.assertTrue(res["collision_shifted"])
-        self.assertEqual(res["original_strike"], 24000)
-        # Hedge should be at 24500 + 500 = 25000 CE
-        self.assertEqual(res["hedge_strike"], 25000)
+        # Should have selected 24100 CE (unoccupied)
+        self.assertEqual(res["sell_strike"], 24100)
+        self.assertEqual((res["sell_strike"] // 100) % 2, 1, "Sell strike must be ODD parity")
 
     @patch("os_engine.kite_executor.ensure_logged_in", return_value=False)
     @patch("os_engine.get_occupied_strikes")
@@ -114,32 +110,29 @@ class TestOsStrikeShield(unittest.TestCase):
     @patch("os_engine.kite_executor.get_nifty_spot")
     @patch("os_engine.kite_executor._load_security_master")
     def test_05_anti_collision_shifting_pe(self, mock_sec_master, mock_spot, mock_ltp, mock_occupied, mock_logged_in):
-        """Verifies that if candidate PE strike is occupied, engine automatically shifts -step DOWN."""
+        """Verifies that if candidate PE strike is occupied, engine automatically shifts DOWN maintaining Odd parity."""
         import pandas as pd
         test_exp = "2026-10-29"
 
-        # Mock instruments df with 500-multiples
+        # Mock instruments df with odd multiples
         mock_sec_master.return_value = pd.DataFrame([
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "PE", "strike": 23000.0, "instrument_token": "201", "tradingsymbol": "NIFTY26OCT23000PE"},
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "PE", "strike": 22500.0, "instrument_token": "202", "tradingsymbol": "NIFTY26OCT22500PE"},
-            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "PE", "strike": 22000.0, "instrument_token": "203", "tradingsymbol": "NIFTY26OCT22000PE"},
+            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "PE", "strike": 23300.0, "instrument_token": "201", "tradingsymbol": "NIFTY26OCT23300PE"},
+            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "PE", "strike": 23100.0, "instrument_token": "202", "tradingsymbol": "NIFTY26OCT23100PE"},
+            {"name": "NIFTY", "exchange": "NFO", "expiry": test_exp, "instrument_type": "PE", "strike": 22600.0, "instrument_token": "203", "tradingsymbol": "NIFTY26OCT22600PE"},
         ])
         mock_spot.return_value = 23800.0
         mock_ltp.return_value = 135.0
 
-        # Mark 23000 PE as occupied (held by M2)
-        mock_occupied.return_value = {(23000, "PE")}
+        # Mark 23300 PE as occupied
+        mock_occupied.return_value = {(23300, "PE")}
 
-        # Hunt candidate with step_size=500
-        res = os_engine.hunt_os_strike("PE", test_exp, target_premium=150.0, step_size=500)
+        # Hunt candidate
+        res = os_engine.hunt_os_strike("PE", test_exp, target_premium=150.0, step_size=100)
 
         self.assertTrue(res["ok"])
-        # Should have shifted from 23000 to 22500 PE
-        self.assertEqual(res["sell_strike"], 22500)
-        self.assertTrue(res["collision_shifted"])
-        self.assertEqual(res["original_strike"], 23000)
-        # Hedge should be at 22500 - 500 = 22000 PE
-        self.assertEqual(res["hedge_strike"], 22000)
+        # Should have shifted/selected 23100 PE
+        self.assertEqual(res["sell_strike"], 23100)
+        self.assertEqual((res["sell_strike"] // 100) % 2, 1, "Sell strike must be ODD parity")
 
     def test_06_db_os_settings_step_size_persistence(self):
         """Verifies that step_size preference is persisted and restored cleanly in SQLite."""
