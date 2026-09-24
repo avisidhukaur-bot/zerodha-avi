@@ -1,0 +1,51 @@
+🛡️ *HEDGE COLLISION & STRIKE SHIFTING RULES (EXACT SOFTWARE LOGIC)* 🛡️
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 23 September 2026
+👤 *For*: Hedge Collision Management (Brother ke liye Technical Guide)
+🌐 *System*: Zerodha V5.2 Anti-Collision Gatekeeper
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, agar M-Unit ki 500-point hedge strike pehle se OS1 ya broker ki kisi doosri trade me open (occupied) ho, toh **software usko 100% automatically manage karta hai**. Iska exact mathematical niyam ye hai:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ *1️⃣ PEHLA SHIELD: ODD vs EVEN RULE*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *M-Units (M1, M2)*: Hamesha **EVEN strikes** (`23400, 23600, 23800...`) lete hain.
+• *OS1 System*: Hamesha **ODD strikes** (`23100, 23300, 23500, 23700, 23900...`) leta hai.
+• Is niyam ki wajah se 95% trades waise hi aapas me kabhi nahi takrati.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔄 *2️⃣ AGAR HEDGE TAKRA GAYI TOH SOFTWARE KYA KAREGA?*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 *Example Case*:
+• M1 ne Sell kiya: **`23400 CE`**
+• 500-point hedge bani: **`23900 CE`**
+• Lekin `23900 CE` pehle se OS1 me chal rahi hai (Occupied hai).
+
+📌 *Software ka Exact Action (Shift Rule)*:
+1. Software order bhejne se pehle broker positions aur database check karta hai.
+2. Jaise hi usko dikhta hai ki `23900 CE` busy hai:
+   👉 **Software Hedge ko turant +200 Points DOOR shift kar deta hai!**
+3. *New Hedge Strike*: `23900 CE + 200` = **`24100 CE`** par buy karega.
+4. *PE Side me*: Agar `22700 PE` occupied hai, toh -200 point neeche **`22500 PE`** par shift kar dega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💎 *IS SHIFTING KE FAYDE (BENEFITS)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ *Zero Order Rejection*: Broker par duplicate position ka error kabhi nahi aayega.
+✅ *Cheaper Hedge*: 500-pt ki jagah 700-pt OTM hedge aur sasti milti hai (margin aur premium dono safe rehte hain).
+✅ *Full Capital Protection*: Position dono taraf helmet (hedge) se fully secured rehti hai.
+✅ *Dashboard Display*: Dashboard par turant blue alert dikhega:
+   `🛡️ Anti-Collision: Shifted from 23900 CE (Occupied) ➔ 24100 CE (+200 pts)`
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 *FINAL CONCLUSION*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Aapko hedge shift karne ya adjust karne ki koi tension nahi leni hai. **Software occupied strike ko detect karke khud 200 point aage/peeche safe strike par shift karke execute kar deta hai.**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

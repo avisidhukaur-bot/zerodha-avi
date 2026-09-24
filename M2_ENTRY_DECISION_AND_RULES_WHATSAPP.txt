@@ -1,0 +1,50 @@
+🎯 *M2 ENTRY DECISION & SOFTWARE RULES GUIDE (FOR WHATSAPP)* 🎯
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 23 September 2026
+📊 *Live NIFTY Spot*: `23,450.70`
+📍 *M3 Level*: `23,362.23` | *M2 Level*: `23,762.64`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, aapke dono specific sawaalon ka seedha aur clear jawaab:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❓ *SAWAAL 1: Kya aaj M2 start hogi/banani hai ya nahi?*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👉 *JAWAAB*: **Aaj M2 turant banana zaroori (compulsory) nahi hai.**
+
+📌 *Kyun nahi? (Reason samjhein)*:
+1. Nifty Spot abhi **`23,450`** par hai.
+2. Yeh M3 Anchor (`23,362`) se sirf +88 point upar hai, lekin M2 Anchor (`23,762`) se abhi **312 point door** hai.
+3. Hamari **M3 ki Put position already chal rahi hai aur full profit bana rahi hai**.
+4. 👉 *Best Decision*: Aaj M3 ko chalne dein aur uska profit harvest hone dein.
+5. 👉 *M2 kab start karenge?*: Jab Nifty upar badhte hue **`23,762` (M2 Level)** ke paas pahunchega, tab hum M2 ko deploy karenge.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❓ *SAWAAL 2: Software me Master Anchor Price daalna hai ya Strike Price?*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👉 *JAWAAB*: **Aapko SIRF Master Anchor Price daalna hai! Strike Price dhoondhne ya daalne ki bilkul zaroorat nahi hai.**
+
+📌 *Jab bhi M2 start karenge, sirf 2 cheezein karni hain*:
+1. Dashboard (`http://5.75.250.104:9007`) par jayein.
+2. *Unified V5 Deployer* me:
+   • Unit Pod select karein 👉 **`M2`**
+   • Master Anchor Price daalein 👉 **`23762.64`**
+3. **"Deploy Unified V5"** click kar dein.
+
+📌 *Software 100% khud kya karega*:
+✅ *Strike Price Selection*: Software live market scan karke khud **EVEN Strike** (e.g. `23600 / 23800`) chunega.
+✅ *Hedge Calculation*: 500-point door ki safe hedge strike auto-select karega.
+✅ *Stop-Loss Trigger*: Entry price par +25% SL auto-lock karega.
+✅ *Order Placement*: Pehle Hedge Buy order aur fir Sell order broker par khud place karega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 *TODAY'S ACTION SUMMARY*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 🟢 **M3 Trade**: Hold rahegi (Put decay profit harvest karega).
+• 🟡 **M2 Trade**: Abhi hold par rahegi. Jab Spot `23,762` ke paas aayega, tab sirf Anchor daal kar 1-click me deploy karenge.
+• 🛡️ **Zero Strike Stress**: Strike price software khud handle karega.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -1,0 +1,52 @@
+📢 *ZERODHA ALGO V5.2 — NEW SYSTEM UPDATES & RULES GUIDE* 📢
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 23 September 2026
+🛡️ *Status*: Deployed on VPS & Fully Live
+🌐 *Dashboard*: Port 9007 Active
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔥 *TOP 3 MAJOR ARCHITECTURAL UPGRADES* 🔥
+
+1️⃣ 💥 *1-CLICK OS1 WIPE OUT & RESET BUTTON*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *Kyun banaya gaya*: Pehle OS1 ko band karke next month fresh start karne ke liye clean deletion option nahi tha.
+🔹 *New Rule & Working*:
+• Dashboard par OS Tab ke andar *"💥 Wipe Out & Reset OS1"* button add kar diya gaya hai.
+• *1-Click Action*: 
+  1. Live Zerodha account me open OS1 legs (Sell + Hedge) ko safely close/square-off karega.
+  2. Database se puraane records ko clean delete karega.
+  3. System ko turant unlock karke fresh agle month ke contracts deploy karne ke liye 100% ready kar dega.
+
+---
+
+2️⃣ ⏰ *STAGGERED TRADING & AUDIT TIMINGS (EXCHANGE ALIGNED)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *Kyun change kiya*: Exchange ke closing session (VWAP) aur broker API collision se bachne ke liye dono systems ka timing alag-alag (staggered) kiya gaya hai.
+🔹 *New Timing Windows*:
+• 🔵 *M-Units (M1, M2, M3...)*: 
+  👉 *02:57 PM to 03:00 PM IST (14:57 – 15:00)*
+  (Continuation check & square-off decision window)
+• 🟢 *OS-Units (OS1)*: 
+  👉 *03:01 PM to 03:04 PM IST (15:01 – 15:04)*
+  (Daily decay check, trailing audit & continuation decision)
+
+---
+
+3️⃣ 🎯 *ODD vs EVEN STRIKE SEPARATION RULES*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *Kyun banaya gaya*: Dono systems (M-Units aur OS-Units) ke beech 100% zero-clash rahe aur Kite positions dekhte hi 1 second me pehchan ho sake.
+🔹 *New Strike Allocation Rule*:
+• 🟢 *OS1 System* ➔ Strictly *ODD STRIKES* ONLY
+  👉 Examples: `23100, 23300, 23500, 23700, 23900...` (Target: ~₹150 premium)
+• 🔵 *M-Units (M1, M2, M3)* ➔ Strictly *EVEN STRIKES* ONLY
+  👉 Examples: `23000, 23200, 23400, 23600, 23800...`
+
+---
+
+📋 *RULES & REGULATIONS SUMMARY (CHEAT SHEET)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ *Zero Collision Guarantee*: OS1 aur M-Units kabhi bhi same strike select nahi karenge.
+✅ *Hedging Invariant*: Har sell position hamesha pehle hedge buy karke safe execute hogi.
+✅ *Month Rollover*: Month end par OS1 ko single click me wipe out karke next month contract me shift kiya ja sakega.
+✅ *Live VPS Sync*: 26/26 Unit Tests Pass hone ke baad VPS (`5.75.250.104`) par live update ho chuka hai aur GitHub par safe push ho gaya hai.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━

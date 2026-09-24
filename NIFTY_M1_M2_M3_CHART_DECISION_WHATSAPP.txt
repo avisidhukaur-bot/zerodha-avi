@@ -1,0 +1,74 @@
+📈 *NIFTY 50 CHART — M1, M2, M3 LEVELS & EXACT TRADING ACTION GUIDE* 📈
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 23 September 2026
+📊 *NIFTY Live Spot*: ~`23,450.70`
+👤 *For*: Bhai ke liye Detailed Trading Guide (Copy-Paste)
+🌐 *System*: Zerodha Option Selling V5.2 (Port 9007)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, TradingView chart par jo humne M1, M2, M3, M4 levels mark kiye hain, uske mutabiq current situation aur exact action plan ye hai:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 *1️⃣ CHART LEVELS OVERVIEW (HUMARE ANCHORS)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• 🔴 *M1 Anchor*: `24,167.03`
+• 🟠 *M2 Anchor*: `23,762.64`
+• 🟢 *M3 Anchor*: `23,362.23`  (Current trade level)
+• ⚪ *M4 Anchor*: `22,963.13` (Lower boundary)
+• ⚡ *Current Spot*: `23,450.70` (M3 se upar bounce hokar M3 aur M2 ke beech me chal raha hai)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 *2️⃣ M3 POSITION KA CURRENT STATUS*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *Position*: M3 me hamari **Put (PE Sell)** entry bani hui hai.
+• *Reality*: Kyunki Nifty Spot (`23,450.70`) M3 Anchor (`23,362.23`) ke **UPAR** hai, isliye M3 **100% Bullish Profit Zone** me hai.
+• 👉 *Decision*: **M3 ko bilkul close nahi karna hai**, chalne dena hai taaki Put ka premium decay hokar maximum profit de. 14:57 PM (02:57 PM) par software isko overnight ke liye auto-check karega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ *3️⃣ M2 ME ENTRY KAISE LENI HAI? (KHOOB DHYAN SE SAMJHEIN)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+❓ *Sawaal*: Kya software khud lega ya hume banana hai? Hume kya daalna hai?
+
+👉 *Jawaab*: 
+Aapko **sirf Master Anchor Price daalna hai**, baaki strike selection, hedge aur order execution **software 100% khud karega!**
+
+📌 *Step-by-Step Operator Action*:
+1. Dashboard (`http://5.75.250.104:9007`) open karein.
+2. *Unified V5 Deployer* me jayein:
+   • **Unit Pod**: Select karein 👉 `M2`
+   • **Master Anchor Price**: Type karein 👉 `23762.64`
+   • **Expiry**: Current monthly expiry select karein.
+   • **Lots**: 1 ya 2 lots (as per margin).
+3. **"Deploy Unified V5 (M2)"** button dabayein.
+
+📌 *Software ke Automatic Rules (Aapko karne ki zaroorat nahi)*:
+✅ *EVEN Strike Auto-Hunt*: Software khud Nifty ki EVEN strike (e.g. `23600` / `23800`) select karega. Aapko strike dhoondhne ki zaroorat nahi.
+✅ *500-Point Safe Hedge*: 500-point dur ki hedge auto-detect karega (Zero-clash with OS1).
+✅ *25% Stop-Loss Trigger*: Entry fill price ka +25% SL trigger system me auto-lock karega.
+✅ *Smart Execution*: Kyunki Nifty Spot (`23,450`) < M2 Anchor (`23,762`), software:
+   • Pehle **Hedge Buy** karega.
+   • Fir **Call (CE) Sell** live execute karega.
+   • **Put (PE) Wing** ko sidelines par *PENDING (Armed)* rakhega. (Jab Spot 23,762 cross karega tabhi Put bechega).
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 *4️⃣ AGAR MARKET M4 KI TARAF JAAYE TOH?*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Agar market reverse hokar `22,963` ke neeche break karta hai, tab hum isi tarah **M4** Anchor daal kar deploy karenge.
+• Par jab tak market `23,362` se upar hai, M3 safe profit banayega aur M2 Bearish Call side se decay harvest karega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 *FINAL SUMMARY / CHEAT SHEET FOR TODAY*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. **M3 Trade**: Hold rahegi (Put decay profit chal raha hai).
+2. **M2 Entry**: Dashboard par ja kar Unit `M2` + Anchor `23762.64` daal kar Deploy karein.
+3. **No Strike Stress**: Striking price aur hedge software khud calculate aur protect karega.
+4. **Closing Audit**: `14:57 PM IST` par dono units ka continuation decision automatic hoga.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

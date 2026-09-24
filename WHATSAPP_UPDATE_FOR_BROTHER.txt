@@ -1,0 +1,63 @@
+🚀 *ZERODHA ALGO SYSTEM — NEW UPGRADES & COMPLETE RULES DETAIL* 🚀
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 23 September 2026
+👤 *For*: Review & Operational Guide
+🌐 *VPS Dashboard*: Active on Port 9007 (5.75.250.104)
+💻 *Status*: 26/26 Tests Passed | Live Deployed | GitHub Synced
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, humne Zerodha Option Selling System (M1/M2/M3 aur OS1) me 3 bohot bade upgrades kiye hain aur unke rules ko exchange ke hisaab se fully update kar diya hai. Saari details point-to-point neeche likhi hain:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔥 *1️⃣ 1-CLICK OS1 WIPE OUT & PERMANENT RESET BUTTON*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 *Problem (Pehle kya dikkat thi)*:
+Pehle agar OS1 ka current month expiry close karke next month me naya system start karna hota tha, toh usko clean delete/reset karne ka direct button nahi tha.
+
+📌 *Solution & New Rule (Ab kaise kaam karega)*:
+• Dashboard ke *OS Tab* me ek naya action button add kiya gaya hai:
+  👉 *"💥 Wipe Out & Reset OS1"*
+• *Single Click karne par*:
+  1. *Live Position Close*: Zerodha broker par chal rahi OS1 ki active legs (Sell + Hedge) ko safely square-off (close) kar dega.
+  2. *Database Clean*: Database se puraane month ke records ko permanently delete/wipe out kar dega.
+  3. *Instant Unlock*: System ko unlock kar dega taaki hum agle month ka naya contract bina kisi purani error ke turant fresh deploy kar sakein.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ *2️⃣ STAGGERED TRADING & AUDIT TIMINGS (NEW RULES)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 *Kyun change kiya gaya*:
+Exchange ke closing rules (VWAP calculation) aur Kite broker API rate-limit collision se bachne ke liye dono systems (M-Units aur OS-Units) ka timing alag-alag (staggered) kiya gaya hai taaki koi clash na ho.
+
+📌 *New Timing Windows*:
+🔹 *M-Units (M1, M2, M3...)*:
+  ⏰ *02:57 PM se 03:00 PM IST (14:57 – 15:00)*
+  👉 Is 3 minute ki window me M-systems ka profit audit, continuation line check aur overnight hold/exit decision execute hoga.
+
+🔹 *OS-Units (OS1)*:
+  ⏰ *03:01 PM se 03:04 PM IST (15:01 – 15:04)*
+  👉 Is 3 minute ki window me OS1 ka daily decay audit, trailing SL check aur overnight hold decision run hoga.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 *3️⃣ ODD vs EVEN STRIKE SEPARATION RULES*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📌 *Kyun banaya gaya*:
+Dono systems ke beech 100% mathematical separation rahe, strikes kabhi aapas me clash na karein, aur Kite terminal par dekhte hi 1 second me pehchan ho jaye ki kaunsi position kis system ki hai.
+
+📌 *Strike Selection Rules*:
+🟢 *OS1 System ➔ Strictly ODD Strikes Only*
+  • Strikes: `23100, 23300, 23500, 23700, 23900...`
+  • Target Premium: ~₹150
+  • Rule: OS1 hamesha Nifty ke ODD 100-multiples me se hi strike select karega.
+
+🔵 *M-Units (M1, M2, M3) ➔ Strictly EVEN Strikes Only*
+  • Strikes: `23000, 23200, 23400, 23600, 23800...`
+  • Rule: M-units hamesha Nifty ke EVEN 100-multiples me se hi strike hunt karenge.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🛡️ *SAFETY & VERIFICATION HIGHLIGHTS*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. *Zero Strike Collision*: Algorithm guarantee karta hai ki OS aur M-Units ki strike kabhi same nahi hogi.
+2. *Hedge Protection*: Har Sell trade se pehle 500-point dur ki Hedge Buy hogi (Zero unhedged overnight risk).
+3. *Testing*: Total 26 automated unit tests run kiye gaye aur sabhi pass hue.
+4. *VPS & GitHub*: Sara code VPS server (`5.75.250.104:9007`) par live upload karke services restart kar di gayi hain aur GitHub repository par commit & push ho chuka hai.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

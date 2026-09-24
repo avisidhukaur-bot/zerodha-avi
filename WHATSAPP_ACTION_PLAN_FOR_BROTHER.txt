@@ -1,0 +1,65 @@
+📊 *ZERODHA ALGO V5.2 — LIVE MARKET & ACTION PLAN GUIDE* 📊
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 23 September 2026
+📈 *NIFTY Spot*: ~23,450
+👤 *For*: Operational Decision & Brother's Action Plan
+🛡️ *System*: Zerodha V5.2 Multi-Anchor Engine (Port 9007)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, current chart levels aur strategy rules ke hisaab se poora analysis aur aage ka action plan ye raha:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 *1️⃣ CURRENT CHART LEVELS & MARKET POSITION*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *M1 Anchor*: `24,167`
+• *M2 Anchor*: `23,762`
+• *M3 Anchor*: `23,362`
+• *Current Spot*: `23,450` (M3 se upar nikal kar M3 aur M2 ke beech trade ho raha hai)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 *2️⃣ CURRENT RUNNING POSITIONS KA STATUS*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 *M3 System (`23,362` Anchor)*:
+• Nifty Spot (`23,450`) M3 anchor ke *UPAR* hai (Bullish State).
+• Isliye M3 ki *Put (PE Sell) leg safe hai aur profit de rahi hai*.
+• 👉 *Rule*: M3 ko chhedna nahi hai, chalne dena hai. 14:57 IST (2:57 PM) par software auto-continuation audit karega.
+
+🔹 *OS1 System (Option Selling)*:
+• OS1 ki ODD strikes chal rahi hain.
+• Iska 3:00 PM audit timing ab *15:01 se 15:04 IST* set hai.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 *3️⃣ AAGE KYA KARNA HAI? (M2 ENTRY ACTION PLAN)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Agar hume M2 level (`23,762`) par naya unit deploy karna hai:
+
+📌 *Aapko kya karna hai (Manual Input)*:
+1. Dashboard (`http://5.75.250.104:9007`) par jayein.
+2. *Unified V5 Deployer* me:
+   • Unit Pod: **`M2`** select karein.
+   • Master Anchor: **`23762`** daalein.
+   • Expiry: Select karein.
+3. **"Deploy Unified V5 (M2)"** button click karein.
+
+📌 *Software khud kya karega (100% Automated)*:
+✅ *EVEN Strike Hunt*: M2 ke liye even strike (`23600 / 23800`) live premium scan karke auto-select karega.
+✅ *500-Pt Safe Hedge*: Collision shield check karke zero-clash hedge strike auto-calculate karega.
+✅ *25% Stop-Loss Trigger*: Entry fill hote hi broker-safe SL trigger auto-set karega.
+✅ *Live Execution*: Spot (`23,450`) < M2 Anchor (`23,762`) hone ki wajah se pehle Hedge Buy karega, fir Call Sell execute karega. Put wing ko pending armed rakhega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ *QUICK CHECKLIST FOR TODAY*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. *M3*: Chhedna nahi hai, Put leg profit harvest karegi.
+2. *M2*: Dashboard par anchor `23762` daal kar 1-Click Deploy karein.
+3. *Closing Timings*:
+   • M-Units Decision: `02:57 PM to 03:00 PM IST`
+   • OS1 Decision: `03:01 PM to 03:04 PM IST`
+4. *Zero Strike Collision*: M2 hamesha Even strike lega aur OS1 hamesha Odd strike lega, isliye Kite par koi clash nahi hoga.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

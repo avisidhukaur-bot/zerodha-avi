@@ -1,0 +1,60 @@
+🚀 *ZERODHA V5.2 — NEXT MONTH (27-OCT-2026) M3 TRADE SETUP* 🚀
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 24 September 2026
+📆 *Expiry*: 27-Oct-2026 (Monthly Expiry)
+📍 *Master Anchor Price*: `23,360.00`
+👤 *For*: Next Month M3 Trade Execution (Copy-Paste for WhatsApp)
+🌐 *Engine*: Zerodha Option Selling (Even Strike Grid)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, next month (27-Oct-2026 Expiry) ke liye Master Anchor `23,360` par **M3 Unit (EVEN Strike Grid)** ka exact plan aur trade details ye rahi:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 *1️⃣ CALL WING (CE SIDE) — BEARISH TREND*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *Sell Strike*: **`23800 CE`** (Even Strike) ➔ Premium: **~₹155.80**
+  *(Safer Alternate Option: `24000 CE` @ ~₹91.85)*
+• *Hedge Strike (500-pt OTM)*: **`24300 CE`** ➔ Premium: **~₹38.95**
+• *25% Stop-Loss Trigger*: **₹194.75** (for 23800 CE) / **₹114.80** (for 24000 CE)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟢 *2️⃣ PUT WING (PE SIDE) — BULLISH TREND*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *Sell Strike*: **`23000 PE`** (Even Strike) ➔ Premium: **~₹107.20**
+  *(Safer Alternate Option: `22800 PE` @ ~₹74.20)*
+• *Hedge Strike (500-pt OTM)*: **`22500 PE`** ➔ Premium: **~₹45.30**
+• *25% Stop-Loss Trigger*: **₹134.00** (for 23000 PE) / **₹92.75** (for 22800 PE)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ *3️⃣ MARKET OPENING & EXECUTION RULE*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Anchor `23,360` ke mutabiq opening par automatic execution:
+
+🟢 *Agar Spot >= `23,360` (Bullish Open)*:
+• Software **PUT WING (`23000 PE`) LIVE execute** karega:
+  1. Pehle `22500 PE` Hedge BUY karega.
+  2. Fir `23000 PE` SELL karega.
+  3. Call Wing ko pending armed rakhega.
+
+🔴 *Agar Spot < `23,360` (Bearish Open)*:
+• Software **CALL WING (`23800 CE`) LIVE execute** karega:
+  1. Pehle `24300 CE` Hedge BUY karega.
+  2. Fir `23800 CE` SELL karega.
+  3. Put Wing ko pending armed rakhega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🖥️ *DASHBOARD PAR DEPLOY KAISE KAREIN*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Dashboard (`http://5.75.250.104:9007`) open karein.
+2. *Unified V5 Deployer* me:
+   • Expiry: **`27-Oct-2026`**
+   • Unit Pod: **`M3`**
+   • Master Anchor: **`23360.00`**
+3. **"Deploy Unified V5 (M3)"** button dabayein!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
