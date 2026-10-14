@@ -15,11 +15,59 @@ def ist_now() -> datetime.datetime:
 # Alias for compatibility
 now_ist = ist_now
 
+# ─────────────────────────────────────────────────────────────────────────────
+# NSE Trading Holiday Calendar (2026 - 2027) & Weekend Check
+# ─────────────────────────────────────────────────────────────────────────────
+NSE_HOLIDAYS_2026 = {
+    "2026-01-26",  # Republic Day
+    "2026-03-03",  # Holi
+    "2026-03-20",  # Id-Ul-Fitr (Ramzan Id)
+    "2026-03-27",  # Shri Ram Navami
+    "2026-04-03",  # Good Friday
+    "2026-04-14",  # Dr. Baba Saheb Ambedkar Jayanti
+    "2026-05-01",  # Maharashtra Day
+    "2026-05-28",  # Bakri Id / Eid-Ul-Adha
+    "2026-06-26",  # Muharram
+    "2026-08-15",  # Independence Day
+    "2026-09-04",  # Milad-un-Nabi
+    "2026-10-02",  # Mahatma Gandhi Jayanti
+    "2026-10-20",  # Dussehra
+    "2026-11-09",  # Diwali Laxmi Pujan
+    "2026-11-10",  # Diwali Balipratipada
+    "2026-11-24",  # Gurunanak Jayanti
+    "2026-12-25",  # Christmas
+}
+
+def is_trading_day(dt: datetime.datetime = None) -> bool:
+    """
+    Returns True ONLY if dt (or current IST datetime) is an active NSE trading day.
+    Strictly returns False for Saturdays (5), Sundays (6), and all official NSE holidays.
+    """
+    if dt is None:
+        dt = ist_now()
+    # Check weekend (0 = Monday ... 4 = Friday, 5 = Saturday, 6 = Sunday)
+    if dt.weekday() >= 5:
+        return False
+    # Check NSE holiday list
+    day_str = dt.strftime("%Y-%m-%d")
+    if day_str in NSE_HOLIDAYS_2026:
+        return False
+    # Also check if custom holiday is registered in DB
+    try:
+        custom_holidays = db.get("custom_trading_holidays", "")
+        if custom_holidays and day_str in [h.strip() for h in custom_holidays.split(",")]:
+            return False
+    except Exception:
+        pass
+    return True
+
 def is_market_hours() -> bool:
-    """Returns True if the current IST time is within NSE market hours (09:15 to 15:45)."""
+    """Returns True if the current IST time is within active NSE market hours (09:15 to 15:30) on a trading day."""
     now = ist_now()
+    if not is_trading_day(now):
+        return False
     market_open  = now.replace(hour=9,  minute=15, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return market_open <= now <= market_close
 
 def log(msg: str, level: str = "INFO") -> None:

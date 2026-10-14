@@ -1,0 +1,23 @@
+✅ *21900 PE HEDGE BOOKED & CLOSED SUCCESSFULLY* ✅
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📌 *Execution Summary:*
+• *Contract:* NIFTY 27-OCT-2026 21900 PE (Hedge)
+• *Quantity:* 325 (5 Lots)
+• *Buy Price:* ₹72.20
+• *Exit Price (Sold):* *₹81.75*
+• *Order Status:* COMPLETE (Order ID: `2108055618219712512`)
+• *Realized Profit Booked:* *+₹3,103.75*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 *Current Open Positions on Zerodha:*
+1. *M1 Unit (Call Wing):*
+   • `23000 CE` Sell (-325 Qty) ➔ *Profit: +₹10,220*
+   • `23500 CE` Hedge (+325 Qty) ➔ Active Shield
+2. *OS1 Unit (Call Wing):*
+   • `23100 CE` Sell (-195 Qty) ➔ *Profit: +₹14,060*
+   • `23600 CE` Hedge (+195 Qty) ➔ Active Shield
+
+• *Total Account Status:* Strongly in Profit (~+₹24,000+) & 100% Protected.
+━━━━━━━━━━━━━━━━━━━━━━━━━━

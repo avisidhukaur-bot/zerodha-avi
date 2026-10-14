@@ -2,8 +2,6 @@ import paramiko
 import os
 import sys
 
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-
 secrets = {}
 secrets_path = os.path.join(os.path.dirname(__file__), "secrets.txt")
 with open(secrets_path, encoding="utf-8") as f:
@@ -13,61 +11,45 @@ with open(secrets_path, encoding="utf-8") as f:
             k, v = line.split("=", 1)
             secrets[k.strip()] = v.strip()
 
-VPS_IP = secrets.get("VPS_IP", "5.75.250.104")
-VPS_USER = secrets.get("VPS_USER", "root")
+VPS_IP       = secrets.get("VPS_IP", "5.75.250.104")
+VPS_USER     = secrets.get("VPS_USER", "root")
 VPS_PASSWORD = secrets.get("VPS_PASSWORD", "")
 
 client = paramiko.SSHClient()
 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 client.connect(VPS_IP, username=VPS_USER, password=VPS_PASSWORD, timeout=15)
 
-remote_script = """# -*- coding: utf-8 -*-
-import sys
-sys.path.insert(0, '/root/BHARAT-SYSTEMS/ZERODHA-OS')
-import sqlite3
-import datetime
+def run(cmd):
+    stdin, stdout, stderr = client.exec_command(cmd)
+    return stdout.read().decode(errors='replace')
 
-conn = sqlite3.connect('/root/BHARAT-SYSTEMS/ZERODHA-OS/zerodha_trader.db')
+print("=== RECENT ORDERS / POSITIONS / STRIKES IN VPS DB ===")
+py_cmd = '''python3 -c "
+import sqlite3, os
+
+db_path = '/root/BHARAT-SYSTEMS/ZERODHA-OS/zerodha_trader.db'
+if not os.path.exists(db_path):
+    print('DB not found at path')
+    exit()
+
+conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 
-print("=== ALL ACTIVE BLOCKS ===")
-blocks = cur.execute('SELECT * FROM blocks WHERE status="ACTIVE"').fetchall()
-for b in blocks:
+print('--- BLOCKS ---')
+for b in cur.execute('SELECT * FROM blocks ORDER BY id DESC LIMIT 5').fetchall():
     print(dict(b))
 
-print("\\n=== TODAY LEGS / RECENT TRADES ===")
-legs = cur.execute('SELECT l.*, s.strike_price, s.option_type, s.leg_type, s.block_id FROM legs l JOIN strikes s ON l.strike_id=s.strike_id ORDER BY l.leg_id DESC LIMIT 15').fetchall()
-for l in legs:
+print('\n--- STRIKES ---')
+for s in cur.execute('SELECT * FROM strikes ORDER BY id DESC LIMIT 10').fetchall():
+    print(dict(s))
+
+print('\n--- LEGS ---')
+for l in cur.execute('SELECT * FROM legs ORDER BY id DESC LIMIT 10').fetchall():
     print(dict(l))
+"'''
 
-print("\\n=== RECENT SYSTEM LOGS ===")
-try:
-    with open('/root/BHARAT-SYSTEMS/ZERODHA-OS/engine.log', 'r') as f:
-        lines = f.readlines()
-        for line in lines[-50:]:
-            print(line.strip())
-except Exception as e:
-    print('Engine log read error:', e)
+print(run(py_cmd))
 
-try:
-    with open('/root/BHARAT-SYSTEMS/ZERODHA-OS/trader.log', 'r') as f:
-        lines = f.readlines()
-        for line in lines[-50:]:
-            print(line.strip())
-except Exception as e:
-    print('Trader log read error:', e)
-"""
-
-sftp = client.open_sftp()
-with sftp.file("/root/BHARAT-SYSTEMS/ZERODHA-OS/inspect_today.py", "w") as f:
-    f.write(remote_script)
-sftp.close()
-
-_, stdout, stderr = client.exec_command("python3 /root/BHARAT-SYSTEMS/ZERODHA-OS/inspect_today.py")
-print(stdout.read().decode(errors='replace'))
-err = stderr.read().decode(errors='replace')
-if err:
-    print("STDERR:", err)
-
-client.close()
+print("\n=== RECENT ENGINE LOGS (LAST 100 LINES) ===")
+print(run("tail -n 100 /root/BHARAT-SYSTEMS/ZERODHA-OS/zerodha_engine.log"))

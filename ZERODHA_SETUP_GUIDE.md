@@ -27,7 +27,7 @@ Zerodha ke live trading parameters ko chalane ke liye ek developer API subscript
    - Click on **"Create New App"**.
    - **App Name**: `OptionSellingApp` (kuchh bhi rakh sakte ho).
    - **Kite User ID**: Apna normal Zerodha login user ID dalo (e.g. `140003749`).
-   - **Redirect URL**: Isme **`http://127.0.0.1:9007/`** dalo (ya phir system dashboard URL `http://46.224.133.16:9007/` dalo).
+   - **Redirect URL**: Isme **`http://127.0.0.1:9007/`** dalo (ya phir system dashboard URL `http://5.75.250.104:9007/` dalo).
    - **Description**: `Automated Options Selling Engine`.
    - Submit pe click karo.
 4. **Keys Copy Karo**:
@@ -101,8 +101,8 @@ NTFY_TOPIC=gurjeet_options_selling_alerts_2026
 TELEGRAM_TOKEN=8600742889:AAGUn2v7aAkYGUKXKxoPaeLSQNPFGBUEhGE
 TELEGRAM_CHAT_ID=586422450
 
-ALLOWED_TRADING_IP=ANY
-VPS_IP=46.224.133.16
+ALLOWED_TRADING_IP=5.75.250.104
+VPS_IP=5.75.250.104
 VPS_USER=root
 VPS_PASSWORD=U4CJs4HKbMMJ
 ```
@@ -112,7 +112,7 @@ VPS_PASSWORD=U4CJs4HKbMMJ
 ## ☀️ STEP 6: Daily Operations Checklist (How to use)
 
 ### Option A: Manual 6-Digit OTP Login (Recommended for security)
-1. Har subah **9:00 AM IST** se pehle dashboard URL open karo: **`http://46.224.133.16:9007`**
+1. Har subah **9:00 AM IST** se pehle dashboard URL open karo: **`http://5.75.250.104:9007`**
 2. Sidebar mein **`🔌 MANUAL OTP LOGIN`** section dikhega.
 3. Apne mobile (Google Authenticator ya Kite App) se **6-Digit OTP** dalo aur **`🔌 Connect with 6-Digit OTP`** button par click karo.
 4. Success green message aate hi system trade execute karne ke liye taiyaar ho jayega.

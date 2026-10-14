@@ -1,0 +1,52 @@
+🚀 *ZERODHA V5.2 — M1 TRADE SETUP (READY TO DEPLOY)* 🚀
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 01 October 2026
+📈 *NIFTY Live Spot*: `22,375.45`
+📆 *Expiry*: **`27-Oct-2026`** (Monthly)
+📍 *Master Anchor*: **`22,400.00`**
+🌐 *System*: Zerodha Option Selling V5.2 (Port 9007)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, M1 unit ke liye Live market quotes ke mutabiq exact Best Trade ye rahi:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 *1️⃣ CALL WING (CE SIDE) — LIVE EXECUTE HOGA*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *Sell Strike (Even)*: **`23000 CE`** ➔ Premium: **₹124.15**
+• *Hedge Strike (500-pt)*: **`23500 CE`** ➔ Premium: **₹44.05**
+• *25% Stop-Loss Trigger*: **₹155.20**
+• *Net Decay Profit*: **~₹80.10 / share** (~₹5,200 per lot)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟢 *2️⃣ PUT WING (PE SIDE) — PENDING / ARMED RAHEGA*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• *Sell Strike (Even)*: **`21800 PE`** ➔ Premium: **₹126.95**
+• *Hedge Strike (500-pt)*: **`21300 PE`** ➔ Premium: **₹57.80**
+• *25% Stop-Loss Trigger*: **₹158.70**
+• *Net Decay Profit*: **~₹69.15 / share** (~₹4,500 per lot)
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ *3️⃣ EXECUTION RULE*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Kyunki Nifty Spot (`22,375`) < Anchor (`22,400`):
+1. Software turant **`23500 CE` Buy** karega.
+2. Uske baad **`23000 CE` Sell** karega (Live Call Trade ban jayegi).
+3. Put Wing ko pending armed rakhega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🖥️ *DASHBOARD PAR KAISE LAGAYEIN*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. `http://5.75.250.104:9007` open karein.
+2. *Unified V5 Deployer* me:
+   • Unit Pod: **`M1`**
+   • Expiry: **`27-Oct-2026`**
+   • Master Anchor: **`22400.00`**
+   • Lots: **`1`** ya **`2`**
+3. **"Deploy Unified V5"** click karein!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -32,6 +32,7 @@ import sys
 import time
 import threading
 from typing import Optional
+from datetime import datetime
 
 # Force UTF-8 on Windows terminals
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -63,11 +64,7 @@ def create_block(
     regime_buffer: float = 15.0,
     custom_lots: int = 2,
     current_regime: str = "NEUTRAL",
-    recommended_lots: int = 1,
-    anchor_decision_time: str = "15:00",
-    orphan_hedge_policy: str = "PRESERVE",
-    auto_regime_enabled: int = 1,
-    **kwargs
+    orphan_hedge_policy: str = "PRESERVE"
 ) -> dict:
     """
     Creates a new trading block (V3.0 Autonomous Multi-Anchor Unit).
@@ -106,16 +103,47 @@ def create_block(
         b_unit = (b.get("anchor_unit_name") or "M1").strip().upper()
 
         if b_exp == expiry_date.upper() and b_unit == unit_name:
+            # Check if this existing block has any strikes attached
+            existing_strikes = db.get_strikes_by_block(b["block_id"])
+            if not existing_strikes:
+                # Seamlessly re-use the empty placeholder block!
+                _log(f"Re-using existing empty block #{b['block_number']} for Unit {unit_name} ({expiry_date})", "INFO")
+                db.update_block_anchor(b["block_id"], master_anchor_price, regime_buffer, unit_name)
+                try:
+                    conn = db._conn()
+                    conn.execute(
+                        "UPDATE blocks SET side_type=?, custom_lots=?, notes=? WHERE block_id=?",
+                        (side_type, custom_lots, notes or b.get("notes", ""), b["block_id"])
+                    )
+                    conn.commit()
+                    # Also close any other empty blocks for the same unit to avoid duplicate fragments
+                    conn.execute(
+                        "UPDATE blocks SET status='CLOSED' WHERE status='ACTIVE' AND anchor_unit_name=? AND expiry_date=? AND block_id!=? AND (SELECT COUNT(*) FROM strikes WHERE block_id=blocks.block_id)=0",
+                        (unit_name, expiry_date, b["block_id"])
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception as ex_reuse:
+                    _log(f"Error during empty block reuse cleanup: {ex_reuse}", "WARN")
+
+                return {
+                    "ok":           True,
+                    "block_id":     b["block_id"],
+                    "block_number": b["block_number"],
+                    "unit_name":    unit_name,
+                    "message":      f"Block #{b['block_number']} [Unit {unit_name}] re-used for {expiry_date}.",
+                }
+
             if side_type == "BOTH" or b_side == "BOTH" or b_side == side_type:
                 _log(
-                    f"DUPLICATE BLOCKED: ACTIVE Unit {b_unit} Block #{b['block_number']} ({b_side}) already exists for expiry {expiry_date}.",
+                    f"DUPLICATE BLOCKED: ACTIVE Unit {b_unit} Block #{b['block_number']} ({b_side}) already exists with active strikes for expiry {expiry_date}.",
                     "WARN"
                 )
                 return {
                     "ok":           False,
                     "block_id":     b["block_id"],
                     "block_number": b["block_number"],
-                    "message":      f"Unit {b_unit} Block #{b['block_number']} ({b_side}) already exists for expiry {expiry_date}. Choose a new Unit name (e.g. {db.get_next_unit_name(expiry_date)}) for fresh blocks.",
+                    "message":      f"Unit {b_unit} Block #{b['block_number']} ({b_side}) already has active strikes for expiry {expiry_date}. Choose a new Unit name (e.g. {db.get_next_unit_name(expiry_date)}) for fresh blocks.",
                     "duplicate":    True,
                 }
 
@@ -129,9 +157,6 @@ def create_block(
         regime_buffer=regime_buffer,
         custom_lots=custom_lots,
         current_regime=current_regime,
-        auto_regime_enabled=auto_regime_enabled,
-        anchor_decision_time=anchor_decision_time,
-        recommended_lots=recommended_lots,
         orphan_hedge_policy=orphan_hedge_policy
     )
     if block_id < 0:
@@ -209,267 +234,6 @@ def create_separate_blocks(
         return {"ok": res_call["ok"] or res_put["ok"], "message": " | ".join(errs)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# V5.0 "OLD & GOLD" UNIFIED SINGLE-WINDOW DEPLOYMENT & ORPHAN HEDGE CONTROL
-# ─────────────────────────────────────────────────────────────────────────────
-
-def deploy_unified_master_unit(
-    expiry_date: str,
-    anchor_unit_name: str = "M1",
-    master_anchor_price: float = 0.0,
-    regime_buffer: float = 15.0,
-    recommended_lots: int = 1,
-    notes: str = "",
-    # Call wing
-    ce_sell_strike: int = 0,
-    ce_sell_anchor: float = 0.0,
-    ce_hedge_strike: int = 0,
-    ce_hedge_anchor: float = 0.0,
-    ce_sl_pct: float = 25.0,
-    ce_sl_price: float = 0.0,
-    ce_reentry_enabled: int = 1,
-    # Put wing
-    pe_sell_strike: int = 0,
-    pe_sell_anchor: float = 0.0,
-    pe_hedge_strike: int = 0,
-    pe_hedge_anchor: float = 0.0,
-    pe_sl_pct: float = 25.0,
-    pe_sl_price: float = 0.0,
-    pe_reentry_enabled: int = 1,
-    execute_live: bool = True,
-    current_spot: Optional[float] = None,
-) -> dict:
-    """
-    V5.0 'Old & Gold' Architecture: Unified Single-Window Console Deployment ('Ek Hi Jagah Saari Chijen').
-    1. Creates or finds the Unit Master Block (M1/M2/M3).
-    2. Attaches Call Wing (CE Sell + CE Hedge) with status PENDING and trade_state PENDING.
-    3. Attaches Put Wing (PE Sell + PE Hedge) with status PENDING and trade_state PENDING.
-    4. Evaluates live Spot vs master_anchor_price:
-       - If Spot >= Master Anchor (Bullish):
-           * Executes PUT Wing LIVE (Hedge First -> then Sell PE) -> trade_state = 'OPEN'.
-           * Leaves CALL Wing in PENDING (Armed on broker sidelines) -> trade_state = 'PENDING'.
-       - If Spot < Master Anchor (Bearish):
-           * Executes CALL Wing LIVE (Hedge First -> then Sell CE) -> trade_state = 'OPEN'.
-           * Leaves PUT Wing in PENDING (Armed on broker sidelines) -> trade_state = 'PENDING'.
-    """
-    expiry_date = expiry_date.strip()
-    unit_name = str(anchor_unit_name).strip().upper() if anchor_unit_name else "M1"
-
-    # Step 1: Create or reuse Master Block
-    res_block = create_block(
-        expiry_date=expiry_date,
-        expiry_type="MONTHLY",
-        side_type="BOTH",
-        notes=notes or f"Unified V5 Master Unit {unit_name}",
-        anchor_unit_name=unit_name,
-        master_anchor_price=float(master_anchor_price),
-        regime_buffer=float(regime_buffer),
-        custom_lots=int(recommended_lots),
-        recommended_lots=int(recommended_lots),
-        anchor_decision_time="15:00",
-        orphan_hedge_policy="PRESERVE"
-    )
-
-    if not res_block.get("ok"):
-        return {"ok": False, "message": f"Failed to create Master Block: {res_block.get('message')}"}
-
-    block_id = res_block["block_id"]
-    block_num = res_block["block_number"]
-
-    ce_h_id = None
-    ce_s_id = None
-    pe_h_id = None
-    pe_s_id = None
-
-    # Step 2: Attach Call Wing (if configured)
-    if ce_sl_price <= 0 and float(ce_sell_anchor) > 0:
-        ce_sl_price = float(ce_sell_anchor) * (1.0 + (float(ce_sl_pct) / 100.0))
-    elif ce_sl_price > 0 and float(ce_sell_anchor) > 0:
-        ce_sl_pct = max(0.1, ((ce_sl_price - float(ce_sell_anchor)) / float(ce_sell_anchor)) * 100.0)
-
-    if ce_hedge_strike > 0:
-        ce_h_id = db.add_strike(
-            block_id=block_id,
-            strike_price=int(ce_hedge_strike),
-            option_type="CE",
-            leg_type="HEDGE_BUY",
-            anchor_price=float(ce_hedge_anchor),
-            lots=int(recommended_lots),
-            expiry_date=expiry_date,
-            trade_state="PENDING"
-        )
-    if ce_sell_strike > 0:
-        ce_s_id = db.add_strike(
-            block_id=block_id,
-            strike_price=int(ce_sell_strike),
-            option_type="CE",
-            leg_type="SELL",
-            anchor_price=float(ce_sell_anchor),
-            lots=int(recommended_lots),
-            hedge_strike_id=ce_h_id,
-            expiry_date=expiry_date,
-            sl_pct=float(ce_sl_pct),
-            sl_price=float(ce_sl_price),
-            reentry_enabled=int(ce_reentry_enabled),
-            trade_state="PENDING"
-        )
-        if ce_h_id and ce_s_id > 0:
-            link_hedge_to_sell(ce_s_id, ce_h_id)
-
-    # Step 3: Attach Put Wing (if configured)
-    if pe_sl_price <= 0 and float(pe_sell_anchor) > 0:
-        pe_sl_price = float(pe_sell_anchor) * (1.0 + (float(pe_sl_pct) / 100.0))
-    elif pe_sl_price > 0 and float(pe_sell_anchor) > 0:
-        pe_sl_pct = max(0.1, ((pe_sl_price - float(pe_sell_anchor)) / float(pe_sell_anchor)) * 100.0)
-
-    if pe_hedge_strike > 0:
-        pe_h_id = db.add_strike(
-            block_id=block_id,
-            strike_price=int(pe_hedge_strike),
-            option_type="PE",
-            leg_type="HEDGE_BUY",
-            anchor_price=float(pe_hedge_anchor),
-            lots=int(recommended_lots),
-            expiry_date=expiry_date,
-            trade_state="PENDING"
-        )
-    if pe_sell_strike > 0:
-        pe_s_id = db.add_strike(
-            block_id=block_id,
-            strike_price=int(pe_sell_strike),
-            option_type="PE",
-            leg_type="SELL",
-            anchor_price=float(pe_sell_anchor),
-            lots=int(recommended_lots),
-            hedge_strike_id=pe_h_id,
-            expiry_date=expiry_date,
-            sl_pct=float(pe_sl_pct),
-            sl_price=float(pe_sl_price),
-            reentry_enabled=int(pe_reentry_enabled),
-            trade_state="PENDING"
-        )
-        if pe_h_id and pe_s_id > 0:
-            link_hedge_to_sell(pe_s_id, pe_h_id)
-
-    # Step 4: Selective Execution based on Live Spot vs Master Anchor
-    executed_side = "NONE"
-    pending_side = "NONE"
-    exec_details = {}
-
-    spot = current_spot if (current_spot is not None and current_spot > 0) else kite_executor.get_nifty_spot()
-    if spot <= 0 and master_anchor_price > 0:
-        spot = master_anchor_price
-
-    if execute_live and master_anchor_price > 0:
-        if spot >= master_anchor_price:
-            # 🟢 Bullish -> Execute PUT Wing LIVE; CALL Wing stays in PENDING
-            executed_side = "PUT"
-            pending_side = "CALL"
-            db.update_block_regime(block_id, "BULLISH")
-            if pe_s_id and pe_s_id > 0:
-                exec_res = execute_strike(pe_s_id)
-                exec_details["put_exec"] = exec_res
-                if exec_res.get("ok"):
-                    db.update_strike_trade_state(pe_s_id, "OPEN")
-                    if pe_h_id:
-                        db.update_strike_trade_state(pe_h_id, "OPEN")
-            _log(f"🚀 V5 Master Unit {unit_name} Deployed: BULLISH (Spot ₹{spot:.2f} >= Anchor ₹{master_anchor_price:.2f}). Put Wing executed LIVE; Call Wing held in PENDING.", "OK")
-        else:
-            # 🔴 Bearish -> Execute CALL Wing LIVE; PUT Wing stays in PENDING
-            executed_side = "CALL"
-            pending_side = "PUT"
-            db.update_block_regime(block_id, "BEARISH")
-            if ce_s_id and ce_s_id > 0:
-                exec_res = execute_strike(ce_s_id)
-                exec_details["call_exec"] = exec_res
-                if exec_res.get("ok"):
-                    db.update_strike_trade_state(ce_s_id, "OPEN")
-                    if ce_h_id:
-                        db.update_strike_trade_state(ce_h_id, "OPEN")
-            _log(f"🚀 V5 Master Unit {unit_name} Deployed: BEARISH (Spot ₹{spot:.2f} < Anchor ₹{master_anchor_price:.2f}). Call Wing executed LIVE; Put Wing held in PENDING.", "OK")
-
-    tg.send(
-        f"🚀 <b>V5 UNIFIED MASTER UNIT DEPLOYED</b> 🚀\n"
-        f"Unit: <b>{unit_name}</b> (Block #{block_num})\n"
-        f"Expiry: <b>{expiry_date}</b> | Lots: <b>{recommended_lots}</b>\n"
-        f"Master Anchor: ₹<b>{master_anchor_price:,.2f}</b> | Spot: ₹<b>{spot:,.2f}</b>\n"
-        f"⚡ <b>Executed Live:</b> {executed_side} Wing\n"
-        f"🛡️ <b>Held in PENDING:</b> {pending_side} Wing\n"
-        f"<i>Architecture: V5.0 'Old & Gold'</i>"
-    )
-
-    return {
-        "ok": True,
-        "block_id": block_id,
-        "block_number": block_num,
-        "unit_name": unit_name,
-        "executed_side": executed_side,
-        "pending_side": pending_side,
-        "ce_sell_id": ce_s_id,
-        "ce_hedge_id": ce_h_id,
-        "pe_sell_id": pe_s_id,
-        "pe_hedge_id": pe_h_id,
-        "exec_details": exec_details,
-        "message": f"Successfully deployed Unit {unit_name} (Block #{block_num}): {executed_side} Wing executed LIVE, {pending_side} Wing held in PENDING."
-    }
-
-
-def exit_orphan_hedge(hedge_strike_id: int) -> dict:
-    """
-    V5.0 Manual Profit Lock: 1-Click closure of an active Orphan Hedge.
-    """
-    strike = db.get_strike(hedge_strike_id)
-    if not strike:
-        return {"ok": False, "message": f"Strike {hedge_strike_id} not found."}
-    if strike["leg_type"] != "HEDGE_BUY":
-        return {"ok": False, "message": f"Strike {hedge_strike_id} is not a HEDGE_BUY leg."}
-    if strike["status"] != "OPEN":
-        return {"ok": False, "message": f"Hedge {hedge_strike_id} is not OPEN (status={strike['status']})."}
-
-    # Execute market sell to exit long hedge
-    sym_info = _resolve_symbol(strike)
-    if not sym_info:
-        return {"ok": False, "message": f"Could not resolve symbol for hedge {hedge_strike_id}."}
-
-    lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
-    qty = strike["lots"] * lot_size
-
-    order_id, filled = kite_executor.execute_sell_and_confirm(
-        trading_symbol=sym_info["trading_symbol"],
-        symbol_token=sym_info["token"],
-        qty=qty
-    )
-
-    if not filled or not order_id:
-        return {"ok": False, "message": "Failed to close hedge order on broker."}
-
-    fill_price = kite_executor.get_order_fill_price(order_id)
-    if fill_price <= 0:
-        fill_price = kite_executor.get_ltp(sym_info["token"], sym_info["trading_symbol"])
-    if fill_price <= 0:
-        fill_price = strike.get("anchor_price", 0.0)
-
-    open_leg = db.get_open_leg(strike["strike_id"])
-    leg_id = open_leg["leg_id"] if open_leg else None
-    realized_pnl = 0.0
-    if open_leg:
-        realized_pnl = (fill_price - open_leg["entry_price"]) * qty
-        db.close_leg(leg_id, fill_price, realized_pnl)
-    db.update_strike_status(strike["strike_id"], "CLOSED")
-    db.update_strike_trade_state(strike["strike_id"], "CLOSED")
-    db.log_trade(
-        block_id     = strike["block_id"],
-        strike_id    = strike["strike_id"],
-        action       = "CLOSE_HEDGE_PROFIT_LOCK",
-        price        = fill_price,
-        lots         = strike["lots"],
-        order_status = "SUCCESS"
-    )
-
-    _log(f"💰 V5 Manual Profit Lock: Closed Orphan Hedge #{hedge_strike_id} ({strike['strike_price']} {strike['option_type']}) at ₹{fill_price:.2f}", "OK")
-    return {"ok": True, "fill_price": fill_price, "realized_pnl": realized_pnl, "message": f"Successfully locked profit on Hedge {strike['strike_price']} {strike['option_type']} at ₹{fill_price:.2f}."}
-
-
 def rearm_block_strikes(block_id: int) -> dict:
     """
     Re-arms all CLOSED strikes in a block back to PENDING.
@@ -490,10 +254,44 @@ def rearm_block_strikes(block_id: int) -> dict:
 
 def kill_block(block_id: int) -> dict:
     """
-    Emergency Kill Unit: Market-closes all open SELL and HEDGE legs and permanently deletes the block.
+    Emergency Kill Unit: Market-closes all open SELL and HEDGE legs strictly for this block.
     """
-    return execute_kill_block_full(block_id)
+    block = db.get_block(block_id)
+    if not block:
+        return {"ok": False, "message": f"Block {block_id} not found."}
 
+    open_strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
+    closed_count = 0
+    errs = []
+    
+    # 1. Close Sell Legs first
+    for s in open_strikes:
+        if s["leg_type"] == "SELL":
+            res = close_strike(s["strike_id"], close_hedge=True)
+            if res.get("ok"):
+                closed_count += 1
+            else:
+                errs.append(f"Strike {s['strike_price']} {s['option_type']}: {res.get('message')}")
+
+    # 2. Close any remaining open Hedges
+    remaining_open = db.get_strikes_by_block(block_id, status_filter="OPEN")
+    for s in remaining_open:
+        res = close_strike(s["strike_id"], close_hedge=False)
+        if res.get("ok"):
+            closed_count += 1
+        else:
+            errs.append(f"Hedge {s['strike_price']} {s['option_type']}: {res.get('message')}")
+
+    _log(f"Emergency Kill Unit for Block #{block['block_number']} [Unit {block.get('anchor_unit_name', 'M1')}]: {closed_count} strikes closed.", "ALERT")
+    u_name = (block.get("anchor_unit_name") or "").strip().upper()
+    if u_name.startswith("M"):
+        db.unlock_m_unit_settings(u_name)
+    elif u_name.startswith("OS"):
+        db.unlock_os_settings()
+
+    if errs:
+        return {"ok": False, "closed_count": closed_count, "message": f"Closed {closed_count} legs with errors: " + "; ".join(errs)}
+    return {"ok": True, "closed_count": closed_count, "message": f"Successfully killed Unit {block.get('anchor_unit_name', 'M1')} (Block #{block['block_number']}). {closed_count} legs closed."}
 
 
 def toggle_block_enabled(block_id: int, is_enabled: bool) -> dict:
@@ -592,8 +390,15 @@ def delete_block(block_id: int) -> dict:
     Deletes a block and all its strikes/legs.
     HARD RULE: Cannot delete if any strike is OPEN.
     """
+    block = db.get_block(block_id)
     ok = db.delete_block(block_id)
     if ok:
+        if block:
+            u_name = (block.get("anchor_unit_name") or "").strip().upper()
+            if u_name.startswith("M"):
+                db.unlock_m_unit_settings(u_name)
+            elif u_name.startswith("OS"):
+                db.unlock_os_settings()
         return {"ok": True, "message": f"Block {block_id} deleted."}
     return {"ok": False, "message": f"Cannot delete block {block_id} -- open strikes exist."}
 
@@ -610,13 +415,14 @@ def add_strike_to_block(
     anchor_price: float,
     lots:         int = 1,
     expiry_date:  str = None,
-    sl_pct:       float = 25.0,
     sl_price:     float = 0.0,
+    sl_pct:       float = 25.0,
+    reentry_price: float = 0.0,
     reentry_enabled: int = 1,
-    trade_state:  str = "PENDING",
+    trade_state:  str = "PENDING"
 ) -> dict:
     """
-    Adds a strike (sell leg or hedge leg) to a block.
+    Adds a strike (sell leg or hedge leg) to a block (V5.0).
     Does NOT place order yet -- just stores in DB.
 
     HARD RULES checked (via db.add_strike):
@@ -624,7 +430,6 @@ def add_strike_to_block(
       - CE / PE only
       - SELL / HEDGE_BUY only
       - Anchor price > 0 (manual entry required)
-      - V5 Invariant: SL is auto-computed as Anchor + 25% if not provided
 
     Returns: {"ok": bool, "strike_id": int, "message": str}
     """
@@ -643,16 +448,6 @@ def add_strike_to_block(
     if b_side == "PUT" and opt_upper != "PE":
         return {"ok": False, "message": f"Block #{block['block_number']} is a PUT SIDE block. Only PE strikes are allowed."}
 
-    # Ensure sl_pct accurately reflects manual sl_price if provided
-    anc_p = float(anchor_price) if anchor_price else 0.0
-    sl_p = float(sl_price) if sl_price else 0.0
-    calc_sl_pct = float(sl_pct) if sl_pct else 25.0
-    if leg_type == "SELL":
-        if sl_p > 0 and anc_p > 0:
-            calc_sl_pct = max(0.1, ((sl_p - anc_p) / anc_p) * 100.0)
-        elif sl_p <= 0 and anc_p > 0:
-            sl_p = anc_p * (1.0 + (calc_sl_pct / 100.0))
-
     strike_id = db.add_strike(
         block_id        = block_id,
         strike_price    = strike_price,
@@ -661,10 +456,11 @@ def add_strike_to_block(
         anchor_price    = anchor_price,
         lots            = lots,
         expiry_date     = expiry_date,
-        sl_pct          = float(calc_sl_pct),
-        sl_price        = float(sl_p),
-        reentry_enabled = int(reentry_enabled),
-        trade_state     = str(trade_state).upper(),
+        sl_price        = sl_price,
+        sl_pct          = sl_pct,
+        reentry_price   = reentry_price,
+        reentry_enabled = reentry_enabled,
+        trade_state     = trade_state
     )
 
     if strike_id < 0:
@@ -833,63 +629,56 @@ def change_strike_lots(strike_id: int, new_lots: int, sync_live: bool = False) -
     return {"ok": True, "message": msg}
 
 
-def update_strike_anchor_price(strike_id: int, new_anchor: float) -> dict:
+def update_strike_anchor_price(strike_id: int, new_anchor: float, auto_recalc_sl: bool = True) -> dict:
     """
-    Updates the anchor price of a strike, maintaining Stop-Loss configuration.
-    """
-    return update_strike_price_and_sl(strike_id=strike_id, new_anchor=new_anchor)
-
-
-def update_strike_price_and_sl(
-    strike_id: int,
-    new_anchor: Optional[float] = None,
-    new_sl_price: Optional[float] = None,
-    new_sl_pct: Optional[float] = None,
-    new_lots: Optional[int] = None
-) -> dict:
-    """
-    Updates a strike's Anchor Price, Stop-Loss Price (in rupees), Stop-Loss Percentage, and Lots in one atomic operation.
+    Updates the anchor price of a strike, and optionally recalculates its stop-loss price.
     """
     strike = db.get_strike(strike_id)
     if not strike:
         return {"ok": False, "message": f"Strike {strike_id} not found."}
+    if new_anchor <= 0:
+        return {"ok": False, "message": "Anchor price must be > 0."}
     
-    anc = float(new_anchor) if new_anchor is not None and new_anchor > 0 else float(strike.get("anchor_price") or 0.0)
-    
-    # Calculate SL price / % if one is provided
-    sl_p = float(new_sl_price) if new_sl_price is not None and new_sl_price > 0 else float(strike.get("sl_price") or 0.0)
-    sl_pct = float(new_sl_pct) if new_sl_pct is not None and new_sl_pct > 0 else float(strike.get("sl_pct") or 25.0)
-    
-    if new_sl_price is not None and new_sl_price > 0:
-        sl_p = float(new_sl_price)
-        if anc > 0:
-            sl_pct = max(0.1, ((sl_p - anc) / anc) * 100.0)
-    elif new_sl_pct is not None and new_sl_pct > 0 and anc > 0:
-        sl_pct = float(new_sl_pct)
-        sl_p = anc * (1.0 + (sl_pct / 100.0))
-    elif sl_p <= 0 and anc > 0:
-        sl_p = anc * (1.0 + (sl_pct / 100.0))
-        
-    lots = int(new_lots) if new_lots is not None and new_lots >= 1 else int(strike.get("lots") or 1)
-    
-    ok = db.update_strike_pricing_and_sl(
-        strike_id=strike_id,
-        anchor_price=anc,
-        sl_price=sl_p,
-        sl_pct=sl_pct,
-        lots=lots
-    )
+    old_anc = float(strike.get("anchor_price") or 0.0)
+    ok = db.update_strike_anchor_price(strike_id, new_anchor, auto_recalc_sl=auto_recalc_sl)
     if ok:
-        _log(f"Strike {strike_id} ({strike['strike_price']} {strike['option_type']}) updated: Anchor=₹{anc:.2f}, SL=₹{sl_p:.2f} (+{sl_pct:.1f}%), Lots={lots}", "OK")
-        return {
-            "ok": True,
-            "anchor_price": anc,
-            "sl_price": sl_p,
-            "sl_pct": sl_pct,
-            "lots": lots,
-            "message": f"Strike {strike['strike_price']} {strike['option_type']} updated: Anchor=₹{anc:.2f}, SL Trigger=₹{sl_p:.2f} (+{sl_pct:.1f}%), Lots={lots}."
-        }
-    return {"ok": False, "message": f"Database error updating strike {strike_id}."}
+        updated_s = db.get_strike(strike_id)
+        new_sl = float(updated_s.get("sl_price") or 0.0) if updated_s else 0.0
+        sl_msg = f" | SL Trigger updated to ₹{new_sl:.2f}" if (auto_recalc_sl and new_sl > 0) else ""
+        msg = f"Strike {strike['strike_price']} {strike['option_type']} anchor updated: ₹{old_anc:.2f} -> ₹{new_anchor:.2f}{sl_msg}."
+        _log(msg, "OK")
+        b = db.get_block(strike["block_id"])
+        b_num = b.get("block_number", 0) if b else 0
+        tg.alert_strike_anchor_updated(b_num, strike["strike_price"], strike["option_type"], old_anc, new_anchor, new_sl)
+        return {"ok": True, "message": msg, "new_sl_price": new_sl}
+    return {"ok": False, "message": f"Database error updating anchor price for strike {strike_id}."}
+
+
+def update_strike_sl(strike_id: int, new_sl_price: float, new_sl_pct: float = None) -> dict:
+    """
+    Updates the stop-loss trigger price of a strike and optionally sl_pct.
+    """
+    strike = db.get_strike(strike_id)
+    if not strike:
+        return {"ok": False, "message": f"Strike {strike_id} not found."}
+    if new_sl_price <= 0:
+        return {"ok": False, "message": "Stop Loss price must be > 0."}
+    
+    old_sl = float(strike.get("sl_price") or 0.0)
+    anchor_p = float(strike.get("anchor_price") or 0.0)
+    if new_sl_pct is None and anchor_p > 0:
+        new_sl_pct = round(((new_sl_price - anchor_p) / anchor_p) * 100.0, 1)
+
+    ok = db.update_strike_sl(strike_id, new_sl_price, sl_pct=new_sl_pct)
+    if ok:
+        pct_str = f" (+{new_sl_pct:.1f}%)" if new_sl_pct is not None else ""
+        msg = f"Strike {strike['strike_price']} {strike['option_type']} Stop Loss updated: ₹{old_sl:.2f} -> ₹{new_sl_price:.2f}{pct_str}."
+        _log(msg, "OK")
+        b = db.get_block(strike["block_id"])
+        b_num = b.get("block_number", 0) if b else 0
+        tg.alert_strike_sl_updated(b_num, strike["strike_price"], strike["option_type"], old_sl, new_sl_price, new_sl_pct)
+        return {"ok": True, "message": msg}
+    return {"ok": False, "message": f"Database error updating Stop Loss for strike {strike_id}."}
 
 
 def scale_block_lots(block_id: int, new_lots: int, sync_live: bool = False) -> dict:
@@ -931,7 +720,7 @@ def _resolve_symbol(strike: dict) -> Optional[dict]:
     )
 
 
-def execute_strike(strike_id: int) -> dict:
+def execute_strike(strike_id: int, ignore_cooldown: bool = False, **kwargs) -> dict:
     """
     Executes a single strike (places the order).
 
@@ -960,21 +749,25 @@ def execute_strike(strike_id: int) -> dict:
     # ── STRICT REGIME GOVERNOR CHECK (V3.0 Multi-Anchor Guardrail) ──
     # If this strike's option_type is MUTED by the regime (e.g. CE in Bullish, PE in Bearish),
     # REJECT manual and automated execution. Strike must remain PENDING (Armed for regime flip).
-    import regime_engine as re_eng
-    is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(strike["option_type"], block=block)
-    if not is_allowed:
-        unit_name = block.get("anchor_unit_name") or f"M{block['block_number']}"
-        regime_name = block.get("current_regime") or "UNKNOWN"
-        msg = f"Execution blocked: Strike {strike['strike_price']} {strike['option_type']} is MUTED under Unit {unit_name} {regime_name} regime ({regime_reason}). Strike remains in PENDING (Armed)."
-        _log(f"[REGIME-GUARD-BLOCKED] {msg}", "WARN")
-        return {
-            "ok": False,
-            "blocked_by_regime": True,
-            "message": msg,
-        }
+    unit_name = (block.get("anchor_unit_name") or f"M{block['block_number']}").strip().upper()
+    is_os_unit = unit_name.startswith("OS")
+
+    if not is_os_unit:
+        import regime_engine as re_eng
+        is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(strike["option_type"], block=block)
+        if not is_allowed:
+            regime_name = block.get("current_regime") or "UNKNOWN"
+            msg = f"Execution blocked: Strike {strike['strike_price']} {strike['option_type']} is MUTED under Unit {unit_name} {regime_name} regime ({regime_reason}). Strike remains in PENDING (Armed)."
+            _log(f"[REGIME-GUARD-BLOCKED] {msg}", "WARN")
+            return {
+                "ok": False,
+                "blocked_by_regime": True,
+                "message": msg,
+            }
 
     # Whitelist / execution check: Prevent entry if already breached (LTP >= anchor + buffer)
-    if strike["leg_type"] == "SELL":
+    # OS units use option decay logic evaluated in os_engine, so skip spot buffer check
+    if strike["leg_type"] == "SELL" and not is_os_unit:
         symbol_info = _resolve_symbol(strike)
         if symbol_info:
             current_ltp = kite_executor.get_ltp(symbol_info["token"], symbol_info["trading_symbol"])
@@ -1006,10 +799,26 @@ def execute_strike(strike_id: int) -> dict:
     if not locked:
         return {"ok": False, "message": f"Strike {strike_id} is already executing or status changed."}
 
+    # ── ENFORCE USER-LOCKED LOTS INVARIANT ────────────────────────────────
+    # Prevents trading in partial / stale 1-lot quantity if the user configured & locked 3 or 4 lots.
+    try:
+        if is_os_unit:
+            user_locked_lots = int(db.get_os_settings().get("lots", 3) or 3)
+        else:
+            user_locked_lots = int(db.get_m_unit_settings(unit_name).get("lots", 4) or 4)
+
+        if user_locked_lots > 0 and strike.get("lots") != user_locked_lots:
+            _log(f"[LOT-INVARIANT] Correcting Strike {strike_id} lots from {strike.get('lots')} -> user-locked {user_locked_lots} lots for {unit_name}", "ORDER")
+            db.update_strike_lots(strike_id, user_locked_lots)
+            strike["lots"] = user_locked_lots
+    except Exception as e_lot:
+        _log(f"[LOT-INVARIANT] Warning reading user locked lots: {e_lot}", "WARN")
+
     lot_size    = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
     qty         = strike["lots"] * lot_size
 
     _log(f"Executing strike {strike_id}: {strike['strike_price']} {strike['option_type']} {strike['leg_type']} | Qty={qty}", "ORDER")
+
 
 
     # ── Case 1: SELL leg → execute hedge first, then sell ────────────────────
@@ -1075,17 +884,36 @@ def execute_strike(strike_id: int) -> dict:
                 _log(err_msg, "ERROR")
                 return {"ok": False, "message": err_msg}
 
+        # Ground Truth Check (Rule 6): Verify if hedge is ACTUALLY live on Zerodha broker terminal
+        hedge_live_on_broker = False
+        if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
+            try:
+                b_positions = kite_executor.get_net_positions() or []
+                h_opt_abbr = hedge_strike["option_type"].upper() if hedge_strike else ""
+                h_strike = int(float(hedge_strike["strike_price"])) if hedge_strike else 0
+                for bp in b_positions:
+                    if bp.get("side") == "LONG" and (bp.get("option_type") or "").upper() in (h_opt_abbr, "CALL" if h_opt_abbr == "CE" else "PUT"):
+                        bp_strike = int(float(bp.get("strike_price", 0)))
+                        if bp_strike == h_strike or bp.get("trading_symbol", "").endswith(f"{h_strike}{h_opt_abbr}") or str(h_strike) in bp.get("trading_symbol", ""):
+                            hedge_live_on_broker = True
+                            break
+            except Exception:
+                hedge_live_on_broker = False
+        else:
+            hedge_live_on_broker = bool(hedge_strike and hedge_strike["status"] in ("OPEN", "EXECUTED"))
+
         hedge_was_pending = False
         if hedge_strike and hedge_strike["status"] == "PENDING":
-            # Atomically lock the hedge strike by setting it to EXECUTING
             hedge_was_pending = db.try_set_strike_executing(hedge_strike_id)
 
-        # Step A: Execute hedge BUY first (HARD RULE from blueprint)
-        if hedge_strike and (hedge_was_pending or hedge_strike["status"] == "OPEN"):
-            if hedge_was_pending:
-                _log(f"Entry sequence: BUY hedge FIRST (Strike {hedge_strike_id})", "ORDER")
-                # Fetch updated hedge strike record with status='EXECUTING'
+        # Step A: Execute hedge BUY first (HARD RULE: Live Broker Ground Truth Confirmation)
+        if hedge_strike:
+            if not hedge_live_on_broker or hedge_was_pending:
+                _log(f"Entry sequence: BUY hedge FIRST on broker terminal (Strike {hedge_strike_id})", "ORDER")
                 updated_hedge_strike = db.get_strike(hedge_strike_id)
+                if updated_hedge_strike["status"] != "EXECUTING":
+                    db.update_strike_status(hedge_strike_id, "EXECUTING")
+                    updated_hedge_strike = db.get_strike(hedge_strike_id)
                 hedge_result = _execute_buy_leg(updated_hedge_strike, qty)
                 if not hedge_result["ok"]:
                     # Rollback both strikes to original status
@@ -1095,9 +923,10 @@ def execute_strike(strike_id: int) -> dict:
                         "ok": False,
                         "message": f"Hedge BUY failed for strike {hedge_strike_id}: {hedge_result['message']}. Aborting sell.",
                     }
+                db.update_strike_status(hedge_strike_id, "OPEN")
                 _log(f"Hedge BUY confirmed: {hedge_strike['strike_price']} {hedge_strike['option_type']} @ Rs{hedge_result['fill_price']:.2f}", "OK")
-            elif hedge_strike["status"] == "OPEN":
-                _log(f"Hedge {hedge_strike_id} already OPEN (auto-linked or pre-existing). Proceeding to sell.", "INFO")
+            elif hedge_strike["status"] == "OPEN" and hedge_live_on_broker:
+                _log(f"Hedge {hedge_strike_id} already OPEN & confirmed on broker terminal. Proceeding to sell.", "INFO")
         else:
             _log(f"WARNING: No hedge linked to sell strike {strike_id}. Proceeding without hedge (unhedged sell).", "WARN")
 
@@ -1126,24 +955,6 @@ def execute_strike(strike_id: int) -> dict:
             }
 
         _log(f"SELL confirmed: {strike['strike_price']} {strike['option_type']} @ Rs{sell_result['fill_price']:.2f}", "OK")
-
-        # V5.0 Invariant: Preserve manual Stop-Loss trigger if set, otherwise calculate Fill Price + 25%
-        fill_price = float(sell_result.get("fill_price", 0.0))
-        if fill_price > 0:
-            cur_sl_price = float(updated_strike.get("sl_price") or 0.0)
-            sl_pct = float(updated_strike.get("sl_pct") or 25.0)
-
-            if cur_sl_price > 0:
-                # Operator explicitly configured a manual Stop Loss Price -> PRESERVE IT
-                exact_sl_price = cur_sl_price
-                sl_pct = max(0.1, ((exact_sl_price - fill_price) / fill_price) * 100.0)
-                db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exact_sl_price)
-                _log(f"[V5-SL-PRESERVED] Strike {strike['strike_price']} {strike['option_type']} SELL: Fill=₹{fill_price:.2f} -> Preserved Manual SL Price ₹{exact_sl_price:.2f} (+{sl_pct:.1f}%)", "OK")
-            else:
-                # Stop loss was not manually set -> Auto-compute +25% away
-                exact_sl_price = fill_price * (1.0 + (sl_pct / 100.0))
-                db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exact_sl_price)
-                _log(f"[V5-SL-ANCHOR] Strike {strike['strike_price']} {strike['option_type']} SELL: Fill=₹{fill_price:.2f} -> SL Price set to ₹{exact_sl_price:.2f} (+{sl_pct:.0f}%)", "OK")
 
         # Log to trade history
         db.log_trade(
@@ -1214,6 +1025,23 @@ def _find_existing_broker_order(token: str, trading_symbol: str, transaction_typ
                 if ord_status not in ("REJECTED", "CANCELLED", "DECLINED", "FAILED"):
                     order_id = str(o.get("order_id") or o.get("orderid") or "")
                     if order_id:
+                        # Live Position Check: If broker net quantity for this instrument is 0,
+                        # this historical order belongs to a position that was already closed / squared off.
+                        # Do NOT reuse it for a fresh entry!
+                        try:
+                            positions = kite_executor.get_positions()
+                            matching_pos = [
+                                p for p in positions 
+                                if str(p.get("tradingsymbol", "")) == str(trading_symbol) 
+                                or str(p.get("instrument_token", "")) == str(token)
+                            ]
+                            if matching_pos:
+                                net_qty = int(matching_pos[0].get("net_qty") or matching_pos[0].get("quantity") or 0)
+                                if net_qty == 0:
+                                    continue  # Already squared off on broker, do NOT link stale order!
+                        except Exception as e_pos:
+                            _log(f"Position check error in _find_existing_broker_order: {e_pos}", "WARN")
+
                         conn = db._conn()
                         linked = conn.execute("SELECT 1 FROM legs WHERE order_id = ?", (order_id,)).fetchone()
                         conn.close()
@@ -1264,28 +1092,15 @@ def reconcile_active_blocks() -> int:
 
 
 def _execute_sell_leg(strike: dict, qty: int) -> dict:
-    """Internal: resolves symbol and places SELL order with strict Broker Ground-Truth verification."""
+    """Internal: resolves symbol and places SELL order."""
     symbol_info = _resolve_symbol(strike)
     if not symbol_info:
         return {"ok": False, "message": f"Could not resolve symbol for {strike['strike_price']} {strike['option_type']}."}
 
-    tsymbol = symbol_info["trading_symbol"]
-    stoken = symbol_info["token"]
-
-    # ── BROKER GROUND TRUTH CHECK 1: Net Open Position on Broker ──
-    # If the broker ALREADY holds the short position (e.g. net_qty <= -qty),
-    # do NOT place another sell order! Re-use existing broker position.
-    broker_net_qty = kite_executor.get_net_position_qty(tsymbol)
-    if broker_net_qty <= -qty:
-        _log(f"[BROKER-GROUND-TRUTH] Strike {tsymbol} already held short on broker (Net Qty: {broker_net_qty}). Blocking duplicate SELL order.", "INFO")
-        fill_price = kite_executor.get_ltp(stoken, tsymbol) or strike["anchor_price"]
-        db.create_leg(strike["strike_id"], fill_price, "BROKER_EXISTING")
-        return {"ok": True, "order_id": "BROKER_EXISTING", "fill_price": fill_price}
-
-    # ── BROKER GROUND TRUTH CHECK 2: Order Book for Today ──
+    # Reconciliation Guard: Check if matching order exists on broker first
     order_id = _find_existing_broker_order(
-        token=stoken,
-        trading_symbol=tsymbol,
+        token=symbol_info["token"],
+        trading_symbol=symbol_info["trading_symbol"],
         transaction_type="SELL",
         qty=qty
     )
@@ -1294,8 +1109,8 @@ def _execute_sell_leg(strike: dict, qty: int) -> dict:
         filled = True
     else:
         order_id, filled = kite_executor.execute_sell_and_confirm(
-            trading_symbol = tsymbol,
-            symbol_token   = stoken,
+            trading_symbol = symbol_info["trading_symbol"],
+            symbol_token   = symbol_info["token"],
             qty            = qty,
         )
 
@@ -1306,7 +1121,7 @@ def _execute_sell_leg(strike: dict, qty: int) -> dict:
     # Record leg fill using actual execution price
     fill_price = kite_executor.get_order_fill_price(order_id)
     if fill_price <= 0:
-        fill_price = kite_executor.get_ltp(stoken, tsymbol)
+        fill_price = kite_executor.get_ltp(symbol_info["token"], symbol_info["trading_symbol"])
     if fill_price <= 0:
         fill_price = strike["anchor_price"]
     db.create_leg(strike["strike_id"], fill_price, order_id)
@@ -1315,28 +1130,15 @@ def _execute_sell_leg(strike: dict, qty: int) -> dict:
 
 
 def _execute_buy_leg(strike: dict, qty: int) -> dict:
-    """Internal: resolves symbol and places BUY order with strict Broker Ground-Truth verification."""
+    """Internal: resolves symbol and places BUY order."""
     symbol_info = _resolve_symbol(strike)
     if not symbol_info:
         return {"ok": False, "message": f"Could not resolve symbol for {strike['strike_price']} {strike['option_type']}."}
 
-    tsymbol = symbol_info["trading_symbol"]
-    stoken = symbol_info["token"]
-
-    # ── BROKER GROUND TRUTH CHECK 1: Net Open Position on Broker ──
-    # If the broker ALREADY holds the long hedge position (e.g. net_qty >= qty),
-    # do NOT buy another hedge! Re-use existing broker position.
-    broker_net_qty = kite_executor.get_net_position_qty(tsymbol)
-    if broker_net_qty >= qty:
-        _log(f"[BROKER-GROUND-TRUTH] Hedge {tsymbol} already held long on broker (Net Qty: {broker_net_qty}). Reusing existing hedge without new buy order.", "INFO")
-        fill_price = kite_executor.get_ltp(stoken, tsymbol) or strike["anchor_price"]
-        db.create_leg(strike["strike_id"], fill_price, "BROKER_EXISTING")
-        return {"ok": True, "order_id": "BROKER_EXISTING", "fill_price": fill_price}
-
-    # ── BROKER GROUND TRUTH CHECK 2: Order Book for Today ──
+    # Reconciliation Guard: Check if matching order exists on broker first
     order_id = _find_existing_broker_order(
-        token=stoken,
-        trading_symbol=tsymbol,
+        token=symbol_info["token"],
+        trading_symbol=symbol_info["trading_symbol"],
         transaction_type="BUY",
         qty=qty
     )
@@ -1345,8 +1147,8 @@ def _execute_buy_leg(strike: dict, qty: int) -> dict:
         filled = True
     else:
         order_id, filled = kite_executor.execute_buy_and_confirm(
-            trading_symbol = tsymbol,
-            symbol_token   = stoken,
+            trading_symbol = symbol_info["trading_symbol"],
+            symbol_token   = symbol_info["token"],
             qty            = qty,
         )
 
@@ -1356,7 +1158,7 @@ def _execute_buy_leg(strike: dict, qty: int) -> dict:
 
     fill_price = kite_executor.get_order_fill_price(order_id)
     if fill_price <= 0:
-        fill_price = kite_executor.get_ltp(stoken, tsymbol)
+        fill_price = kite_executor.get_ltp(symbol_info["token"], symbol_info["trading_symbol"])
     if fill_price <= 0:
         fill_price = strike["anchor_price"]
     db.create_leg(strike["strike_id"], fill_price, order_id)
@@ -1570,7 +1372,7 @@ def process_pending_closes() -> int:
     return closed_count
 
 
-def close_strike(strike_id: int, close_hedge: bool = True) -> dict:
+def close_strike(strike_id: int, close_hedge: bool = True, is_manual: bool = False) -> dict:
     """
     Closes a SELL strike immediately, and schedules the linked hedge strike to close
     after 1 minute (if close_hedge is True) via the DB pending queue.
@@ -1591,7 +1393,9 @@ def close_strike(strike_id: int, close_hedge: bool = True) -> dict:
         return {"ok": False, "message": f"Strike {strike_id} is {strike['status']} -- only OPEN strikes can be closed."}
 
     if strike["leg_type"] != "SELL":
-        return {"ok": False, "message": "Use close_strike() only on SELL strikes. Hedge closes automatically with it."}
+        if strike["leg_type"] == "HEDGE_BUY":
+            return close_hedge_strike_now(strike_id)
+        return {"ok": False, "message": "Use close_strike() only on SELL or HEDGE_BUY strikes."}
 
     lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
     qty      = strike["lots"] * lot_size
@@ -1659,6 +1463,22 @@ def close_strike(strike_id: int, close_hedge: bool = True) -> dict:
     hedge_strike_id   = strike.get("hedge_strike_id")
     hedge_strike      = db.get_strike(hedge_strike_id) if hedge_strike_id else None
 
+    # V8.0 ABSOLUTE ORPHAN HEDGE FIREWALL:
+    # During intraday market hours (< 15:13 IST), automated Stop-Loss exits NEVER close the protective hedge!
+    # The hedge acts as an orphan shield against tail-risk and preserves margin for future re-entries.
+    # Only close hedge if is_manual=True (explicit user button) or at EOD cleanup (>= 15:13 IST).
+    from zoneinfo import ZoneInfo
+    IST = ZoneInfo("Asia/Kolkata")
+    now_ist_str = datetime.now(IST).strftime("%H:%M")
+    eod_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:13")
+    is_eod_time = (now_ist_str >= eod_cutoff)
+
+    if not is_manual and not is_eod_time:
+        close_hedge = False
+
+    if not close_hedge and hedge_strike_id:
+        _log(f"[ORPHAN_HEDGE_ARMOR] Block {block_num} | Strike {strike['strike_price']} {strike['option_type']}: Sell leg exited, linked Hedge #{hedge_strike_id} PRESERVED OPEN as orphan shield (V8.0 Armor).", "OK")
+
     if close_hedge and hedge_strike and hedge_strike["status"] == "OPEN":
         # Mark the hedge strike as PENDING_CLOSE immediately in DB to prevent re-entry trigger
         db.update_strike_status(hedge_strike_id, "PENDING_CLOSE")
@@ -1677,6 +1497,18 @@ def close_strike(strike_id: int, close_hedge: bool = True) -> dict:
         f"Strike {strike_id} CLOSED | Sell P&L=Rs{sell_pnl:.2f} | Delayed hedge scheduled",
         "OK"
     )
+
+    # Sync pod settings if all strikes in block are now closed
+    remaining_open = [
+        s for s in db.get_strikes_by_block(strike["block_id"])
+        if s.get("status") in ("OPEN", "PENDING", "CLOSING", "PENDING_CLOSE") and s.get("strike_id") != strike_id
+    ]
+    if not remaining_open and block:
+        u_name = (block.get("anchor_unit_name") or "").strip().upper()
+        if u_name.startswith("M"):
+            db.unlock_m_unit_settings(u_name)
+        elif u_name.startswith("OS"):
+            db.unlock_os_settings()
 
     return {
         "ok":               True,
@@ -1723,6 +1555,9 @@ def get_portfolio_status() -> dict:
         "algo_running":       db.get("algo_running", "ON") == "ON",
         "last_cycle_time":    db.get("last_cycle_time", "Never"),
     }
+
+
+
 
 
 def close_hedge_strike_now(strike_id: int) -> dict:
@@ -1804,6 +1639,18 @@ def close_hedge_strike_now(strike_id: int) -> dict:
     )
 
     _log(f"Hedge {strike_id} closed immediately: {hedge_symbol['trading_symbol']} @ Rs{hedge_close_price:.2f} | P&L=Rs{hedge_pnl:.2f}", "OK")
+
+    # Sync pod settings if all strikes in block are now closed
+    remaining_open = [
+        s for s in db.get_strikes_by_block(strike["block_id"])
+        if s.get("status") in ("OPEN", "PENDING", "CLOSING", "PENDING_CLOSE") and s.get("strike_id") != strike_id
+    ]
+    if not remaining_open and block:
+        u_name = (block.get("anchor_unit_name") or "").strip().upper()
+        if u_name.startswith("M"):
+            db.unlock_m_unit_settings(u_name)
+        elif u_name.startswith("OS"):
+            db.unlock_os_settings()
 
     return {
         "ok":         True,
@@ -2196,12 +2043,11 @@ def rearm_block_strikes(block_id: int) -> dict:
         return {"ok": False, "message": f"No CLOSED strikes found to re-arm in Block {block['block_number']}."}
 
 
-def execute_kill_block_full(block_id: int) -> dict:
+def kill_block(block_id: int) -> dict:
     """
     Kill Switch for a block:
-    1. Disables re-entry and clears all trigger timers.
-    2. Attempts to exit all open strikes (SELL and HEDGE_BUY) in the block.
-    3. Force deletes the block from the database regardless of exit success.
+    1. Attempts to exit all open strikes (SELL and HEDGE_BUY) in the block.
+    2. Force deletes the block from the database regardless of exit success.
     
     Returns: {"ok": bool, "message": str}
     """
@@ -2220,20 +2066,11 @@ def execute_kill_block_full(block_id: int) -> dict:
         f"Attempting to exit all open positions immediately..."
     )
     
-    # Retrieve all strikes in the block and disable re-entry / timers
+    # Retrieve all strikes in the block
     strikes = db.get_strikes_by_block(block_id)
-    for s in strikes:
-        try:
-            db.update_strike_reentry(s["strike_id"], 0)
-            db.set(f"reentry_trigger_time_{s['strike_id']}", "0")
-            db.set(f"entry_trigger_time_{s['strike_id']}", "0")
-        except Exception as e:
-            _log(f"Error resetting re-entry for strike {s.get('strike_id')}: {e}", "WARN")
-
     open_strikes = [s for s in strikes if s["status"] in ("OPEN", "PENDING_CLOSE")]
     
     exited_strikes = []
-
     failed_strikes = []
     lot_size = int(db.get("lot_size", str(cfg.NIFTY_LOT_SIZE)))
     
@@ -2324,8 +2161,997 @@ def execute_kill_block_full(block_id: int) -> dict:
         "message": f"Block {block_num} deleted successfully and all positions closed."
     }
 
-# Unified alias
-kill_block = execute_kill_block_full
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3:00 PM MASTER ANCHOR CONTINUATION & SIDE DECISION ENGINE (V5.0)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def execute_3pm_master_anchor_decision(nifty_spot: float = 0.0) -> dict:
+    """
+    V5.0 Old & Gold 3:00 PM (15:00 IST) Master Anchor Side Continuation Decision.
+    At 3:00 PM, evaluates live Spot against each active unit's Master Anchor Price:
+    - If Spot >= Master Anchor:
+        -> Continue PUT SELL side (marked CONTINUED)
+        -> Close CALL SELL side (and its active hedge if open)
+    - If Spot < Master Anchor:
+        -> Continue CALL SELL side (marked CONTINUED)
+        -> Close PUT SELL side (and its active hedge if open)
+    - NEVER close both sides automatically.
+    - Orphan hedges remain untouched!
+    """
+    import telegram_bot as tg
+    from kite_executor import kite_executor
+
+    if nifty_spot <= 0.0:
+        nifty_spot = kite_executor.get_nifty_spot()
+    if nifty_spot <= 0.0:
+        try:
+            nifty_spot = float(db.get("last_nifty_spot", "0.0") or 0.0)
+        except ValueError:
+            nifty_spot = 0.0
+
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+    results = []
+
+    for b in active_blocks:
+        block_id = b["block_id"]
+        block_num = b["block_number"]
+        unit_name = b.get("anchor_unit_name") or f"M{block_num}"
+        auto_regime = b.get("auto_regime_enabled", 1)
+        unit_anchor = float(b.get("master_anchor_price") or 0.0)
+
+        if not auto_regime or unit_anchor <= 0.0:
+            continue
+
+        # Evaluate continuation side vs Master Anchor
+        if nifty_spot >= unit_anchor:
+            continued_side = "PUT"
+            opposing_side = "CALL"
+            new_regime = "BULLISH"
+        else:
+            continued_side = "CALL"
+            opposing_side = "PUT"
+            new_regime = "BEARISH"
+
+        db.update_block_regime(block_id, new_regime)
+        _log(f"[3PM_DECISION] Unit {unit_name} (Block {block_num}): Spot ₹{nifty_spot:,.2f} vs Anchor ₹{unit_anchor:,.2f} -> Continued side is {continued_side} SELL under {new_regime} regime.", "DECISION")
+
+        open_strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
+        closed_count = 0
+
+        for s in open_strikes:
+            s_opt = "CALL" if s.get("option_type", "").upper() in ("CE", "CALL") else "PUT"
+            if s.get("leg_type") == "SELL":
+                if s_opt == continued_side:
+                    # RULE 6: Pre-Decision Broker Verification
+                    # Verify on Zerodha Kite broker terminal that this short leg has an active long hedge
+                    broker_hedge_confirmed = True
+                    if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
+                        try:
+                            b_pos = kite_executor.get_net_positions() or []
+                            opt_abbr = "CE" if s_opt == "CALL" else "PE"
+                            long_hedges = [p for p in b_pos if p.get("side") == "LONG" and (p.get("option_type") or "").upper() in (opt_abbr, s_opt)]
+                            if not long_hedges:
+                                broker_hedge_confirmed = False
+                        except Exception as ex_bchk:
+                            _log(f"[3PM_DECISION] Warning checking broker positions: {ex_bchk}", "WARN")
+
+                    if not broker_hedge_confirmed:
+                        # DANGER: No live hedge on broker! Refuse to continue naked overnight!
+                        _log(f"[3PM_DECISION] 🚨 BLOCKED OVERNIGHT CONTINUATION of {s['strike_price']} {s['option_type']} SELL: No live Long Hedge found on Zerodha broker terminal! Auto-closing short leg to prevent naked overnight gap risk.", "ALERT")
+                        res = close_strike(s["strike_id"], close_hedge=False)
+                        db.update_strike_trade_state(s["strike_id"], "CLOSED")
+                        closed_count += 1
+                        try:
+                            tg.send(
+                                f"🚨 <b>3:00 PM DECISION: OVERNIGHT CARRYOVER BLOCKED</b> 🚨\n"
+                                f"Blocked overnight continuation of <b>{s['strike_price']} {s['option_type']} SELL</b>.\n"
+                                f"Reason: No protective Long Hedge found on Zerodha broker terminal!\n"
+                                f"Action: Short leg automatically squared off at market to protect capital."
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        db.update_strike_trade_state(s["strike_id"], "CONTINUED")
+                        _log(f"[3PM_DECISION] {unit_name}: {s['strike_price']} {s['option_type']} SELL CONTINUED into close/overnight under {new_regime} regime (Hedge Verified Active).", "OK")
+                elif s_opt == opposing_side:
+                    _log(f"[3PM_DECISION] {unit_name}: Auto-closing opposing {s['strike_price']} {s['option_type']} SELL (strike_id={s['strike_id']}) under 3:00 PM decision...", "EXIT")
+                    res = close_strike(s["strike_id"], close_hedge=False)
+                    db.update_strike_trade_state(s["strike_id"], "CLOSED")
+                    if res.get("ok"):
+                        closed_count += 1
+                        # Close active hedge associated with this opposing sell
+                        h_id = s.get("hedge_strike_id")
+                        if h_id:
+                            h_strike = db.get_strike(h_id)
+                            if h_strike and h_strike.get("status") == "OPEN":
+                                _log(f"[3PM_DECISION] {unit_name}: Closing associated hedge {h_strike['strike_price']} {h_strike['option_type']} (strike_id={h_id})...", "EXIT")
+                                close_strike(h_id, close_hedge=False)
+                                db.update_strike_trade_state(h_id, "CLOSED")
+
+        # Send Telegram alert for this unit's 3:00 PM decision
+        try:
+            tg.alert_3pm_continuation_decision(
+                unit_name=unit_name,
+                spot_price=nifty_spot,
+                anchor_price=unit_anchor,
+                continued_side=continued_side,
+                closed_count=closed_count
+            )
+        except Exception as e:
+            _log(f"Failed to send 3PM decision TG alert: {e}", "WARN")
+
+        results.append({
+            "block_id": block_id,
+            "unit_name": unit_name,
+            "anchor": unit_anchor,
+            "continued_side": continued_side,
+            "closed_count": closed_count
+        })
+
+    return {"ok": True, "results": results, "spot": nifty_spot}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# UNIFIED MASTER STRATEGY CONSOLE DEPLOYMENT (V5.0)
+# ─────────────────────────────────────────────────────────────────────────────
 
+def deploy_unified_master_unit(
+    expiry_date: str,
+    anchor_unit_name: str = "M1",
+    master_anchor_price: float = 0.0,
+    regime_buffer: float = 15.0,
+    recommended_lots: int = 1,
+    # Call wing
+    ce_sell_strike: int = 0,
+    ce_sell_anchor: float = 0.0,
+    ce_hedge_strike: int = 0,
+    ce_hedge_anchor: float = 0.0,
+    ce_sl_pct: float = 25.0,
+    ce_sl_price: float = 0.0,
+    ce_reentry_enabled: int = 1,
+    # Put wing
+    pe_sell_strike: int = 0,
+    pe_sell_anchor: float = 0.0,
+    pe_hedge_strike: int = 0,
+    pe_hedge_anchor: float = 0.0,
+    pe_sl_pct: float = 25.0,
+    pe_sl_price: float = 0.0,
+    pe_reentry_enabled: int = 1,
+    # Options
+    expiry_type: str = "MONTHLY",
+    notes: str = "V5 Unified Master Strategy"
+) -> dict:
+    """
+    V5.0 Unified Single-Window Setup & Selective Execution:
+    - Creates the unit block atomically with Master Anchor.
+    - Attaches Call Wing (Sell + Hedge) in PENDING state.
+    - Attaches Put Wing (Sell + Hedge) in PENDING state.
+    - Evaluates live Spot vs Master Anchor:
+        * If Spot >= Master Anchor: Executes PUT SELL only. CALL SELL stored in PENDING.
+        * If Spot < Master Anchor:  Executes CALL SELL only. PUT SELL stored in PENDING.
+    """
+    from kite_executor import kite_executor
+
+    live_spot = kite_executor.get_nifty_spot()
+    if live_spot <= 0:
+        try:
+            live_spot = float(db.get("last_nifty_spot", "0.0") or 0.0)
+        except ValueError:
+            live_spot = 0.0
+
+    if master_anchor_price <= 0.0:
+        master_anchor_price = live_spot if live_spot > 0 else 24500.0
+
+    # 1. Create Block Unit
+    res_b = create_block(
+        expiry_date=expiry_date,
+        expiry_type=expiry_type,
+        side_type="BOTH",
+        notes=notes,
+        anchor_unit_name=anchor_unit_name,
+        master_anchor_price=master_anchor_price,
+        regime_buffer=regime_buffer,
+        custom_lots=recommended_lots
+    )
+    if not res_b.get("ok") and not res_b.get("block_id"):
+        return {"ok": False, "message": f"Could not create block unit {anchor_unit_name}: {res_b.get('message')}"}
+
+    bid = res_b["block_id"]
+
+    ce_sell_id = None
+    ce_hedge_id = None
+    pe_sell_id = None
+    pe_hedge_id = None
+
+    # 2. Attach Call Wing (if configured)
+    if ce_sell_strike > 0:
+        ce_base = ce_sell_anchor if ce_sell_anchor > 0 else 100.0
+        r_cs = add_strike_to_block(
+            block_id=bid,
+            strike_price=ce_sell_strike,
+            option_type="CE",
+            leg_type="SELL",
+            anchor_price=ce_base,
+            lots=recommended_lots,
+            expiry_date=expiry_date,
+            sl_price=ce_sl_price,
+            sl_pct=ce_sl_pct,
+            reentry_enabled=ce_reentry_enabled,
+            trade_state="PENDING"
+        )
+        if r_cs.get("ok"):
+            ce_sell_id = r_cs["strike_id"]
+            if ce_hedge_strike > 0:
+                ce_h_base = ce_hedge_anchor if ce_hedge_anchor > 0 else 10.0
+                r_ch = add_strike_to_block(
+                    block_id=bid,
+                    strike_price=ce_hedge_strike,
+                    option_type="CE",
+                    leg_type="HEDGE_BUY",
+                    anchor_price=ce_h_base,
+                    lots=recommended_lots,
+                    expiry_date=expiry_date,
+                    trade_state="PENDING"
+                )
+                if r_ch.get("ok"):
+                    ce_hedge_id = r_ch["strike_id"]
+                    link_hedge_to_sell(ce_sell_id, ce_hedge_id)
+
+    # 3. Attach Put Wing (if configured)
+    if pe_sell_strike > 0:
+        pe_base = pe_sell_anchor if pe_sell_anchor > 0 else 100.0
+        r_ps = add_strike_to_block(
+            block_id=bid,
+            strike_price=pe_sell_strike,
+            option_type="PE",
+            leg_type="SELL",
+            anchor_price=pe_base,
+            lots=recommended_lots,
+            expiry_date=expiry_date,
+            sl_price=pe_sl_price,
+            sl_pct=pe_sl_pct,
+            reentry_enabled=pe_reentry_enabled,
+            trade_state="PENDING"
+        )
+        if r_ps.get("ok"):
+            pe_sell_id = r_ps["strike_id"]
+            if pe_hedge_strike > 0:
+                pe_h_base = pe_hedge_anchor if pe_hedge_anchor > 0 else 10.0
+                r_ph = add_strike_to_block(
+                    block_id=bid,
+                    strike_price=pe_hedge_strike,
+                    option_type="PE",
+                    leg_type="HEDGE_BUY",
+                    anchor_price=pe_h_base,
+                    lots=recommended_lots,
+                    expiry_date=expiry_date,
+                    trade_state="PENDING"
+                )
+                if r_ph.get("ok"):
+                    pe_hedge_id = r_ph["strike_id"]
+                    link_hedge_to_sell(pe_sell_id, pe_hedge_id)
+
+    # 4. Turn Algo Running ON
+    if db.get("algo_running", "ON") == "OFF":
+        db.set("algo_running", "ON")
+
+    # 5. Directional Auto-Gating & Selective Execution with Hysteresis Buffer Guard
+    executed_side = None
+    pending_side = None
+    executed_strike_id = None
+
+    bullish_trigger = master_anchor_price + regime_buffer
+    bearish_trigger = master_anchor_price - regime_buffer
+
+    if live_spot >= bullish_trigger:
+        # Decisive Bullish Breakout -> Execute PUT SELL side
+        executed_side = "PUT"
+        pending_side = "CALL"
+        db.update_block_regime(bid, "BULLISH")
+        if pe_sell_id:
+            r_exec = execute_strike(pe_sell_id)
+            executed_strike_id = pe_sell_id
+            _log(f"[UNIFIED_CONSOLE] {anchor_unit_name} Deployed: Spot ₹{live_spot:,.2f} >= Bullish Trigger ₹{bullish_trigger:,.2f} (Anchor ₹{master_anchor_price:,.2f} + Buffer ₹{regime_buffer:,.2f}) -> Executed PUT SELL (strike_id={pe_sell_id}). CALL SELL stored in PENDING.", "OK")
+    elif live_spot <= bearish_trigger:
+        # Decisive Bearish Breakout -> Execute CALL SELL side
+        executed_side = "CALL"
+        pending_side = "PUT"
+        db.update_block_regime(bid, "BEARISH")
+        if ce_sell_id:
+            r_exec = execute_strike(ce_sell_id)
+            executed_strike_id = ce_sell_id
+            _log(f"[UNIFIED_CONSOLE] {anchor_unit_name} Deployed: Spot ₹{live_spot:,.2f} <= Bearish Trigger ₹{bearish_trigger:,.2f} (Anchor ₹{master_anchor_price:,.2f} - Buffer ₹{regime_buffer:,.2f}) -> Executed CALL SELL (strike_id={ce_sell_id}). PUT SELL stored in PENDING.", "OK")
+    else:
+        # Inside Buffer Zone (Neutral / Armed) -> Zero premature execution!
+        executed_side = "NONE"
+        pending_side = "BOTH"
+        db.update_block_regime(bid, "NEUTRAL")
+        _log(f"[UNIFIED_CONSOLE] {anchor_unit_name} Deployed: Spot ₹{live_spot:,.2f} is inside Buffer Zone (₹{bearish_trigger:,.2f} - ₹{bullish_trigger:,.2f} around Anchor ₹{master_anchor_price:,.2f}). Both CALL and PUT wings armed in PENDING. Engine will execute trend-aligned side upon buffer breakout.", "OK")
+
+    deploy_msg = (
+        f"Unit {anchor_unit_name} deployed successfully! Spot ₹{live_spot:,.2f} vs Anchor ₹{master_anchor_price:,.2f} -> {executed_side} SELL executed; {pending_side} SELL is armed in PENDING."
+        if executed_side in ("PUT", "CALL") else
+        f"Unit {anchor_unit_name} armed in NEUTRAL! Spot ₹{live_spot:,.2f} is inside Buffer Zone (₹{bearish_trigger:,.2f} – ₹{bullish_trigger:,.2f}). Both CALL and PUT wings safely armed in PENDING (zero premature broker orders)."
+    )
+
+    return {
+        "ok": True,
+        "block_id": bid,
+        "unit_name": anchor_unit_name,
+        "master_anchor_price": master_anchor_price,
+        "live_spot": live_spot,
+        "executed_side": executed_side,
+        "pending_side": pending_side,
+        "executed_strike_id": executed_strike_id,
+        "ce_sell_id": ce_sell_id,
+        "pe_sell_id": pe_sell_id,
+        "message": deploy_msg
+    }
+
+
+def evaluate_master_regime(current_spot: float = 0.0, force_eval: bool = False) -> dict:
+    """
+    Delegates to regime_engine.evaluate_master_regime for seamless cross-module and test parity.
+    """
+    import regime_engine as re_eng
+    return re_eng.evaluate_master_regime(current_spot=current_spot if current_spot > 0 else None, force_eval=force_eval)
+
+
+def reconcile_and_auto_protect_naked_shorts(broker_pos: list, naked_ce_qty: int, naked_pe_qty: int) -> dict:
+    """
+    EMERGENCY ACTIVE SENTINEL (Rule 6):
+    When broker net positions show an unhedged Short leg (Short Qty > Long Qty on CE or PE),
+    this function immediately auto-covers the excess naked short quantity at market on Zerodha.
+    """
+    from kite_executor import kite_executor
+    closed_orders = []
+
+    if naked_ce_qty > 0:
+        short_ces = [p for p in broker_pos if p.get("side") == "SHORT" and (p.get("option_type") or "").upper() in ("CE", "CALL")]
+        remaining_to_cover = naked_ce_qty
+        for sc in short_ces:
+            if remaining_to_cover <= 0:
+                break
+            q = min(abs(sc["net_qty"]), remaining_to_cover)
+            tok = sc["token"]
+            sym = sc["trading_symbol"]
+            _log(f"🚨 [SENTINEL_MITIGATION] Auto-covering unhedged naked CE short on Zerodha: BUY {q} x {sym} (token:{tok})...", "ALERT")
+            ord_id, filled = kite_executor.execute_buy_and_confirm(sym, tok, q)
+            if ord_id and filled:
+                remaining_to_cover -= q
+                closed_orders.append({"symbol": sym, "qty": q, "side": "BUY", "order_id": ord_id})
+                _log(f"✅ [SENTINEL_MITIGATION] Successfully covered naked CE short {sym} (Qty: {q})!", "OK")
+            else:
+                _log(f"❌ [SENTINEL_MITIGATION] Failed to cover naked CE short {sym}!", "ERROR")
+
+    if naked_pe_qty > 0:
+        short_pes = [p for p in broker_pos if p.get("side") == "SHORT" and (p.get("option_type") or "").upper() in ("PE", "PUT")]
+        remaining_to_cover = naked_pe_qty
+        for sp in short_pes:
+            if remaining_to_cover <= 0:
+                break
+            q = min(abs(sp["net_qty"]), remaining_to_cover)
+            tok = sp["token"]
+            sym = sp["trading_symbol"]
+            _log(f"🚨 [SENTINEL_MITIGATION] Auto-covering unhedged naked PE short on Zerodha: BUY {q} x {sym} (token:{tok})...", "ALERT")
+            ord_id, filled = kite_executor.execute_buy_and_confirm(sym, tok, q)
+            if ord_id and filled:
+                remaining_to_cover -= q
+                closed_orders.append({"symbol": sym, "qty": q, "side": "BUY", "order_id": ord_id})
+                _log(f"✅ [SENTINEL_MITIGATION] Successfully covered naked PE short {sym} (Qty: {q})!", "OK")
+            else:
+                _log(f"❌ [SENTINEL_MITIGATION] Failed to cover naked PE short {sym}!", "ERROR")
+
+    return {"ok": True, "closed_orders": closed_orders}
+
+
+def sweep_orphan_hedges_now() -> dict:
+    """
+    V5.1 Active Broker Terminal & Orphan Hedge Sweep:
+    1. Pre-fetches live broker net positions from Zerodha Kite.
+    2. RULE 7: Watchdog Protection Inversion Hard Block:
+       Under ZERO circumstances square off a Long Hedge if there is ANY live Short
+       position of that side (CE/PE) on the Zerodha broker terminal!
+    3. Scans DB for true orphan hedges only when broker terminal confirms ZERO active short exposure.
+    4. Positional paired spreads are 100% PRESERVED OVERNIGHT!
+    """
+    from kite_executor import kite_executor
+    closed_count = 0
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+
+    # Pre-fetch Live Broker Positions for Ground Truth Check
+    broker_positions = []
+    try:
+        if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
+            broker_positions = kite_executor.get_net_positions() or []
+    except Exception as ex_bp:
+        _log(f"Sweep: Could not fetch broker positions: {ex_bp}", "WARN")
+
+    short_opts = [p for p in broker_positions if p.get("side") == "SHORT"]
+
+    for b in active_blocks:
+        policy = b.get("orphan_hedge_policy") or "PRESERVE"
+        strikes = db.get_strikes_by_block(b["block_id"])
+        sell_strikes_map = {s["strike_id"]: s for s in strikes if s["leg_type"] == "SELL"}
+
+        for s in strikes:
+            if s["leg_type"] == "HEDGE_BUY" and s["status"] in ("OPEN", "EXECUTED"):
+                s_opt = s["option_type"].upper()
+                opt_key = "CE" if s_opt in ("CE", "CALL") else "PE"
+
+                # ── HARD BROKER TERMINAL GUARD (Rule 7) ──
+                # Under ZERO circumstances may the system square off a Long Hedge if there is
+                # ANY live Short position of this side on the broker terminal!
+                has_broker_short = any((sp.get("option_type") or "").upper() in (s_opt, opt_key) for sp in short_opts)
+                if has_broker_short:
+                    _log(f"Sweep: Preserving Hedge Strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) — Active {s_opt} SHORT position confirmed on Zerodha broker terminal!", "OK")
+                    continue
+
+                linked_sells = [sell for sell in sell_strikes_map.values() if sell.get("hedge_strike_id") == s["strike_id"]]
+                is_orphan = True
+                if linked_sells:
+                    if any(ls["status"] in ("OPEN", "EXECUTED") for ls in linked_sells):
+                        is_orphan = False
+
+                if is_orphan:
+                    _log(f"Sweep: Closing True Orphan Hedge Strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) at Cutoff (No active short)...", "SWEEP")
+                    res = close_hedge_strike_now(s["strike_id"])
+                    if res.get("ok"):
+                        closed_count += 1
+
+    return {"ok": True, "closed_count": closed_count}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V6.0 DIRECTIONAL M-UNITS (M1-M4) AUTO-HUNTER & OS-STYLE RECOVERY (ZERODHA KITE)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def inspect_m_unit_candidates(
+    expiry_date: str = "",
+    unit_name: str = "M1",
+    master_anchor_price: float = 0.0,
+    target_premium: float = 200.0,
+    manual_ce_strike: Optional[int] = None,
+    manual_pe_strike: Optional[int] = None,
+    hedge_dist: int = 500,
+    sl_pct: float = 25.0
+) -> dict:
+    """
+    V6.0 M-Unit Auto-Hunter & Candidate Inspection (Zerodha Kite).
+    Scans live option chain for nearby EVEN 100-multiples & 500-steps matching ~target_premium (default ₹200),
+    auto-pairs 500-pt Hedge Helmet, and calculates strict 25% Stop-Loss levels against user-defined anchor.
+    """
+    try:
+        from kite_executor import kite_executor
+        import os_engine
+    except Exception as e:
+        return {"ok": False, "message": f"Module import error: {e}"}
+
+    live_spot = kite_executor.get_nifty_spot()
+    if live_spot <= 0:
+        live_spot = float(db.get("last_nifty_spot_price", "23200.0") or "23200.0")
+
+    # Resolve Anchor strictly from user input, or active block, or DB
+    anchor = float(master_anchor_price or 0.0)
+    u = str(unit_name).strip().upper()
+    if anchor <= 0.0:
+        anchor = float(db.get(f"m_locked_anchor_{u}", "0.0") or "0.0")
+    if anchor <= 0.0:
+        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+        b = next((x for x in active_blocks if (x.get("anchor_unit_name") or "").strip().upper() == u), None)
+        if b and float(b.get("master_anchor_price", 0.0)) > 0:
+            anchor = float(b["master_anchor_price"])
+    if anchor <= 0.0:
+        anchor = float(db.get_master_nifty_anchor() or 23350.0)
+
+    # Resolve Expiry Date
+    aligned_exp = str(expiry_date).strip()
+    if not aligned_exp:
+        cat_exp = os_engine.get_categorized_expiries()
+        aligned_exp = cat_exp.get("monthly", ["2026-10-27"])[0] if cat_exp.get("monthly") else "2026-10-27"
+
+    # Normalize expiry date to YYYY-MM-DD
+    exp_yyyy_mm_dd = aligned_exp
+    for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            exp_yyyy_mm_dd = datetime.strptime(aligned_exp, fmt).strftime("%Y-%m-%d")
+            break
+        except ValueError:
+            continue
+
+    df = kite_executor._load_security_master()
+    if df.empty:
+        return {"ok": False, "message": "Instruments cache is empty. Please run sync instruments."}
+
+    def _hunt_m_side(opt_type: str, manual_strike: Optional[int]):
+        subset = df[
+            (df["name"].str.upper() == "NIFTY") &
+            (df["exchange"].str.upper() == "NFO") &
+            (df["expiry"] == exp_yyyy_mm_dd) &
+            (df["instrument_type"].str.upper() == opt_type)
+        ]
+        if subset.empty:
+            return {"ok": False, "message": f"No NIFTY {opt_type} contracts found for expiry {exp_yyyy_mm_dd}."}
+
+        if manual_strike and manual_strike > 0:
+            s_row = subset[subset["strike"] == float(manual_strike)]
+            if s_row.empty:
+                return {"ok": False, "message": f"Strike {manual_strike} {opt_type} not found."}
+            item = s_row.iloc[0]
+            sell_strike = int(manual_strike)
+            sell_tok = str(item["instrument_token"])
+            sell_sym = str(item["tradingsymbol"])
+            sell_ltp = kite_executor.get_ltp(sell_tok, sell_sym)
+        else:
+            even_pool = subset[
+                (subset["strike"] % 100 == 0) &
+                ((subset["strike"] // 100) % 2 == 0)
+            ].copy()
+            if even_pool.empty:
+                even_pool = subset.copy()
+
+            if opt_type == "CE":
+                cands = even_pool[even_pool["strike"] >= live_spot - 300].sort_values("strike").head(12)
+            else:
+                cands = even_pool[even_pool["strike"] <= live_spot + 300].sort_values("strike", ascending=False).head(12)
+            if cands.empty:
+                cands = even_pool.head(12)
+
+            queries = [f"NFO:{ts}" for ts in cands["tradingsymbol"]]
+            ltp_map = {}
+            if kite_executor.ensure_logged_in() and queries:
+                try:
+                    for i in range(0, len(queries), 50):
+                        batch = queries[i:i+50]
+                        q_res = kite_executor.kite.ltp(batch)
+                        for k, v in q_res.items():
+                            sym_k = k.replace("NFO:", "")
+                            ltp_map[sym_k] = float(v.get("last_price", 0.0))
+                except Exception as e:
+                    _log(f"Batch LTP query error: {e}", "WARN")
+
+            scored = []
+            for _, r in cands.iterrows():
+                tsym = str(r["tradingsymbol"])
+                tok = str(r["instrument_token"])
+                stk = int(r["strike"])
+                ltp = ltp_map.get(tsym, 0.0)
+                if ltp <= 0:
+                    ltp = kite_executor.get_ltp(tok, tsym)
+                if ltp > 0:
+                    scored.append({"strike": stk, "token": tok, "symbol": tsym, "ltp": ltp})
+
+            if scored:
+                selected = min(scored, key=lambda x: abs(x["ltp"] - target_premium))
+            else:
+                top_row = cands.iloc[0]
+                selected = {"strike": int(top_row["strike"]), "token": str(top_row["instrument_token"]), "symbol": str(top_row["tradingsymbol"]), "ltp": target_premium}
+
+            sell_strike = selected["strike"]
+            sell_tok = selected["token"]
+            sell_sym = selected["symbol"]
+            sell_ltp = selected["ltp"]
+
+        hedge_stk = sell_strike + hedge_dist if opt_type == "CE" else sell_strike - hedge_dist
+        h_row = subset[subset["strike"] == float(hedge_stk)]
+        if not h_row.empty:
+            h_item = h_row.iloc[0]
+            h_tok = str(h_item["instrument_token"])
+            h_sym = str(h_item["tradingsymbol"])
+            h_ltp = kite_executor.get_ltp(h_tok, h_sym)
+        else:
+            h_tok = ""
+            h_sym = f"NIFTY{hedge_stk}{opt_type}"
+            h_ltp = 0.0
+
+        sl_price = round(sell_ltp * (1.0 + sl_pct / 100.0), 2)
+        return {
+            "ok": True,
+            "sell_strike": sell_strike,
+            "sell_symbol": sell_sym,
+            "sell_token": sell_tok,
+            "sell_ltp": sell_ltp,
+            "hedge_strike": hedge_stk,
+            "hedge_symbol": h_sym,
+            "hedge_token": h_tok,
+            "hedge_ltp": h_ltp,
+            "sl_price": sl_price,
+            "sl_pct": sl_pct
+        }
+
+    ce_info = _hunt_m_side("CE", manual_ce_strike)
+    pe_info = _hunt_m_side("PE", manual_pe_strike)
+
+    regime = "BEARISH" if live_spot < anchor else "BULLISH"
+    active_side = "CALL" if regime == "BEARISH" else "PUT"
+
+    return {
+        "ok": True,
+        "unit_name": u,
+        "expiry_date": aligned_exp,
+        "live_spot": live_spot,
+        "master_anchor": anchor,
+        "regime": regime,
+        "active_side": active_side,
+        "ce": ce_info,
+        "pe": pe_info
+    }
+
+
+def hunt_and_execute_jit_m_strike(block_id: int, opt_type: str, pending_strike_id: Optional[int] = None) -> dict:
+    """
+    V6.3 JIT Dynamic Auto-Hunter & Minimum Floor Guard for M-Units (Zerodha Kite).
+    Triggered when an armed M-Unit wing needs to execute (e.g. regime trigger or pending entry).
+    Instead of executing a stale pre-drafted strike whose premium has decayed:
+    1. Reads unit configuration (target_premium ~200, expiry, lots, mode).
+    2. Runs inspect_m_unit_candidates to query the live option chain for the EVEN 100-multiple closest to target_premium.
+    3. Enforces Minimum Premium Floor Guard (max(100.0, target_premium * 0.70)). If below floor, skips junk trade.
+    4. Updates/creates the strike in the block with fresh sell strike, hedge helmet (+/- 500 pts), fresh anchor, and fresh 25% SL.
+    5. Executes the fresh strike via execute_strike (Buy Hedge first -> Sell Leg second).
+    """
+    b = db.get_block(block_id)
+    if not b:
+        return {"ok": False, "message": f"Block {block_id} not found."}
+
+    unit_name = (b.get("anchor_unit_name") or f"M{b.get('block_number', 1)}").strip().upper()
+    opt_type = opt_type.strip().upper()
+
+    # 1. Read M-Unit settings
+    m_cfg = db.get_m_unit_settings(unit_name) or {}
+    target_prem = float(m_cfg.get("target_premium") or 200.0)
+    exp_date = m_cfg.get("expiry_date") or b.get("expiry_date") or ""
+    lots = int(m_cfg.get("lots") or b.get("custom_lots") or 1)
+    mode = m_cfg.get("mode", "AUTO")
+    m_ce = int(m_cfg.get("manual_ce") or 0) if mode == "MANUAL" else None
+    m_pe = int(m_cfg.get("manual_pe") or 0) if mode == "MANUAL" else None
+    anchor_price = float(m_cfg.get("anchor_price") or b.get("master_anchor_price") or 0.0)
+
+    # 2. Inspect candidate dynamically on live option chain
+    inspection = inspect_m_unit_candidates(
+        expiry_date=exp_date,
+        unit_name=unit_name,
+        master_anchor_price=anchor_price,
+        target_premium=target_prem,
+        manual_ce_strike=m_ce,
+        manual_pe_strike=m_pe,
+        hedge_dist=500,
+        sl_pct=25.0
+    )
+    if not inspection.get("ok"):
+        _log(f"[JIT-M-HUNTER] {unit_name}: Inspection failed: {inspection.get('message')}", "WARN")
+        return {"ok": False, "message": inspection.get("message")}
+
+    cand = inspection.get("ce" if opt_type == "CE" else "pe", {})
+    if not cand.get("ok") or not cand.get("sell_strike"):
+        _log(f"[JIT-M-HUNTER] {unit_name}: No qualified {opt_type} candidate found in live option chain.", "WARN")
+        return {"ok": False, "message": f"No qualified {opt_type} candidate"}
+
+    sell_strike = int(cand["sell_strike"])
+    sell_ltp = float(cand.get("sell_ltp", 0.0))
+    hedge_strike = int(cand.get("hedge_strike", 0))
+    hedge_ltp = float(cand.get("hedge_ltp", 0.0))
+    sl_price = float(cand.get("sl_price", 0.0))
+    sl_pct = float(cand.get("sl_pct", 25.0))
+
+    # 3. Minimum Premium Floor Guard
+    # Hard Minimum Floor: max(100.0, target_premium * 0.70) -> e.g. ₹140 for ₹200 target
+    min_floor = max(100.0, target_prem * 0.70)
+    if sell_ltp < min_floor:
+        msg = f"[JIT-M-HUNTER] ⚠️ NO TRADE QUALIFIED for {unit_name}: Candidate strike {sell_strike} {opt_type} LTP ₹{sell_ltp:.2f} is below min floor ₹{min_floor:.2f} (Target: ₹{target_prem:.2f}). Skipping junk trade."
+        _log(msg, "WARN")
+        return {"ok": False, "message": msg, "skipped_below_floor": True}
+
+    # 4. Check if target side is already running OPEN to prevent duplicate exposure
+    open_strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
+    has_open_same = any(s.get("option_type") == opt_type and s.get("leg_type") == "SELL" for s in open_strikes)
+    if has_open_same:
+        _log(f"[JIT-M-HUNTER] {unit_name}: {opt_type} SELL leg is already OPEN. Skipping duplicate deployment.", "INFO")
+        return {"ok": True, "message": "Already open"}
+
+    # 5. Synchronize pending strike in DB:
+    target_sell_id = None
+    target_hedge_id = None
+
+    if pending_strike_id:
+        p_sell = db.get_strike(pending_strike_id)
+        if p_sell and p_sell.get("status") == "PENDING" and p_sell.get("leg_type") == "SELL":
+            target_sell_id = pending_strike_id
+            target_hedge_id = p_sell.get("hedge_strike_id")
+
+    if not target_sell_id:
+        # Look for any existing PENDING strike of this opt_type in the block
+        pending_list = db.get_strikes_by_block(block_id, status_filter="PENDING")
+        for ps in pending_list:
+            if ps.get("leg_type") == "SELL" and ps.get("option_type") == opt_type:
+                target_sell_id = ps["strike_id"]
+                target_hedge_id = ps.get("hedge_strike_id")
+                break
+
+    if target_sell_id:
+        # Update existing pending strike with fresh dynamic strike price & fresh anchor
+        db.update_strike_details(
+            strike_id=target_sell_id,
+            strike_price=sell_strike,
+            anchor_price=sell_ltp,
+            sl_price=sl_price,
+            sl_pct=sl_pct,
+            lots=lots
+        )
+        if target_hedge_id:
+            db.update_strike_details(
+                strike_id=target_hedge_id,
+                strike_price=hedge_strike,
+                anchor_price=hedge_ltp if hedge_ltp > 0 else 1.0,
+                lots=lots
+            )
+        _log(f"[JIT-M-HUNTER] {unit_name}: Updated PENDING {opt_type} wing to fresh Strike {sell_strike} (LTP ₹{sell_ltp:.2f} ~ Target ₹{target_prem:.2f}) & Hedge {hedge_strike}.", "OK")
+    else:
+        # Create fresh pending strike pair and link them
+        h_res = add_strike_to_block(
+            block_id=block_id,
+            strike_price=hedge_strike,
+            option_type=opt_type,
+            leg_type="HEDGE_BUY",
+            anchor_price=hedge_ltp if hedge_ltp > 0 else 1.0,
+            lots=lots,
+            expiry_date=exp_date,
+            trade_state="PENDING"
+        )
+        s_res = add_strike_to_block(
+            block_id=block_id,
+            strike_price=sell_strike,
+            option_type=opt_type,
+            leg_type="SELL",
+            anchor_price=sell_ltp,
+            lots=lots,
+            expiry_date=exp_date,
+            sl_price=sl_price,
+            sl_pct=sl_pct,
+            reentry_enabled=1,
+            trade_state="PENDING"
+        )
+        if h_res.get("ok") and s_res.get("ok"):
+            link_hedge_to_sell(s_res["strike_id"], h_res["strike_id"])
+            target_sell_id = s_res["strike_id"]
+
+    # 6. Execute the freshly hunted strike live
+    if target_sell_id:
+        _log(f"[JIT-M-HUNTER] {unit_name}: 🚀 Executing Fresh JIT Strike {sell_strike} {opt_type} SELL (Hedge {hedge_strike}) | Target: ₹{target_prem:.2f} | LTP: ₹{sell_ltp:.2f}...", "ORDER")
+        exec_res = execute_strike(target_sell_id, ignore_cooldown=True)
+        if isinstance(exec_res, dict):
+            exec_res["fill_strike"] = sell_strike
+            exec_res["hedge_strike"] = hedge_strike
+        return exec_res
+
+    return {"ok": False, "message": "Failed to resolve or create strike."}
+
+
+def deploy_or_update_m_unit(
+    unit_name: str = "M1",
+    expiry_date: str = "",
+    master_anchor_price: float = 0.0,
+    lots: int = 1,
+    ce_sell_strike: int = 0,
+    ce_hedge_strike: int = 0,
+    ce_sell_ltp: float = 0.0,
+    ce_hedge_ltp: float = 0.0,
+    pe_sell_strike: int = 0,
+    pe_hedge_strike: int = 0,
+    pe_sell_ltp: float = 0.0,
+    pe_hedge_ltp: float = 0.0,
+    sl_pct: float = 25.0,
+    deploy_now: bool = True
+) -> dict:
+    """
+    V6.0 1-Click Lock, Arm & Deploy Engine for M-Units (Zerodha Kite).
+    Creates or updates the M-Unit block, arms Call & Put spreads with 500-pt hedges,
+    and if deploy_now=True, immediately executes the trend-aligned side!
+    """
+    from kite_executor import kite_executor
+
+    if master_anchor_price <= 0.0:
+        master_anchor_price = float(db.get("master_nifty_anchor", "23350.0") or "23350.0")
+
+    live_spot = kite_executor.get_nifty_spot()
+    if live_spot <= 0:
+        live_spot = float(db.get("last_master_spot_price") or db.get("last_nifty_spot_price", "23250.0") or "23250.0")
+
+    initial_regime = "BULLISH" if live_spot >= master_anchor_price else "BEARISH"
+
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+    b = next((x for x in active_blocks if (x.get("anchor_unit_name") or "").strip().upper() == unit_name.strip().upper()), None)
+
+    if b:
+        block_id = b["block_id"]
+        db.update_block_anchor(block_id, master_anchor_price, anchor_unit_name=unit_name, regime_buffer=0.0)
+        db.update_block_regime(block_id, initial_regime)
+    else:
+        exp_type = "WEEKLY" if (expiry_date and "WEEKLY" in str(expiry_date).upper()) else "MONTHLY"
+        block_id = db.create_block(
+            expiry_date=expiry_date,
+            expiry_type=exp_type,
+            notes=f"V6.1 {unit_name} Master Unit",
+            anchor_unit_name=unit_name,
+            master_anchor_price=master_anchor_price,
+            regime_buffer=0.0,
+            current_regime=initial_regime,
+            custom_lots=lots
+        )
+        if block_id <= 0:
+            return {"ok": False, "message": "Failed to create block in database."}
+
+    # Delete any stale PENDING strikes to prevent duplicates
+    stale = db.get_strikes_by_block(block_id, status_filter="PENDING")
+    for s in stale:
+        db.delete_strike(s["strike_id"])
+
+    # Existing open strikes check
+    existing_open = db.get_strikes_by_block(block_id, status_filter="OPEN")
+    has_open_ce = any(s.get("option_type") == "CE" and s.get("leg_type") == "SELL" for s in existing_open)
+    has_open_pe = any(s.get("option_type") == "PE" and s.get("leg_type") == "SELL" for s in existing_open)
+
+    ce_sell_id = None
+    pe_sell_id = None
+
+    # Add CE wing if strikes provided and not already open
+    if ce_sell_strike > 0 and ce_hedge_strike > 0 and not has_open_ce:
+        h_ce_res = add_strike_to_block(
+            block_id=block_id,
+            strike_price=ce_hedge_strike,
+            option_type="CE",
+            leg_type="HEDGE_BUY",
+            anchor_price=ce_hedge_ltp if ce_hedge_ltp > 0 else 1.0,
+            lots=lots,
+            expiry_date=expiry_date,
+            trade_state="PENDING"
+        )
+        s_ce_res = add_strike_to_block(
+            block_id=block_id,
+            strike_price=ce_sell_strike,
+            option_type="CE",
+            leg_type="SELL",
+            anchor_price=ce_sell_ltp if ce_sell_ltp > 0 else 100.0,
+            lots=lots,
+            expiry_date=expiry_date,
+            sl_price=round(ce_sell_ltp * (1.0 + sl_pct / 100.0), 2) if ce_sell_ltp > 0 else 0.0,
+            sl_pct=sl_pct,
+            reentry_enabled=1,
+            trade_state="PENDING"
+        )
+        if h_ce_res.get("ok") and s_ce_res.get("ok"):
+            link_hedge_to_sell(s_ce_res["strike_id"], h_ce_res["strike_id"])
+            ce_sell_id = s_ce_res["strike_id"]
+
+    # Add PE wing if strikes provided and not already open
+    if pe_sell_strike > 0 and pe_hedge_strike > 0 and not has_open_pe:
+        h_pe_res = add_strike_to_block(
+            block_id=block_id,
+            strike_price=pe_hedge_strike,
+            option_type="PE",
+            leg_type="HEDGE_BUY",
+            anchor_price=pe_hedge_ltp if pe_hedge_ltp > 0 else 1.0,
+            lots=lots,
+            expiry_date=expiry_date,
+            trade_state="PENDING"
+        )
+        s_pe_res = add_strike_to_block(
+            block_id=block_id,
+            strike_price=pe_sell_strike,
+            option_type="PE",
+            leg_type="SELL",
+            anchor_price=pe_sell_ltp if pe_sell_ltp > 0 else 100.0,
+            lots=lots,
+            expiry_date=expiry_date,
+            sl_price=round(pe_sell_ltp * (1.0 + sl_pct / 100.0), 2) if pe_sell_ltp > 0 else 0.0,
+            sl_pct=sl_pct,
+            reentry_enabled=1,
+            trade_state="PENDING"
+        )
+        if h_pe_res.get("ok") and s_pe_res.get("ok"):
+            link_hedge_to_sell(s_pe_res["strike_id"], h_pe_res["strike_id"])
+            pe_sell_id = s_pe_res["strike_id"]
+
+    exec_msg = f"{unit_name} Armed in PENDING."
+    if deploy_now:
+        live_spot = kite_executor.get_nifty_spot()
+        if live_spot <= 0:
+            live_spot = float(db.get("last_master_spot_price") or db.get("last_nifty_spot_price", "23250.0") or "23250.0")
+
+        regime = "BEARISH" if live_spot < master_anchor_price else "BULLISH"
+        db.update_block_regime(block_id, regime)
+        target_sid = ce_sell_id if regime == "BEARISH" else pe_sell_id
+
+        if target_sid:
+            # Sync target strike anchor price with live LTP right before execution
+            target_strike = db.get_strike(target_sid)
+            if target_strike:
+                sym_info = _resolve_symbol(target_strike)
+                if sym_info:
+                    fresh_ltp = kite_executor.get_ltp(sym_info["token"], sym_info["trading_symbol"])
+                    if fresh_ltp <= 0:
+                        fresh_ltp = kite_executor.get_live_ltp(sym_info["token"], sym_info["trading_symbol"])
+                    if fresh_ltp > 0:
+                        db.update_strike_anchor_price(target_sid, fresh_ltp, auto_recalc_sl=True)
+
+            exec_res = execute_strike(target_sid, ignore_cooldown=True)
+            if exec_res.get("ok"):
+                side_str = "CE (Call)" if regime == "BEARISH" else "PE (Put)"
+                exec_msg = f"LIVE EXECUTED: Trend-aligned {side_str} sold successfully under {regime} Regime (Fill: Rs{exec_res.get('fill_price', 0):.2f})."
+            else:
+                exec_msg = f"Execution note: {exec_res.get('message')}"
+                return {"ok": False, "block_id": block_id, "message": exec_msg}
+        else:
+            exec_msg = f"{unit_name} Settings saved & armed. Trend-aligned side is already running or armed."
+
+    return {
+        "ok": True,
+        "block_id": block_id,
+        "unit_name": unit_name,
+        "message": exec_msg
+    }
+
+
+def wipe_out_and_reset_m_unit(unit_name: str = "M1") -> dict:
+    """
+    Safely closes all open/pending strikes on Zerodha Kite broker, force deletes block,
+    and resets M-Unit settings to clean Draft Mode.
+    """
+    u = str(unit_name).strip().upper()
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+    matching_blocks = [x for x in active_blocks if (x.get("anchor_unit_name") or "").strip().upper() == u]
+    
+    closed_legs = 0
+    for b in matching_blocks:
+        bid = b["block_id"]
+        strikes = db.get_strikes_by_block(bid)
+        for s in strikes:
+            sid = s["strike_id"]
+            st_state = (s.get("trade_state") or s.get("status") or "").upper()
+            if st_state in ("OPEN", "PENDING", "ACTIVE"):
+                try:
+                    close_strike(sid, close_hedge=True)
+                    closed_legs += 1
+                except Exception as e:
+                    _log(f"Error closing strike {sid} during wipeout: {e}", "WARN")
+        try:
+            db.force_delete_block(bid)
+        except Exception as e:
+            _log(f"Error deleting block {bid} during wipeout: {e}", "WARN")
+
+    db.unlock_m_unit_settings(u)
+    return {"ok": True, "unit_name": u, "closed_legs": closed_legs, "message": f"{u} wiped out and reset to clean Draft Mode."}
+
+
+def wipe_out_and_reset_whole_os_system() -> dict:
+    """
+    EMERGENCY MASTER RESET FOR ENTIRE OS SYSTEM (OS1, OS2, OS3...):
+    Closes all active OS blocks, closes broker legs, purges DB records, and resets OS settings.
+    """
+    _log("🚨 [EMERGENCY_CLOSE] Initiating full square-off & wipe for ENTIRE OS SYSTEM...", "ALERT")
+    total_legs = 0
+    total_blocks = 0
+    errors = []
+
+    import os_engine
+    for i in range(1, 6):
+        res_u = os_engine.wipe_out_and_reset_os_unit(f"OS{i}")
+        if res_u.get("ok"):
+            total_legs += res_u.get("legs_closed", 0)
+            total_blocks += res_u.get("blocks_purged", 0)
+
+    db.unlock_os_settings()
+    msg = f"🚨 <b>ZERODHA WHOLE OS SYSTEM EMERGENCY CLOSE COMPLETED</b>\n• Closed Legs: {total_legs}\n• Purged Blocks: {total_blocks}\n• OS Engine: Clean Slate / Idle ✅"
+    try:
+        import telegram_bot as tg
+        tg.send_telegram_alert(msg)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "message": f"Successfully closed and purged WHOLE OS SYSTEM! {total_legs} leg(s) squared off, {total_blocks} block(s) purged.",
+        "legs_closed": total_legs,
+        "blocks_purged": total_blocks,
+        "errors": errors
+    }

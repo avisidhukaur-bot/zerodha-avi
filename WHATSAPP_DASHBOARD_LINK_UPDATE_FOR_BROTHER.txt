@@ -1,0 +1,30 @@
+🚨 ZERODHA ENGINE & DASHBOARD ACCESS UPDATE 🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, Zerodha Dashboard access aur error ka solution update kar diya hai:
+
+1️⃣ KYA PROBLEM THI (Error Reason):
+Pehle hum `:9007` port use kar rahe the (http://5.75.250.104:9007). 
+Mobile networks (Jio / Airtel) aur internet providers custom ports jaise 9007 ko block kar dete hain, jiski wajah se mobile par "This site can't be reached / Timed Out" ya black blank screen aa rahi thi.
+
+2️⃣ JO SOLUTION KIYA GAYA (Nginx Web Proxy):
+Server par standard Port 80 (Regular Web Port) par Nginx proxy setup kar diya hai. Ab ye bina kisi port number ke ek standard website ki tarah open hoga.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📲 NEW DIRECT LINKS (AB YAHAN SE KHULEGA):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👉 PHONE / MOBILE / OUTSIDE INTERNET:
+http://5.75.250.104
+(Note: Isme aage :9007 lagane ki zaroorat NAHI hai. Seedha click karke kholo, turant khul jayega)
+
+👉 LAPTOP (LOCAL):
+http://localhost:9007
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚙️ SYSTEM & ENGINE STATUS:
+- Zerodha Login: Active & Verified ✅
+- Background Trading Engine: Running ✅
+- M1 & M2 Pods: Active & Monitored ✅
+- MCX Commodity Engine: Active ✅
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

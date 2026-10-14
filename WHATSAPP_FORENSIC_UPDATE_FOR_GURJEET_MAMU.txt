@@ -1,0 +1,36 @@
+🔬 ZERODHA SYSTEM — ROOT CAUSE ANALYSIS & PWA PLAN 🔬
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mamu, jo dikkat aayi thi uska exact technical reason aur permanent solution ye hai:
+
+1️⃣ KYA BLUNDER THA & PEHLE 9007 KYUN CHAL RAHA THA?
+• Pehle hum raw Streamlit process ko custom port 9007 (http://5.75.250.104:9007) par directly internet par expose kar rahe the.
+• Streamlit me Security Settings (CORS & XSRF Protection) enabled hone ki wajah se jab mobile browser ne connect kiya, toh WebSocket reject ho gaya aur mobile par black/blank screen aane lagi.
+• Sath hi Jio aur Airtel jaise mobile networks custom high ports (jaise 9007) ko unsecure maankar block/filter kar dete hain, jiski wajah se "Connection Timed Out" ka error aa raha tha.
+
+2️⃣ ZERODHA IP SECURITY RESTRICTION:
+• Zerodha Kite Connect developer portal par order firing ke liye sirf hamara VPS IP (5.75.250.104) whitelisted hai.
+• Laptop ke domestic IP se order place karne par Zerodha ne block kiya tha. Isliye orders VPS ke zariye hi execute hote hain.
+
+3️⃣ JO PERMANENT REPAIR KIYA GAYA (Nginx Web Proxy):
+• Server par Nginx Web Server ko Standard Port 80 (Regular Web Port) par Reverse Proxy bana diya hai.
+• Ab WebSockets cleanly handle ho rahe hain aur mobile networks bina kisi port number ke standard website ki tarah load kar rahe hain.
+👉 New Link: http://5.75.250.104 (No :9007 needed)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📱 PROGRESSIVE WEB APP (PWA) IMPLEMENTATION PLAN:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Jaise aapne browser se PWA install karne ko kaha hai:
+
+1. Web App Manifest (manifest.json):
+   - Standalone display mode set karenge jisse browser ki URL bar gayab ho jayegi aur full native app jaisa feel aayega.
+   - Dedicated App Icon & Dark Theme set hoga.
+
+2. Service Worker (sw.js):
+   - UI assets (CSS/JS) ko cache karega taaki 0 seconds me page load ho.
+   - Network drop hone par background auto-reconnect handle karega.
+
+3. 1-Click "Add to Home Screen":
+   - Phone par website open karte hi "Install Zerodha OS" ka prompt aayega. Click karte hi mobile home screen par app icon ban jayega.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

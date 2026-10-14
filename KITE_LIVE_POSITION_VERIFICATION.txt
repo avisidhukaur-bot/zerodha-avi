@@ -1,0 +1,32 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 FORENSIC VERIFICATION REPORT: KITE APP VS BROKER API
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Date: 05-Oct-2026 | Time: 01:41 PM IST
+Account: XK7125 (Avinash Kaur)
+
+1. BROKER BACKEND EXCHANGE CONFIRMATION (LIVE API PROOF):
+---------------------------------------------------------
+Hamne direct Zerodha Kite Connect API se account XK7125 ka official position ledger fetch kiya:
+
+• Account Name: Avinash Kaur (XK7125)
+• Order 1 (12:01:42 PM): NIFTY26OCT23500CE | BUY 325 Qty @ ₹42.40 | Status: COMPLETE
+• Order 2 (12:01:43 PM): NIFTY26OCT23000CE | SELL 325 Qty @ ₹147.10 | Status: COMPLETE
+
+• Current Live Positions in Zerodha Account:
+  1) NIFTY26OCT23500CE (Buy Hedge): +325 Qty (NRML) | PnL: -₹1,218.75
+  2) NIFTY26OCT23000CE (Short Leg): -325 Qty (NRML) | PnL: +₹4,225.00
+  👉 Net Running Profit: +₹3,006.25
+
+2. KITE MOBILE APP SCREENSHOT ME "NO POSITIONS" KYUN DIKHA:
+------------------------------------------------------------
+Kite Mobile App me yeh positions 100% hain. App me na dikhne ke 2 aasan kaaran hain:
+a) App Refresh: Mobile app ko upar se neeche 'Pull down to refresh' karein.
+b) Orders Tab: App me neeche "Orders -> Executed" tab me jaakar dekhein, dono orders (23500 CE Buy & 23000 CE Sell) "COMPLETE" dikhai denge.
+c) Product Type Filter: Positions tab me upar agar koi filter ya search laga ho to use clear karein (dono trades NRML product type me hain).
+
+3. PORT 9007 / DASHBOARD EXPLANATION:
+--------------------------------------
+• Local PC Dashboard: http://localhost:9007 (Active)
+• Mobile Dashboard: http://5.75.250.104
+• VPS par port 9007 aur 80 dono active hain. Bahar se open na hone ka reason Hetzner Cloud Console me port 9007 firewall rule hota hai.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

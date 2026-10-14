@@ -1,0 +1,16 @@
+✅ *OS1 UNIT HEDGE (23600 CE) BOOKED & CLOSED* ✅
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📌 *OS1 Trade Summary (100% Closed):*
+• *Sold Leg (23100 CE):* Exit @ ₹62.40 (Booked: +₹15,346)
+• *Hedge Leg (23600 CE):* Exit @ *₹15.60* (Order ID: `2108071971798425600`)
+• *OS1 Net Realized Profit:* *+₹11,148.00 Booked* 🎯
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 *Remaining Live Position on Zerodha (M1 Unit):*
+• `23000 CE` Sell (-325 Qty) ➔ *Profit: +₹12,918*
+• `23500 CE` Hedge (+325 Qty) ➔ Active Shield
+• *M1 Net Running Profit:* *+₹9,844*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -18,21 +18,6 @@ Background Loop Process:
 
 import sys
 import time
-import socket
-
-# Force all socket operations to use IPv4 to prevent Zerodha Kite API IP whitelist rejections (IPv6)
-try:
-    _orig_getaddrinfo = socket.getaddrinfo
-    def _ipv4_getaddrinfo(*args, **kwargs):
-        responses = _orig_getaddrinfo(*args, **kwargs)
-        ipv4_res = [r for r in responses if r[0] == socket.AF_INET]
-        return ipv4_res if ipv4_res else responses
-    socket.getaddrinfo = _ipv4_getaddrinfo
-    import urllib3.util.connection as urllib3_cn
-    urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
-except Exception:
-    pass
-
 from datetime import datetime
 import pytz
 import requests
@@ -60,7 +45,7 @@ def check_ip_guard() -> bool:
     """
     # Paper mode bypass removed
 
-    allowed_ip = db.get("ALLOWED_TRADING_IP", "46.224.133.16").strip()
+    allowed_ip = db.get("ALLOWED_TRADING_IP", "5.75.250.104").strip()
 
     # ANY = disable IP guard (for dynamic home broadband testing/override)
     if allowed_ip.upper() == "ANY":
@@ -188,6 +173,14 @@ def start_engine_loop() -> None:
             now_time_str = now.strftime("%H:%M")
             today_str = now.strftime("%Y-%m-%d")
 
+            # ── MARKET TRADING DAY FIREWALL (BRICK 1) ──
+            if not utils.is_trading_day(now) and not once_mode:
+                if int(time.time()) % 1800 < 15:
+                    reason = "WEEKEND (Saturday/Sunday)" if now.weekday() >= 5 else f"NSE TRADING HOLIDAY ({today_str})"
+                    utils.log(f"Market is CLOSED today: {reason}. All trading engines, pulses, and watchdogs are peacefully SLEEPING.", "MARKET_CLOSED")
+                time.sleep(30)
+                continue
+
             # Daily Strike Reset Check (Runs after 09:00 IST once per calendar day)
             if now_time_str >= "09:00":
                 last_reset_date = db.get("last_daily_strike_reset_date", "")
@@ -197,6 +190,19 @@ def start_engine_loop() -> None:
                     if reset_count > 0:
                         tg.send(f"🔄 <b>DAILY STRIKE RESET COMPLETE</b>\nReset {reset_count} closed strike(s) from previous days back to PENDING.")
                     db.set("last_daily_strike_reset_date", today_str)
+
+            # Daily OS Option Anchor Refresh (Runs after 09:00 IST once per calendar day)
+            if now_time_str >= "09:00":
+                last_os_refresh_date = db.get("last_os_anchor_refresh_date", "")
+                if last_os_refresh_date != today_str:
+                    utils.log("Running daily OS strike anchor refresh from NSE previous close...", "INIT")
+                    try:
+                        import os_engine
+                        refreshed_count = os_engine.refresh_all_os_anchors()
+                        utils.log(f"Daily OS strike anchor refresh complete: {refreshed_count} contract(s) refreshed.", "INIT")
+                    except Exception as e:
+                        utils.log(f"Error in daily OS strike anchor refresh: {e}", "ERROR")
+                    db.set("last_os_anchor_refresh_date", today_str)
 
             # Master Nifty Anchor is strictly manual (No automated 09:15 overwrite)
 
@@ -235,18 +241,65 @@ def start_engine_loop() -> None:
             # E. Monday Rollover check
             run_monday_rollover_check()
 
-            # E1. 15:01 IST OS Option Selling Line Audit & Momentum Decision (Staggered Window Compliance)
-            os_start_time = getattr(cfg, "OS_AUDIT_WINDOW_START", "15:01")
-            if os_start_time <= now_time_str < getattr(cfg, "FORCE_CLOSE_TIME", "15:36"):
+            # E1. 14:57 IST Master Anchor Continuation Decision for M-Units (V5.0)
+            anchor_decision_time = getattr(cfg, "MASTER_DECISION_TIME", "14:57")
+            trading_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:13")
+            if (anchor_decision_time <= now_time_str < trading_cutoff):
+                last_3pm_decision_date = db.get("last_3pm_decision_date", "")
+                if last_3pm_decision_date != today_str:
+                    utils.log(f"⏰ {anchor_decision_time} IST Watchdog: Running Master Anchor Continuation Decision for M-Units (14:57 - 15:00 window)...", "DECISION")
+                    bm.execute_3pm_master_anchor_decision()
+                    db.set("last_3pm_decision_date", today_str)
+
+            # E1-b. 15:01 IST OS Option Selling Line Audit & Momentum Decision (OS1, OS2, OS3)
+            os_decision_time = getattr(cfg, "OS_DECISION_TIME", "15:01")
+            if (os_decision_time <= now_time_str < trading_cutoff):
                 last_os_3pm_date = db.get("last_os_3pm_decision_date", "")
                 if last_os_3pm_date != today_str:
-                    utils.log(f"⏰ {os_start_time} IST Watchdog: Running OS Option Selling Line Audit (Staggered Anti-Overcrowding)...", "DECISION")
+                    utils.log(f"⏰ {os_decision_time} IST Watchdog: Running OS Option Selling Line Audit across OS-Units (15:01 - 15:04 window)...", "DECISION")
                     try:
                         import os_engine
                         os_engine.evaluate_os_3pm_decision()
                         db.set("last_os_3pm_decision_date", today_str)
                     except Exception as os_err:
-                        utils.log(f"Error in OS {os_start_time} decision: {os_err}", "ERROR")
+                        utils.log(f"Error in OS {os_decision_time} decision: {os_err}", "ERROR")
+
+            # E1-c. Weekly ST 2-Hour Autonomous Engine Pulse Watchdog (11:15, 13:15, 15:10)
+            try:
+                import weekly_st_engine as wst_engine
+                in_w_pulse, w_pulse_desc = wst_engine.is_pulse_time()
+                if in_w_pulse:
+                    # Assign canonical Pulse ID to prevent minute-by-minute repeated triggers
+                    if "11:15" in w_pulse_desc:
+                        pulse_id = "PULSE_11_15"
+                    elif "01:15" in w_pulse_desc:
+                        pulse_id = "PULSE_13_15"
+                    elif "03:10" in w_pulse_desc:
+                        pulse_id = "PULSE_15_10"
+                    else:
+                        pulse_id = f"PULSE_{now_time_str[:5]}"
+                    
+                    last_w_pulse_key = f"last_w_pulse_{pulse_id}"
+                    if db.get(last_w_pulse_key, "") != today_str:
+                        # Lock pulse key BEFORE evaluation to eliminate race conditions
+                        db.set(last_w_pulse_key, today_str)
+                        pulse_res = wst_engine.evaluate_weekly_st_pulse(force_pulse=False)
+                        if pulse_res:
+                            utils.log(f"Weekly ST Pulse result: {pulse_res.get('message', '')}", "W_PULSE")
+            except Exception as w_err:
+                utils.log(f"Error in Weekly ST-2H Pulse watchdog: {w_err}", "ERROR")
+
+            # E2. 15:13 IST EOD Orphan Hedge Watchdog Protocol (V5.1)
+            orphan_sweep_time = getattr(cfg, "ORPHAN_SWEEP_START", "15:13")
+            if (orphan_sweep_time <= now_time_str <= cfg.MARKET_END_TIME):
+                last_sweep_date = db.get("last_eod_hedge_sweep_date", "")
+                if last_sweep_date != today_str:
+                    utils.log(f"🧹 {orphan_sweep_time} IST Watchdog: Running EOD Orphan Hedge Sweep with Broker Ground Truth...", "SWEEP")
+                    try:
+                        res_swp = bm.sweep_orphan_hedges_now()
+                        db.set("last_eod_hedge_sweep_date", today_str)
+                    except Exception as ex_swp:
+                        utils.log(f"EOD Orphan Hedge Sweep error in main loop: {ex_swp}", "WARN")
 
             # Process pending closes (Runs every loop iteration / 10s)
             bm.process_pending_closes()
@@ -267,8 +320,8 @@ def start_engine_loop() -> None:
                 tg.alert_heartbeat(portfolio)
                 last_heartbeat_time = time.time()
 
-            # H. P&L Cycle (runs during market hours: 09:15 - 15:45 IST)
-            is_market_open = (cfg.MARKET_START_TIME <= now_time_str <= cfg.MARKET_END_TIME)
+            # H. P&L Cycle (runs during market hours: 09:15 - 15:30 IST on trading days)
+            is_market_open = utils.is_market_hours()
             check_interval = int(db.get("check_interval", str(cfg.DEFAULT_CHECK_INTERVAL)))
 
             if is_market_open or once_mode:

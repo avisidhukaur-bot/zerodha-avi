@@ -13,26 +13,11 @@ Responsibilities:
 import sys
 import os
 import time
-import socket
-
-# Force all socket operations to use IPv4 to prevent Zerodha Kite API IP whitelist rejections (IPv6)
-try:
-    _orig_getaddrinfo = socket.getaddrinfo
-    def _ipv4_getaddrinfo(*args, **kwargs):
-        responses = _orig_getaddrinfo(*args, **kwargs)
-        ipv4_res = [r for r in responses if r[0] == socket.AF_INET]
-        return ipv4_res if ipv4_res else responses
-    socket.getaddrinfo = _ipv4_getaddrinfo
-    import urllib3.util.connection as urllib3_cn
-    urllib3_cn.allowed_gai_family = lambda: socket.AF_INET
-except Exception:
-    pass
-
 import requests
 import pyotp
 import pandas as pd
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import pytz
 from kiteconnect import KiteConnect, exceptions
 from html.parser import HTMLParser
@@ -269,6 +254,10 @@ _order_timestamps: list = []
 
 def _ist_now() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _now_ist_dt() -> datetime:
+    return datetime.now(IST)
 
 
 def _check_rate_limit() -> bool:
@@ -667,6 +656,20 @@ class KiteExecutor:
             print("[EXECUTOR] Cannot place order -- not logged in.")
             return None
 
+        # ── BRICK 2: OFF-MARKET & AMO PROTECTION GUARD ──
+        # Strictly prevent off-market or holiday order placement to avoid queued AMO ghost orders
+        now_dt = _now_ist_dt()
+        now_t = now_dt.time()
+        import utils
+        if not utils.is_trading_day(now_dt):
+            print(f"[EXECUTOR] 🛑 ORDER BLOCKED: Cannot place live order on non-trading day ({now_dt.strftime('%Y-%m-%d')} is Weekend/Holiday). Order aborted.")
+            return None
+
+        # Allow 09:15 to 15:32 (buffer for square-off/EOD)
+        if not (dt_time(9, 15, 0) <= now_t <= dt_time(15, 32, 0)):
+            print(f"[EXECUTOR] 🛑 ORDER BLOCKED: Cannot place live order outside market hours ({now_t.strftime('%H:%M:%S')} IST). Order aborted.")
+            return None
+
         _check_rate_limit()
 
         # Convert MARKET order to LIMIT to protect client execution slippage
@@ -716,6 +719,21 @@ class KiteExecutor:
                 trigger_price=float(trigger_price) if trigger_price > 0 else None
             )
             print(f"[EXECUTOR] ✅ Zerodha order placed: {order_id} | {transaction_type} {qty} {trading_symbol}")
+            
+            # Immediate AMO Verification: Never allow queued AMO orders in account
+            try:
+                hist = self.kite.order_history(order_id=str(order_id))
+                if hist:
+                    cur_st = hist[-1]
+                    var = str(cur_st.get("variety", "")).lower()
+                    st = str(cur_st.get("status", "")).upper()
+                    if var == "amo" or "AMO" in st:
+                        print(f"[EXECUTOR] 🚨 DANGER: Order {order_id} was queued as AMO! Instantly cancelling to prevent open market execution...")
+                        self.cancel_order(str(order_id))
+                        return None
+            except Exception as hist_err:
+                print(f"[EXECUTOR] Warning: Could not verify order history for AMO check: {hist_err}")
+
             return str(order_id)
         except Exception as e:
             self._handle_kite_exception(e)
@@ -745,6 +763,16 @@ class KiteExecutor:
             # The last item in order history is the current state
             current_state = history[-1]
             status = current_state.get("status", "").upper()
+            variety = str(current_state.get("variety", "")).lower()
+
+            # Immediate cancel if AMO order detected!
+            if variety == "amo" or "AMO" in status:
+                print(f"[EXECUTOR] 🚨 DANGER: Detected queued AMO order {order_id}! Auto-cancelling immediately to prevent open market explosion...")
+                try:
+                    self.cancel_order(order_id)
+                except Exception:
+                    pass
+                return "FAILED"
 
             if status == "COMPLETE":
                 return "SUCCESS"
@@ -800,24 +828,57 @@ class KiteExecutor:
             print(f"[EXECUTOR] Exception in get_positions: {e}")
             return []
 
-    def get_net_position_qty(self, trading_symbol: str) -> int:
+    def get_net_positions(self) -> list:
         """
-        BROKER GROUND TRUTH: Queries Zerodha Kite directly to return the exact real-time
-        net quantity currently open on the broker for trading_symbol.
-        Returns:
-            int: e.g. -65 (short 1 lot), +65 (long 1 lot), 0 (flat/no position).
+        Fetches live broker net positions from Zerodha Kite and normalizes them into standard schema:
+        {
+            "trading_symbol": str,
+            "token": str,
+            "strike_price": float,
+            "option_type": "CE" | "PE",
+            "side": "SHORT" | "LONG",
+            "net_qty": int,
+            "product": str,
+            "last_price": float
+        }
         """
-        if not self.ensure_logged_in():
-            return 0
-        try:
-            positions = self.get_positions()
-            sym_clean = trading_symbol.strip().upper()
-            for pos in positions:
-                if pos.get("tradingsymbol", "").strip().upper() == sym_clean:
-                    return int(pos.get("quantity", 0) or 0)
-        except Exception as e:
-            print(f"[EXECUTOR] Error querying net position for {trading_symbol}: {e}")
-        return 0
+        raw_positions = self.get_positions()
+        normalized = []
+        if not raw_positions:
+            return normalized
+
+        import re
+        for pos in raw_positions:
+            qty = int(pos.get("quantity", 0))
+            if qty == 0:
+                continue
+            sym = str(pos.get("tradingsymbol", "")).upper()
+            opt_type = ""
+            if sym.endswith("CE") or "CE" in sym:
+                opt_type = "CE"
+            elif sym.endswith("PE") or "PE" in sym:
+                opt_type = "PE"
+
+            strike_price = 0.0
+            m = re.search(r'(\d{5})(?:CE|PE)', sym)
+            if m:
+                try:
+                    strike_price = float(m.group(1))
+                except (ValueError, TypeError):
+                    strike_price = 0.0
+
+            tok = str(pos.get("instrument_token") or "")
+            normalized.append({
+                "trading_symbol": sym,
+                "token": tok,
+                "strike_price": strike_price,
+                "option_type": opt_type,
+                "side": "SHORT" if qty < 0 else "LONG",
+                "net_qty": qty,
+                "product": str(pos.get("product", "NRML")),
+                "last_price": float(pos.get("last_price", 0.0) or 0.0)
+            })
+        return normalized
 
     def get_live_ltp(self, symbol_token: str, trading_symbol: str = "") -> float:
         if not self.ensure_logged_in():
@@ -913,6 +974,10 @@ class KiteExecutor:
 
         return spot
 
+    def get_nifty_spot_ltp(self, force_refresh: bool = False) -> float:
+        """Compatibility alias for get_nifty_spot() across all modules and blueprints."""
+        return self.get_nifty_spot(force_refresh=force_refresh)
+
     # ─────────────────────────────────────────────────────────────────────────
     # SECURITY MASTER — Instruments download for Zerodha
     # ─────────────────────────────────────────────────────────────────────────
@@ -969,6 +1034,10 @@ class KiteExecutor:
                 pass
 
         return pd.DataFrame()
+
+    def load_instruments(self) -> pd.DataFrame:
+        """Public alias for _load_security_master."""
+        return self._load_security_master()
 
     def get_mcx_futures(self, base_symbol: str) -> list:
         """
@@ -1094,11 +1163,6 @@ class KiteExecutor:
         print(f"[EXECUTOR][SM] Option NOT found: NIFTY {expiry_yyyy_mm_dd} {strike_price} {option_type}")
         return None
 
-    def search_option_contract(self, *args, **kwargs) -> Optional[dict]:
-        """Alias for search_option_symbol."""
-        return self.search_option_symbol(*args, **kwargs)
-
-
     def test_connection(self) -> dict:
         if not self.ensure_logged_in():
             return {
@@ -1175,47 +1239,3 @@ class KiteExecutor:
 
 # Singleton instance
 kite_executor = KiteExecutor()
-
-# ─────────────────────────────────────────────────────────────────────────
-# Module-level convenience wrappers (delegates to singleton kite_executor)
-# ─────────────────────────────────────────────────────────────────────────
-def get_kite_client():
-    kite_executor.ensure_logged_in()
-    return kite_executor.kite
-
-def get_positions():
-    return kite_executor.get_positions()
-
-def get_net_position_qty(trading_symbol: str) -> int:
-    return kite_executor.get_net_position_qty(trading_symbol)
-
-def get_ltp(symbol_token: str, trading_symbol: str = "") -> float:
-    return kite_executor.get_ltp(symbol_token, trading_symbol)
-
-def get_live_ltp(symbol_token: str, trading_symbol: str = "") -> float:
-    return kite_executor.get_live_ltp(symbol_token, trading_symbol)
-
-def get_nifty_spot(force_refresh: bool = False) -> float:
-    return kite_executor.get_nifty_spot(force_refresh)
-
-def place_order(*args, **kwargs):
-    return kite_executor.place_order(*args, **kwargs)
-
-def cancel_order(order_id: str, variety: str = "regular") -> bool:
-    return kite_executor.cancel_order(order_id, variety)
-
-def get_order_status(order_id: str) -> str:
-    return kite_executor.get_order_status(order_id)
-
-def get_order_fill_price(order_id: str) -> float:
-    return kite_executor.get_order_fill_price(order_id)
-
-def execute_sell_and_confirm(trading_symbol: str, symbol_token: str, qty: int, limit_price: float = 0.0) -> tuple:
-    return kite_executor.execute_sell_and_confirm(trading_symbol, symbol_token, qty, limit_price)
-
-def execute_buy_and_confirm(trading_symbol: str, symbol_token: str, qty: int, limit_price: float = 0.0) -> tuple:
-    return kite_executor.execute_buy_and_confirm(trading_symbol, symbol_token, qty, limit_price)
-
-def search_option_symbol(underlying: str, expiry_date: str, strike_price: float, option_type: str) -> dict:
-    return kite_executor.search_option_symbol(underlying, expiry_date, strike_price, option_type)
-

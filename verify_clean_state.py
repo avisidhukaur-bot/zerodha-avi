@@ -1,0 +1,10 @@
+import sqlite3
+conn = sqlite3.connect('zerodha_trader.db')
+cur = conn.cursor()
+cur.execute("SELECT COUNT(*) FROM blocks WHERE status='ACTIVE'")
+print("Active Blocks Count:", cur.fetchone()[0])
+cur.execute("SELECT COUNT(*) FROM strikes WHERE status IN ('ACTIVE', 'PENDING', 'OPEN')")
+print("Active/Pending Strikes Count:", cur.fetchone()[0])
+cur.execute("SELECT COUNT(*) FROM legs WHERE exit_time IS NULL OR exit_time=''")
+print("Open Legs Count:", cur.fetchone()[0])
+conn.close()

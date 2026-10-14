@@ -23,12 +23,12 @@ import sqlite3
 import os
 import sys
 import threading
-from typing import Optional, List, Dict, Any, Union
 
 # Force UTF-8 output on Windows (prevents emoji/unicode crash on cp1252 terminals)
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
 import pytz
 
 import config as cfg
@@ -178,43 +178,28 @@ def _conn() -> sqlite3.Connection:
     except sqlite3.OperationalError:
         pass
 
-    # ── V5.0 'Old & Gold' Architecture Migrations ───────────────────────────
-    # Strikes Table Migrations
-    try:
-        conn.execute("ALTER TABLE strikes ADD COLUMN sl_pct REAL DEFAULT 25.0")
-    except sqlite3.OperationalError:
-        pass
+    # V5.0 Old & Gold Strategy & Trade State migrations
+    for col_def in [
+        ("reentry_enabled", "INTEGER DEFAULT 1"),
+        ("trade_state", "TEXT DEFAULT 'PENDING'"),
+        ("sl_price", "REAL DEFAULT 0.0"),
+        ("sl_pct", "REAL DEFAULT 25.0"),
+        ("reentry_price", "REAL DEFAULT 0.0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE strikes ADD COLUMN {col_def[0]} {col_def[1]}")
+        except sqlite3.OperationalError:
+            pass
 
-    try:
-        conn.execute("ALTER TABLE strikes ADD COLUMN sl_price REAL DEFAULT 0.0")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE strikes ADD COLUMN reentry_enabled INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE strikes ADD COLUMN trade_state TEXT DEFAULT 'OPEN'")
-    except sqlite3.OperationalError:
-        pass
-
-    # Blocks Table Migrations
-    try:
-        conn.execute("ALTER TABLE blocks ADD COLUMN anchor_decision_time TEXT DEFAULT '15:00'")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE blocks ADD COLUMN recommended_lots INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        conn.execute("ALTER TABLE blocks ADD COLUMN orphan_hedge_policy TEXT DEFAULT 'PRESERVE'")
-    except sqlite3.OperationalError:
-        pass
+    for col_def in [
+        ("anchor_decision_time", "TEXT DEFAULT '15:00'"),
+        ("recommended_lots", "INTEGER DEFAULT 1"),
+        ("orphan_hedge_policy", "TEXT DEFAULT 'HOLD'"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE blocks ADD COLUMN {col_def[0]} {col_def[1]}")
+        except sqlite3.OperationalError:
+            pass
 
     conn.commit()
     return conn
@@ -483,25 +468,79 @@ def set_os_sl_multiplier(mult: float) -> None:
 
 
 def get_os_strike_anchor(symbol: str) -> float:
-    """Returns yesterday's 3:00 PM anchor price for a specific option contract."""
+    """
+    Returns the anchor price for a specific option contract — BUT ONLY if it was
+    saved TODAY. If the stored anchor is from a previous date (stale), returns 0.0
+    so the caller is forced to fetch a fresh previous-close from the Kite API.
+    This prevents the 'stale anchor' bug where a Sep 17 anchor incorrectly drives
+    a Sep 21 trade decision.
+    """
     try:
-        key = f"os_anchor_{str(symbol).strip().upper()}"
-        val = get(key, "0.0")
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        sym_key   = f"os_anchor_{str(symbol).strip().upper()}"
+        date_key  = f"os_anchor_date_{str(symbol).strip().upper()}"
+        saved_date = get(date_key, "")
+        if saved_date != today_str:
+            # Anchor is stale (from a previous day) — treat as missing
+            return 0.0
+        val = get(sym_key, "0.0")
         return float(val)
     except (ValueError, TypeError):
         return 0.0
 
 
 def set_os_strike_anchor(symbol: str, price: float) -> None:
-    """Saves yesterday's 3:00 PM anchor price for a specific option contract."""
-    key = f"os_anchor_{str(symbol).strip().upper()}"
-    set(key, f"{float(price):.2f}")
+    """
+    Saves the anchor price for a specific option contract, together with today's
+    date so that tomorrow the anchor is recognised as stale and auto-refreshed.
+    """
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    sym_key  = f"os_anchor_{str(symbol).strip().upper()}"
+    date_key = f"os_anchor_date_{str(symbol).strip().upper()}"
+    set(sym_key,  f"{float(price):.2f}")
+    set(date_key, today_str)
+
+
+def prune_stale_os_anchors() -> int:
+    """
+    Purges any os_anchor keys whose os_anchor_date is not today or missing,
+    ensuring stale multi-day anchors never linger in the database.
+    """
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    cleared = 0
+    try:
+        with _lock:
+            conn = _conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT key, value FROM settings WHERE key LIKE 'os_anchor_date_%'")
+            rows = cursor.fetchall()
+            for r in rows:
+                k, d = r["key"], r["value"]
+                if d != today_str:
+                    sym = k.replace("os_anchor_date_", "")
+                    cursor.execute("DELETE FROM settings WHERE key IN (?, ?)", (k, f"os_anchor_{sym}"))
+                    cleared += 1
+            # Also clean legacy un-dated os_anchor_% keys
+            cursor.execute("SELECT key FROM settings WHERE key LIKE 'os_anchor_%' AND key NOT LIKE 'os_anchor_date_%'")
+            undated_rows = cursor.fetchall()
+            for ur in undated_rows:
+                k = ur["key"]
+                sym = k.replace("os_anchor_", "")
+                cursor.execute("SELECT value FROM settings WHERE key = ?", (f"os_anchor_date_{sym}",))
+                row = cursor.fetchone()
+                if not row or row["value"] != today_str:
+                    cursor.execute("DELETE FROM settings WHERE key = ?", (k,))
+                    cleared += 1
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[DB] Error pruning stale anchors: {e}")
+    return cleared
 
 
 def has_os_traded_today(unit_name: str) -> bool:
     """
-    Checks if this OS unit has already executed a trade today.
-    Rule: 'Din mein sirf ek hi baar trade karna hai'.
+    Checks if this OS unit has executed any trade today (for general tracking).
     """
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     key = f"os_traded_date_{str(unit_name).strip().upper()}"
@@ -509,7 +548,7 @@ def has_os_traded_today(unit_name: str) -> bool:
 
 
 def mark_os_traded_today(unit_name: str) -> None:
-    """Marks that this OS unit has taken its daily trade today."""
+    """Marks that this OS unit has taken a trade today."""
     today_str = datetime.now(IST).strftime("%Y-%m-%d")
     key = f"os_traded_date_{str(unit_name).strip().upper()}"
     set(key, today_str)
@@ -518,6 +557,29 @@ def mark_os_traded_today(unit_name: str) -> None:
 def reset_os_daily_trade_flag(unit_name: str) -> None:
     """Resets the daily trade flag for testing or operator override."""
     key = f"os_traded_date_{str(unit_name).strip().upper()}"
+    set(key, "")
+
+
+def has_os_auto_traded_today(unit_name: str) -> bool:
+    """
+    Checks if this OS unit has already executed its AUTOMATIC 15:02 IST scheduled trade today.
+    Rule: Auto trade executes only once per day. Manual trades do NOT affect this.
+    """
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    key = f"os_auto_traded_date_{str(unit_name).strip().upper()}"
+    return get(key, "") == today_str
+
+
+def mark_os_auto_traded_today(unit_name: str) -> None:
+    """Marks that this OS unit has taken its 15:02 IST auto trade today."""
+    today_str = datetime.now(IST).strftime("%Y-%m-%d")
+    key = f"os_auto_traded_date_{str(unit_name).strip().upper()}"
+    set(key, today_str)
+
+
+def reset_os_auto_traded_flag(unit_name: str) -> None:
+    """Resets the auto trade flag for testing or operator override."""
+    key = f"os_auto_traded_date_{str(unit_name).strip().upper()}"
     set(key, "")
 
 
@@ -546,10 +608,9 @@ def get_os_settings() -> dict:
         "locked": is_os_settings_locked(),
         "horizon": get("os_locked_horizon", "Weekly Expiry"),
         "expiry_date": get("os_locked_expiry", ""),
-        "lots": int(get("os_locked_lots", "1") or "1"),
+        "lots": int(get("os_locked_lots", "3") or "3"),
         "lot_size": int(get("os_locked_lot_size", str(cfg.NIFTY_LOT_SIZE)) or str(cfg.NIFTY_LOT_SIZE)),
         "mode": get("os_locked_mode", "AUTO"),
-        "step_size": get("os_locked_step_size", "AUTO"),
         "manual_ce": int(get("os_locked_manual_ce", "0") or "0") if get("os_locked_manual_ce", "0").isdigit() else 0,
         "manual_pe": int(get("os_locked_manual_pe", "0") or "0") if get("os_locked_manual_pe", "0").isdigit() else 0,
         "target_premium": float(get("os_locked_target_premium", "150.0") or "150.0"),
@@ -561,10 +622,9 @@ def set_os_settings(
     locked: bool,
     horizon: str = "Weekly Expiry",
     expiry_date: str = "",
-    lots: int = 1,
+    lots: int = 3,
     lot_size: int = 65,
     mode: str = "AUTO",
-    step_size: str = "AUTO",
     manual_ce: int = 0,
     manual_pe: int = 0,
     target_premium: float = 150.0
@@ -576,7 +636,6 @@ def set_os_settings(
     set("os_locked_lots", str(int(lots)))
     set("os_locked_lot_size", str(int(lot_size)))
     set("os_locked_mode", str(mode))
-    set("os_locked_step_size", str(step_size))
     set("os_locked_manual_ce", str(int(manual_ce or 0)))
     set("os_locked_manual_pe", str(int(manual_pe or 0)))
     set("os_locked_target_premium", str(float(target_premium)))
@@ -584,36 +643,76 @@ def set_os_settings(
         set("os_locked_at", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
 
 
+
 def unlock_os_settings() -> None:
     """Unlocks OS parameters to allow user editing in draft mode."""
     set("os_settings_locked", "0")
 
 
-def wipeout_os_pod(unit_name: str = "OS1") -> bool:
-    """
-    Completely purges/wipes out an OS pod (OS1, OS2, etc.) from the database:
-      1. Force deletes all associated blocks, strikes, legs, and trades.
-      2. Resets the daily trade flag.
-      3. Unlocks OS settings returning UI to clean Draft Mode.
-    """
-    try:
-        clean_u = (unit_name or "OS1").strip().upper()
-        conn = _conn()
-        cur = conn.cursor()
-        cur.execute("SELECT block_id FROM blocks WHERE UPPER(anchor_unit_name)=?", (clean_u,))
-        bids = [r["block_id"] for r in cur.fetchall()]
-        conn.close()
+def is_m_unit_settings_locked(unit_name: str = "M1") -> bool:
+    """Checks if operator has explicitly locked parameters for this M-unit."""
+    u = str(unit_name).strip().upper()
+    return get(f"m_settings_locked_{u}", "0") == "1"
 
-        for bid in bids:
-            force_delete_block(bid)
 
-        reset_os_daily_trade_flag(clean_u)
-        unlock_os_settings()
-        print(f"[DB] OK OS Pod {clean_u} wiped out successfully (blocks deleted: {bids}).")
-        return True
-    except Exception as e:
-        print(f"[DB] ERR wipeout_os_pod({unit_name}) failed: {e}")
-        return False
+def get_m_unit_settings(unit_name: str = "M1") -> dict:
+    """Returns saved M-Unit settings with strictly user-defined anchor."""
+    u = str(unit_name).strip().upper()
+    active_blocks = get_all_blocks(status_filter="ACTIVE")
+    b = next((x for x in active_blocks if (x.get("anchor_unit_name") or "").strip().upper() == u), None)
+    default_anchor = float(b.get("master_anchor_price", 0.0) if b else (get(f"m_locked_anchor_{u}", "23350.0") or "23350.0"))
+    if default_anchor <= 0.0:
+        default_anchor = 23350.0
+
+    return {
+        "unit_name": u,
+        "locked": is_m_unit_settings_locked(u),
+        "anchor_price": float(get(f"m_locked_anchor_{u}", str(default_anchor)) or str(default_anchor)),
+        "horizon": get(f"m_locked_horizon_{u}", "Monthly Expiry"),
+        "expiry_date": get(f"m_locked_expiry_{u}", ""),
+        "lots": int(get(f"m_locked_lots_{u}", "4") or "4"),
+        "lot_size": int(get(f"m_locked_lot_size_{u}", str(cfg.NIFTY_LOT_SIZE)) or str(cfg.NIFTY_LOT_SIZE)),
+        "mode": get(f"m_locked_mode_{u}", "AUTO"),
+        "manual_ce": int(get(f"m_locked_manual_ce_{u}", "0") or "0") if get(f"m_locked_manual_ce_{u}", "0").isdigit() else 0,
+        "manual_pe": int(get(f"m_locked_manual_pe_{u}", "0") or "0") if get(f"m_locked_manual_pe_{u}", "0").isdigit() else 0,
+        "target_premium": float(get(f"m_locked_target_premium_{u}", "200.0") or "200.0"),
+        "locked_at": get(f"m_locked_at_{u}", "")
+    }
+
+
+def set_m_unit_settings(
+    unit_name: str = "M1",
+    locked: bool = True,
+    anchor_price: float = 23350.0,
+    horizon: str = "Monthly Expiry",
+    expiry_date: str = "",
+    lots: int = 4,
+    lot_size: int = 65,
+    mode: str = "AUTO",
+    manual_ce: int = 0,
+    manual_pe: int = 0,
+    target_premium: float = 200.0
+) -> None:
+    """Locks or saves M-unit parameters including user-defined anchor price."""
+    u = str(unit_name).strip().upper()
+    set(f"m_settings_locked_{u}", "1" if locked else "0")
+    set(f"m_locked_anchor_{u}", str(round(float(anchor_price), 2)))
+    set(f"m_locked_horizon_{u}", str(horizon))
+    set(f"m_locked_expiry_{u}", str(expiry_date))
+    set(f"m_locked_lots_{u}", str(int(lots)))
+    set(f"m_locked_lot_size_{u}", str(int(lot_size)))
+    set(f"m_locked_mode_{u}", str(mode))
+    set(f"m_locked_manual_ce_{u}", str(int(manual_ce or 0)))
+    set(f"m_locked_manual_pe_{u}", str(int(manual_pe or 0)))
+    set(f"m_locked_target_premium_{u}", str(float(target_premium)))
+    if locked:
+        set(f"m_locked_at_{u}", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
+
+
+def unlock_m_unit_settings(unit_name: str = "M1") -> None:
+    """Unlocks M-unit parameters to allow user editing in draft mode."""
+    u = str(unit_name).strip().upper()
+    set(f"m_settings_locked_{u}", "0")
 
 
 def get_next_os_unit_name(expiry_date: str = None) -> str:
@@ -641,29 +740,38 @@ def get_next_os_unit_name(expiry_date: str = None) -> str:
         return "OS1"
 
 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ██████  BLOCKS CRUD
 # ─────────────────────────────────────────────────────────────────────────────
 
 def get_next_unit_name(expiry_date: str = None) -> str:
     """
-    Finds the next unit identifier (e.g. M1, M2, M3...) for active blocks.
+    Finds the next unit identifier (e.g. M1, M2, M3...) for active blocks with active strikes.
     """
     try:
         conn = _conn()
+        query = """
+            SELECT DISTINCT b.anchor_unit_name 
+            FROM blocks b
+            WHERE b.status = 'ACTIVE' 
+              AND EXISTS (SELECT 1 FROM strikes s WHERE s.block_id = b.block_id AND s.status != 'CLOSED')
+        """
+        params = ()
         if expiry_date:
-            cur = conn.execute("SELECT anchor_unit_name FROM blocks WHERE status='ACTIVE' AND UPPER(expiry_date)=UPPER(?)", (expiry_date.strip(),))
-        else:
-            cur = conn.execute("SELECT anchor_unit_name FROM blocks WHERE status='ACTIVE'")
+            query += " AND UPPER(b.expiry_date) = UPPER(?)"
+            params = (expiry_date.strip(),)
+        cur = conn.execute(query, params)
         existing_units = [row["anchor_unit_name"].strip().upper() for row in cur.fetchall() if row["anchor_unit_name"]]
         conn.close()
 
-        # Find first free M_i
+        # Find first free M_i (M1, M2, M3...)
         for i in range(1, 100):
             candidate = f"M{i}"
             if candidate not in existing_units:
                 return candidate
-        return f"M{len(existing_units) + 1}"
+        return "M1"
     except Exception:
         return "M1"
 
@@ -679,9 +787,9 @@ def create_block(
     custom_lots: int = 2,
     current_regime: str = "NEUTRAL",
     auto_regime_enabled: int = 1,
-    anchor_decision_time: str = "15:00",
-    recommended_lots: int = 1,
-    orphan_hedge_policy: str = "PRESERVE"
+    orphan_hedge_policy: str = "PRESERVE",
+    recommended_lots: Optional[int] = None,
+    **kwargs
 ) -> int:
     """
     Creates a new block. Auto-assigns next block_number and unit name if not supplied.
@@ -691,9 +799,10 @@ def create_block(
     anchor_unit_name    : "M1", "M2", etc.
     master_anchor_price : Dedicated unit anchor (0.0 = unset)
     regime_buffer       : Hysteresis buffer (default 15.0 pts)
-    anchor_decision_time: "15:00" (3:00 PM Continuation Decision)
     Returns             : block_id (int) or -1 on failure
     """
+    if recommended_lots is not None:
+        custom_lots = recommended_lots
     side_type_clean = side_type.strip().upper()
     if side_type_clean not in ("CALL", "PUT", "BOTH"):
         side_type_clean = "BOTH"
@@ -714,17 +823,15 @@ def create_block(
                     block_number, expiry_date, expiry_type, side_type,
                     anchor_unit_name, master_anchor_price, regime_buffer,
                     current_regime, auto_regime_enabled, custom_lots,
-                    anchor_decision_time, recommended_lots, orphan_hedge_policy,
-                    is_enabled, status, created_at, notes
+                    is_enabled, status, created_at, notes, orphan_hedge_policy
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'ACTIVE', ?, ?, ?)
                 """,
                 (
                     next_num, expiry_date, expiry_type.upper(), side_type_clean,
                     unit_name, float(master_anchor_price), float(regime_buffer),
                     str(current_regime).upper(), int(auto_regime_enabled), int(custom_lots),
-                    str(anchor_decision_time), int(recommended_lots), str(orphan_hedge_policy),
-                    _ist_now(), notes
+                    _ist_now(), notes, str(orphan_hedge_policy).upper()
                 )
             )
             conn.commit()
@@ -734,7 +841,6 @@ def create_block(
             return block_id
     except Exception as e:
         print(f"[DB] ERR create_block() failed: {e}")
-        return -1
         return -1
 
 
@@ -782,6 +888,23 @@ def update_block_regime(block_id: int, current_regime: str) -> bool:
         return True
     except Exception as e:
         print(f"[DB] ERR update_block_regime() failed: {e}")
+        return False
+
+
+def update_block_recommended_lots(block_id: int, recommended_lots: int) -> bool:
+    """Updates recommended_lots for a block."""
+    try:
+        with _lock:
+            conn = _conn()
+            conn.execute(
+                "UPDATE blocks SET recommended_lots=? WHERE block_id=?",
+                (int(recommended_lots), block_id)
+            )
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_block_recommended_lots() failed: {e}")
         return False
 
 
@@ -955,17 +1078,19 @@ def add_strike(
     lots: int = 1,
     hedge_strike_id: int = None,
     expiry_date: str = None,
-    sl_pct: float = 25.0,
     sl_price: float = 0.0,
+    sl_pct: float = 25.0,
+    reentry_price: float = 0.0,
     reentry_enabled: int = 1,
     trade_state: str = "PENDING"
 ) -> int:
     """
-    Adds a strike (leg) to a block.
+    Adds a strike (leg) to a block (V5.0).
     HARD RULE: Max strikes per block configured in settings.
     HARD RULE: option_type must be CE/PE.
     HARD RULE: leg_type must be SELL or HEDGE_BUY.
     HARD RULE: Anchor price must be manually provided (> 0).
+    Auto-computes sl_price from sl_pct (25% default) for SELL legs if sl_price <= 0.
     Returns: strike_id or -1 on failure.
     """
     # ── Validate option_type ──────────────────────────────────────────────────
@@ -988,6 +1113,12 @@ def add_strike(
         print(f"[DB] BLOCKED HARD RULE: Anchor price must be >= 0 for HEDGE_BUY strikes. Got: {anchor_price}")
         return -1
 
+    # Auto-compute sl_price and reentry_price for SELL legs if not explicitly provided
+    if leg_type == "SELL" and sl_price <= 0.0 and anchor_price > 0:
+        sl_price = round(anchor_price * (1.0 + (sl_pct / 100.0)), 2)
+    if leg_type == "SELL" and reentry_price <= 0.0 and anchor_price > 0:
+        reentry_price = round(max(0.05, anchor_price - 1.0), 2)
+
     # ── Enforce max strikes per block ──────────────────────────────────────
     max_strikes = int(get("max_strikes_per_block", "50"))
     existing = get_strikes_by_block(block_id)
@@ -1001,23 +1132,18 @@ def add_strike(
         print(f"[DB] ERR Block {block_id} not found.")
         return -1
 
-    # ── Auto-compute sl_price if not explicitly provided ─────────────────────
-    if leg_type == "SELL" and sl_price <= 0 and anchor_price > 0:
-        sl_price = anchor_price * (1.0 + (float(sl_pct) / 100.0))
-
     try:
         with _lock:
             conn = _conn()
             conn.execute(
                 """
                 INSERT INTO strikes
-                    (block_id, strike_price, option_type, leg_type, anchor_price, lots, status,
-                     hedge_strike_id, expiry_date, sl_pct, sl_price, reentry_enabled, trade_state)
-                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)
+                    (block_id, strike_price, option_type, leg_type, anchor_price, lots, status, hedge_strike_id, expiry_date, sl_price, sl_pct, reentry_price, reentry_enabled, trade_state)
+                VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (block_id, strike_price, option_type, leg_type,
                  anchor_price, lots, hedge_strike_id, expiry_date,
-                 float(sl_pct), float(sl_price), int(reentry_enabled), str(trade_state).upper())
+                 sl_price, sl_pct, reentry_price, reentry_enabled, trade_state)
             )
             conn.commit()
             strike_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1025,12 +1151,45 @@ def add_strike(
         print(
             f"[DB] OK Strike added -> strike_id={strike_id} | "
             f"Block {block_id} | {strike_price} {option_type} {leg_type} | "
-            f"Anchor=₹{anchor_price:.2f} | Lots={lots} | Expiry={expiry_date} | SL={sl_pct}% (Trigger=₹{sl_price:.2f})"
+            f"Anchor=₹{anchor_price:.2f} | SL=₹{sl_price:.2f} ({sl_pct:.1f}%) | Lots={lots} | State={trade_state} | Expiry={expiry_date}"
         )
         return strike_id
     except Exception as e:
         print(f"[DB] ERR add_strike() failed: {e}")
         return -1
+
+
+def update_strike_trade_state(strike_id: int, trade_state: str) -> bool:
+    """Updates trade_state for a strike (e.g. 'OPEN', 'PENDING', 'SL_HIT', 'REENTRY_ELIGIBLE', 'CONTINUED', 'CLOSED', 'ORPHAN')."""
+    try:
+        with _lock:
+            conn = _conn()
+            conn.execute(
+                "UPDATE strikes SET trade_state=? WHERE strike_id=?",
+                (trade_state.upper(), strike_id)
+            )
+            conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_strike_trade_state({strike_id}, {trade_state}) failed: {e}")
+        return False
+
+
+def get_strikes_by_trade_state(block_id: int, trade_state: str) -> list:
+    """Returns all strikes in a block matching a given trade_state."""
+    try:
+        conn = _conn()
+        cur = conn.execute(
+            "SELECT * FROM strikes WHERE block_id=? AND UPPER(trade_state)=?",
+            (block_id, trade_state.upper())
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        print(f"[DB] ERR get_strikes_by_trade_state failed: {e}")
+        return []
 
 
 def get_strike(strike_id: int) -> dict:
@@ -1094,118 +1253,6 @@ def update_strike_status(strike_id: int, status: str) -> bool:
         return False
 
 
-def update_strike_trade_state(strike_id: int, trade_state: str) -> bool:
-    """Updates the granular trade state ('OPEN', 'PENDING', 'SL_HIT', 'REENTRY_ELIGIBLE', 'CONTINUED', 'CLOSED', 'ORPHAN')."""
-    try:
-        with _lock:
-            conn = _conn()
-            conn.execute("UPDATE strikes SET trade_state=? WHERE strike_id=?", (trade_state.upper(), strike_id))
-            conn.commit()
-            conn.close()
-        return True
-    except Exception as e:
-        print(f"[DB] ERR update_strike_trade_state() failed: {e}")
-        return False
-
-
-def update_strike_sl_config(strike_id: int, sl_pct: float, sl_price: float = 0.0) -> bool:
-    """Updates stop-loss percentage and absolute SL price for a strike."""
-    try:
-        with _lock:
-            conn = _conn()
-            conn.execute("UPDATE strikes SET sl_pct=?, sl_price=? WHERE strike_id=?", (float(sl_pct), float(sl_price), strike_id))
-            conn.commit()
-            conn.close()
-        return True
-    except Exception as e:
-        print(f"[DB] ERR update_strike_sl_config() failed: {e}")
-        return False
-
-
-def update_strike_pricing_and_sl(
-    strike_id: int,
-    anchor_price: Optional[float] = None,
-    sl_price: Optional[float] = None,
-    sl_pct: Optional[float] = None,
-    lots: Optional[int] = None
-) -> bool:
-    """Updates strike's anchor price, stop loss price, stop loss percentage, and lots in one atomic query."""
-    try:
-        fields = []
-        params = []
-        if anchor_price is not None and anchor_price > 0:
-            fields.append("anchor_price=?")
-            params.append(float(anchor_price))
-        if sl_price is not None and sl_price >= 0:
-            fields.append("sl_price=?")
-            params.append(float(sl_price))
-        if sl_pct is not None and sl_pct > 0:
-            fields.append("sl_pct=?")
-            params.append(float(sl_pct))
-        if lots is not None and lots >= 1:
-            fields.append("lots=?")
-            params.append(int(lots))
-        
-        if not fields:
-            return True
-        
-        params.append(strike_id)
-        sql = f"UPDATE strikes SET {', '.join(fields)} WHERE strike_id=?"
-        with _lock:
-            conn = _conn()
-            conn.execute(sql, tuple(params))
-            conn.commit()
-            conn.close()
-        return True
-    except Exception as e:
-        print(f"[DB] ERR update_strike_pricing_and_sl() failed: {e}")
-        return False
-
-
-def update_strike_reentry(strike_id: int, reentry_enabled: int) -> bool:
-    """Enables or disables auto re-entry for a strike."""
-    try:
-        with _lock:
-            conn = _conn()
-            conn.execute("UPDATE strikes SET reentry_enabled=? WHERE strike_id=?", (int(reentry_enabled), strike_id))
-            conn.commit()
-            conn.close()
-        return True
-    except Exception as e:
-        print(f"[DB] ERR update_strike_reentry() failed: {e}")
-        return False
-
-
-def get_orphan_hedges(block_id: int = None) -> list:
-    """Returns list of open long hedge strikes where the associated short leg has exited/closed."""
-    try:
-        conn = _conn()
-        if block_id:
-            cur = conn.execute("""
-                SELECT h.* FROM strikes h
-                WHERE h.leg_type = 'HEDGE_BUY' AND h.status = 'OPEN' AND h.block_id = ?
-                AND NOT EXISTS (
-                    SELECT 1 FROM strikes s 
-                    WHERE s.hedge_strike_id = h.strike_id AND s.status = 'OPEN' AND s.leg_type = 'SELL'
-                )
-            """, (block_id,))
-        else:
-            cur = conn.execute("""
-                SELECT h.* FROM strikes h
-                WHERE h.leg_type = 'HEDGE_BUY' AND h.status = 'OPEN'
-                AND NOT EXISTS (
-                    SELECT 1 FROM strikes s 
-                    WHERE s.hedge_strike_id = h.strike_id AND s.status = 'OPEN' AND s.leg_type = 'SELL'
-                )
-            """)
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        print(f"[DB] ERR get_orphan_hedges() failed: {e}")
-        return []
-
-
 def try_set_strike_executing(strike_id: int) -> bool:
     """
     Atomically tries to set strike status to 'EXECUTING' if it is 'PENDING'.
@@ -1249,24 +1296,74 @@ def try_set_strike_reentering(strike_id: int) -> bool:
 
 
 
-def update_strike_anchor_price(strike_id: int, anchor_price: float) -> bool:
-    """Updates strike's anchor price"""
+def update_strike_anchor_price(strike_id: int, anchor_price: float, auto_recalc_sl: bool = True) -> bool:
+    """Updates strike's anchor price and optionally recalculates sl_price for SELL legs using sl_pct."""
     if anchor_price <= 0:
         print(f"[DB] ERR: Anchor price must be > 0. Got: {anchor_price}")
         return False
     try:
         with _lock:
             conn = _conn()
-            conn.execute(
-                "UPDATE strikes SET anchor_price=? WHERE strike_id=?",
-                (float(anchor_price), strike_id)
-            )
+            cur = conn.execute("SELECT leg_type, sl_pct, reentry_price FROM strikes WHERE strike_id=?", (strike_id,))
+            row = cur.fetchone()
+            new_sl = None
+            new_reentry = None
+            if row and auto_recalc_sl and row["leg_type"] == "SELL":
+                sl_pct = float(row["sl_pct"] or 25.0)
+                if sl_pct > 0:
+                    new_sl = round(float(anchor_price) * (1.0 + (sl_pct / 100.0)), 2)
+                new_reentry = round(max(0.05, float(anchor_price) - 1.0), 2)
+            
+            if new_sl is not None and new_reentry is not None:
+                conn.execute(
+                    "UPDATE strikes SET anchor_price=?, sl_price=?, reentry_price=? WHERE strike_id=?",
+                    (float(anchor_price), float(new_sl), float(new_reentry), strike_id)
+                )
+            elif new_sl is not None:
+                conn.execute(
+                    "UPDATE strikes SET anchor_price=?, sl_price=? WHERE strike_id=?",
+                    (float(anchor_price), float(new_sl), strike_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE strikes SET anchor_price=? WHERE strike_id=?",
+                    (float(anchor_price), strike_id)
+                )
             conn.commit()
             conn.close()
-        print(f"[DB] OK Strike {strike_id} anchor price updated to ₹{anchor_price:.2f}")
+        sl_msg = f" (SL auto-updated to ₹{new_sl:.2f})" if new_sl is not None else ""
+        print(f"[DB] OK Strike {strike_id} anchor price updated to ₹{anchor_price:.2f}{sl_msg}")
         return True
     except Exception as e:
         print(f"[DB] ERR update_strike_anchor_price() failed: {e}")
+        return False
+
+
+def update_strike_sl(strike_id: int, sl_price: float, sl_pct: float = None) -> bool:
+    """Updates strike's stop-loss price and optionally sl_pct."""
+    if sl_price <= 0:
+        print(f"[DB] ERR: Stop-loss price must be > 0. Got: {sl_price}")
+        return False
+    try:
+        with _lock:
+            conn = _conn()
+            if sl_pct is not None and sl_pct > 0:
+                conn.execute(
+                    "UPDATE strikes SET sl_price=?, sl_pct=? WHERE strike_id=?",
+                    (float(sl_price), float(sl_pct), strike_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE strikes SET sl_price=? WHERE strike_id=?",
+                    (float(sl_price), strike_id)
+                )
+            conn.commit()
+            conn.close()
+        pct_msg = f" ({sl_pct:.1f}%)" if sl_pct is not None else ""
+        print(f"[DB] OK Strike {strike_id} SL price updated to ₹{sl_price:.2f}{pct_msg}")
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_strike_sl() failed: {e}")
         return False
 
 
@@ -1278,16 +1375,53 @@ def update_strike_lots(strike_id: int, lots: int) -> bool:
     try:
         with _lock:
             conn = _conn()
-            conn.execute(
-                "UPDATE strikes SET lots=? WHERE strike_id=?",
-                (int(lots), strike_id)
-            )
+            conn.execute("UPDATE strikes SET lots=? WHERE strike_id=?", (int(lots), strike_id))
             conn.commit()
             conn.close()
         print(f"[DB] OK Strike {strike_id} lots updated to {lots}")
         return True
     except Exception as e:
         print(f"[DB] ERR update_strike_lots() failed: {e}")
+        return False
+
+
+def update_strike_details(
+    strike_id: int,
+    strike_price: Optional[int] = None,
+    anchor_price: Optional[float] = None,
+    sl_price: Optional[float] = None,
+    sl_pct: Optional[float] = None,
+    lots: Optional[int] = None
+) -> bool:
+    """Updates strike's strike_price, anchor_price, sl_price, sl_pct, and lots in one transaction."""
+    try:
+        with _lock:
+            conn = _conn()
+            updates = []
+            params = []
+            if strike_price is not None:
+                updates.append("strike_price=?")
+                params.append(int(strike_price))
+            if anchor_price is not None:
+                updates.append("anchor_price=?")
+                params.append(float(anchor_price))
+            if sl_price is not None:
+                updates.append("sl_price=?")
+                params.append(float(sl_price))
+            if sl_pct is not None:
+                updates.append("sl_pct=?")
+                params.append(float(sl_pct))
+            if lots is not None:
+                updates.append("lots=?")
+                params.append(int(lots))
+            if updates:
+                params.append(strike_id)
+                conn.execute(f"UPDATE strikes SET {', '.join(updates)} WHERE strike_id=?", tuple(params))
+                conn.commit()
+            conn.close()
+        return True
+    except Exception as e:
+        print(f"[DB] ERR update_strike_details() failed: {e}")
         return False
 
 
@@ -1637,23 +1771,21 @@ def check_and_expire_blocks() -> list:
 
     active_blocks = get_all_blocks(status_filter="ACTIVE")
     for block in active_blocks:
-        try:
-            exp_str = str(block["expiry_date"]).strip()
-            exp_date = None
-            for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
-                try:
-                    exp_date = datetime.strptime(exp_str, fmt).date()
-                    break
-                except ValueError:
-                    pass
-            if not exp_date:
-                raise ValueError(f"Unknown format for date string: '{exp_str}'")
+        exp_date = None
+        for fmt in ("%d-%b-%Y", "%Y-%m-%d"):
+            try:
+                exp_date = datetime.strptime(str(block["expiry_date"]).strip(), fmt).date()
+                break
+            except (ValueError, TypeError):
+                pass
+
+        if exp_date is not None:
             if exp_date < today:
                 update_block_status(block["block_id"], "EXPIRED")
                 expired_ids.append(block["block_id"])
                 print(f"[DB] EXPIRY Block {block['block_number']} auto-expired (Expiry: {block['expiry_date']})")
-        except Exception as e:
-            print(f"[DB] WARN  Could not parse expiry for block {block['block_id']}: {e}")
+        else:
+            print(f"[DB] WARN  Could not parse expiry for block {block['block_id']}: {block.get('expiry_date')}")
 
     return expired_ids
 
@@ -1718,14 +1850,10 @@ def init_db() -> None:
         "comm_stop_loss_pct"   : "0.0",
         "comm_carry_forward"   : "NO",
         "comm_last_check_candle_time": "",
-        "auto_entry_mode"      : "MODE_2_3PM",
     }
     for k, v in defaults.items():
         if not get(k):
             set(k, v)
-
-    # Force Mode 2 as current active operational setting
-    set("auto_entry_mode", "MODE_2_3PM")
 
     # ── Upgrade max_strikes_per_block from 5 to 50 if currently set to 5 ────
     if get("max_strikes_per_block") == "5":

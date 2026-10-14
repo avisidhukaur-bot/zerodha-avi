@@ -1,0 +1,33 @@
+📊 *M1 UNIT — 22400 PE TRADE & EXIT REPORT* 📊
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📌 *Trade Entry Details:*
+• *Contract:* NIFTY 27-OCT-2026 22400 PE
+• *Quantity:* 5 Lots (325 Qty)
+• *Entry Time:* 06-Oct-2026, 09:55 AM
+• *Entry Price (Sell):* ₹165.60
+• *Paired Hedge:* 21900 PE (Buy @ ₹72.20)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 *Stop Loss & Exit Details:*
+• *Anchor Price:* ₹175.50
+• *SL Setting:* 25% on Anchor Price
+• *SL Trigger Price:* ₹175.50 × 1.25 = *₹219.38*
+  (Entry ₹165.60 ke comparison me ye 32.47% ka total buffer tha)
+
+• *Exit Time:* 08-Oct-2026, 09:26:44 AM
+• *Actual Executed Exit Price:* *₹223.60*
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❓ *Itni door / ₹223.60 par exit kyu hua?*
+1. Aaj subah market me sudden sharp fall aaya, jis wajah se PE ka premium fast spike hokar ₹219.38 ke SL Trigger ko cross kar gaya.
+2. Trigger hit hote hi system ne exit order place kiya. Subah ki fast volatility aur bid-ask slippage ki wajah se order ₹223.60 par execute hua.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛡️ *Current Hedge Status:*
+• Main Sell Leg (22400 PE) exit ho chuki hai.
+• Lekin iski *21900 PE Hedge ko system ne band nahi kiya hai*, wo *Orphan Hedge* ban kar active hai aur market fall me usne profit bana kar overall loss ko cover/protect kiya hai.
+━━━━━━━━━━━━━━━━━━━━━━━━━━

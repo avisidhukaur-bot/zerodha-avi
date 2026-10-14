@@ -32,14 +32,33 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 import db
 import config as cfg
-from kite_executor import kite_executor
 import block_manager as bm
 import pnl_engine as pe
 import telegram_bot as tg
 import equity_200dma_engine as eq_engine
-
+import os_engine
+import weekly_st_engine as wst_engine
 
 IST = pytz.timezone("Asia/Kolkata")
+
+def parse_any_expiry_date(d_str: str) -> date:
+    """Safely parses any expiry date string (%d-%b-%Y or %Y-%m-%d) into a date object."""
+    if not d_str:
+        return date.today()
+    s = str(d_str).strip()
+    for fmt in ("%d-%b-%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            pass
+    return date.today()
+
+def normalize_expiry_display(d_str: str) -> str:
+    """Normalizes any date string (%Y-%m-%d or %d-%b-%Y) to the standard display format DD-Mon-YYYY."""
+    if not d_str:
+        return ""
+    d = parse_any_expiry_date(d_str)
+    return d.strftime("%d-%b-%Y")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -52,7 +71,7 @@ st.set_page_config(
     menu_items       = {
         "Get Help"    : None,
         "Report a bug": None,
-        "About"       : "Zerodha OptionSelling Engine v1.01 | Port 9007 | NIFTY Only",
+        "About"       : "Zerodha OptionSelling Engine V5.0 Old & Gold | Port 9007 | NIFTY Only",
     }
 )
 
@@ -394,22 +413,6 @@ def render_sidebar():
         )
         if algo_toggle != algo_on:
             db.set("algo_running", "ON" if algo_toggle else "OFF")
-            st.rerun()
-
-        # ── Auto Execution Mode: Mode 2 (3:00 PM Auto) vs Mode 1 (Real-Time Intraday) ──
-        curr_auto_mode = db.get("auto_entry_mode", "MODE_2_3PM").upper()
-        mode_idx = 0 if curr_auto_mode == "MODE_2_3PM" else 1
-        sel_mode = st.radio(
-            "Auto Execution Timing",
-            options=["Mode 2: 3:00 PM Auto Mode", "Mode 1: Real-Time Intraday"],
-            index=mode_idx,
-            key="sel_auto_entry_mode",
-            help="Mode 2: Background auto-entry triggers at 15:00 IST. Mode 1: Auto-entry triggers immediately when decaying. (Manual trade/exit available anytime in both modes)."
-        )
-        new_mode_val = "MODE_2_3PM" if "Mode 2" in sel_mode else "MODE_1_INTRADAY"
-        if new_mode_val != curr_auto_mode:
-            db.set("auto_entry_mode", new_mode_val)
-            _flash(f"Switched to {sel_mode}", "success")
             st.rerun()
 
         alerts_on = db.get("NOTIFICATIONS_ENABLED", "YES") == "YES"
@@ -756,26 +759,6 @@ def render_sidebar():
         # --- Test buttons ---
         st.markdown("### TOOLS")
 
-        with st.expander("📘 Re-Entry & SL Rules Guide", expanded=False):
-            st.markdown("""
-            **🎯 Automated Re-Entry Process:**
-            1. **Step 1: 5-Min Cooldown (300s):** SL hit hone par 5 minute tak engine freeze rehta hai taaki spike me dobara loss na ho.
-            2. **Step 2: Price Threshold Check:** Re-entry tabhi scan hoti hai jab `LTP <= (Anchor - ₹1 Buffer)`.
-            3. **Step 3: 5-Min Continuous Hold (300s):** Price ko lagatar 5 minute (300 seconds) tak threshold ke neeche sustain karna zaroori hai.
-            
-            **📊 Case Study: Strike 24300 CE (09-Sep-2026):**
-            - **10:24 AM:** SL Exit @ ₹40.65 (**+₹6,064.50 profit booked**).
-            - **10:24 — 10:29 AM:** 5-min Cooldown active.
-            - **10:29 — 10:36 AM:** Price ₹38.00 threshold ke neeche settle hone ka wait.
-            - **10:36 — 10:41 AM:** 5-min Continuous Confirmation Hold complete.
-            - **10:41 AM:** Fresh SELL Re-entry placed @ **₹36.50** (New SL: **₹42.00** active).
-            
-            **💡 Benefits:**
-            - Double SL se 100% bachat (Anti-Whipsaw).
-            - Better execution price (₹36.50 vs ₹39.00 Anchor).
-            - Realized profits locked and safe!
-            """)
-
         if st.button("📊 Refresh P&L", use_container_width=True, key="btn_refresh"):
             st.session_state["portfolio_pnl"] = _get_portfolio(sim=st.session_state.get("sim_pnl", False))
             st.session_state["last_refresh"]  = time.time()
@@ -812,7 +795,7 @@ def render_sidebar():
         st.divider()
         st.markdown(
             '<div style="text-align:center;font-size:0.65rem;color:#374151;">'
-            'v1.01 BASE MODEL | NIFTY Only<br/>VPS 46.224.133.16:9007'
+            'V6.0 ASYMMETRIC | NIFTY Only<br/>VPS 46.224.133.16:9007'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -826,20 +809,28 @@ def render_header(portfolio: dict):
     total   = portfolio.get("total_pnl", 0.0)
     n_blocks = portfolio.get("active_blocks", 0)
     n_open   = portfolio.get("total_open_strikes", 0)
+    try:
+        import regime_engine as _re_head
+        live_spot = _re_head.get_current_nifty_spot()
+    except Exception:
+        live_spot = 0.0
 
     mode_pill = '<span class="status-pill pill-live">LIVE</span>'
     algo_pill = '<span class="status-pill pill-on">ALGO ON</span>' if algo else '<span class="status-pill pill-off">ALGO OFF</span>'
+    v6_pill   = '<span style="background:linear-gradient(135deg, #0284c7 0%, #0369a1 100%);color:#ffffff;padding:4px 10px;border-radius:20px;font-weight:700;font-size:0.75rem;letter-spacing:0.5px;border:1px solid #38bdf8;">⚡ V6.0 ASYMMETRIC ACTIVE</span>'
 
     pnl_color = "#22c55e" if total >= 0 else "#ef4444"
     pnl_sign  = "+" if total >= 0 else "-"
+    spot_str  = f"₹{live_spot:,.2f}" if live_spot > 0 else "--"
 
     st.markdown(f"""
     <div class="zerodha-header">
         <div>
-            <div class="zerodha-title">📈 Zerodha OptionSelling Engine</div>
+            <div class="zerodha-title">🌐 ZERODHA OPTIONSELLING ENGINE <span style="font-size:0.8rem; color:#38bdf8; font-weight:700; background:rgba(56,189,248,0.1); padding:2px 8px; border-radius:12px; border:1px solid #0284c7;">V7.5 OS ENGINE</span></div>
             <div class="zerodha-subtitle">
                 NIFTY Options SELL | Port 9007 | VPS 46.224.133.16 &nbsp;
-                {mode_pill} &nbsp; {algo_pill}
+                {mode_pill} &nbsp; {algo_pill} &nbsp; {v6_pill} &nbsp;|&nbsp;
+                <span style="color:#ffe0b2; font-weight:700;">🎯 NIFTY 50 LIVE SPOT: <span style="color:#38bdf8; font-weight:800; font-family:'JetBrains Mono',monospace;">{spot_str}</span></span>
             </div>
         </div>
         <div style="text-align:right;">
@@ -911,16 +902,15 @@ def get_sorted_nifty_expiries():
         # Zerodha option master contains name == "NIFTY" and exchange == "NFO"
         filtered = df[(df["name"].str.upper() == "NIFTY") & (df["exchange"].str.upper() == "NFO")]
         for e in filtered["expiry"].dropna().unique():
-            expiries.add(e)
+            expiries.add(str(e).strip())
     sorted_dates = []
     for e in expiries:
         try:
-            # Zerodha date format is YYYY-MM-DD
-            dt = datetime.strptime(str(e).strip(), "%Y-%m-%d").date()
+            dt = parse_any_expiry_date(e)
             sorted_dates.append(dt)
-        except ValueError:
+        except Exception:
             pass
-    sorted_dates.sort()
+    sorted_dates = sorted(list(set(sorted_dates)))
     res = [d.strftime("%d-%b-%Y") for d in sorted_dates if d >= date.today()]
     if not res:
         res = [date.today().strftime("%d-%b-%Y")]
@@ -999,15 +989,15 @@ def render_add_strike_form(block_id: int):
     else:
         st.warning("⚠️ Option symbol not found in Security Master.")
 
-    col_ap1, col_ap2, col_ap3 = st.columns([1.5, 1.5, 1.2])
+    col_ap1, col_ap2 = st.columns([1.5, 1.2])
     with col_ap1:
-        use_live_anchor = st.checkbox("Use Live LTP as Anchor", value=True, key=f"use_live_ap_{block_id}")
+        use_live_anchor = st.checkbox("Use Live LTP as Anchor Price", value=True, key=f"use_live_ap_{block_id}")
         if use_live_anchor:
-            anchor_price = sell_ltp if sell_ltp > 0 else 10.0  # safe default if LTP is 0
-            st.markdown(f"**⚓ Anchor Price**: ₹{anchor_price:.2f}")
+            anchor_price = sell_ltp if sell_ltp > 0 else 10.0  # safe default if LTP is 0 (closed market)
+            st.markdown(f"**Anchor Price**: ₹{anchor_price:.2f}")
         else:
             anchor_price = st.number_input(
-                "Manual Anchor Price (₹)",
+                "Manual Anchor Price (Rs)",
                 min_value = 0.05,
                 max_value = 5000.00,
                 value     = sell_ltp if sell_ltp > 0 else 100.00,
@@ -1015,42 +1005,24 @@ def render_add_strike_form(block_id: int):
                 format    = "%.2f",
                 key       = f"manual_ap_{block_id}"
             )
-    with col_ap2:
-        default_sl_p = float(anchor_price) * 1.25 if float(anchor_price) > 0 else 125.0
-        custom_sl_price = st.number_input(
-            "🛑 Stop Loss Price (₹)",
-            min_value = 0.05,
-            max_value = 10000.00,
-            value     = float(default_sl_p),
-            step      = 0.50,
-            format    = "%.2f",
-            key       = f"direct_sl_price_{block_id}",
-            help      = "Exact stop loss exit price in rupees (e.g. 61.00, 75.00)"
-        )
-    with col_ap3:
-        sl_choice = st.selectbox("SL % Presets", options=["25% (Standard)", "10%", "20%", "30%", "40%", "Custom"], index=0, key=f"sl_choice_{block_id}")
-        sl_pct = 25.0
-        if sl_choice == "10%": sl_pct = 10.0
-        elif sl_choice == "20%": sl_pct = 20.0
-        elif sl_choice == "25% (Standard)": sl_pct = 25.0
-        elif sl_choice == "30%": sl_pct = 30.0
-        elif sl_choice == "40%": sl_pct = 40.0
-        elif sl_choice == "Custom":
-            sl_pct = st.number_input("Custom SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key=f"custom_sl_{block_id}")
-        
-        sl_calc_price = float(custom_sl_price)
-        if float(anchor_price) > 0 and sl_calc_price > float(anchor_price):
-            sl_pct_display = ((sl_calc_price - float(anchor_price)) / float(anchor_price)) * 100.0
-        else:
-            sl_pct_display = float(sl_pct)
 
-    st.markdown(
-        f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:6px 12px;margin:4px 0 8px 0;font-size:0.82rem;">'
-        f'🛑 <b>Configured SL Trigger:</b> <span style="color:#b91c1c;font-weight:800;font-size:0.95rem;">₹{sl_calc_price:,.2f}</span> '
-        f'<span style="color:#64748b;">(+{sl_pct_display:.1f}% on Anchor ₹{float(anchor_price):,.2f})</span>'
-        f'</div>',
-        unsafe_allow_html=True
-    )
+    with col_ap2:
+        add_sl_choice = st.selectbox(
+            "Stop Loss %",
+            ["25% (Standard Default)", "20% SL", "10% (Tight SL)", "Custom %"],
+            index=0,
+            key=f"add_sl_choice_{block_id}"
+        )
+        if add_sl_choice.startswith("25%"):
+            add_sl_pct = 25.0
+        elif add_sl_choice.startswith("20%"):
+            add_sl_pct = 20.0
+        elif add_sl_choice.startswith("10%"):
+            add_sl_pct = 10.0
+        else:
+            add_sl_pct = st.number_input("Custom SL %", min_value=1.0, max_value=100.0, value=25.0, step=1.0, key=f"add_custom_sl_{block_id}")
+        add_sl_price = round(anchor_price * (1.0 + (add_sl_pct / 100.0)), 2)
+        st.caption(f"🎯 SL Trigger: **₹{add_sl_price:.2f}** (+{add_sl_pct:.0f}%)")
 
     st.markdown("---")
 
@@ -1157,7 +1129,14 @@ def render_add_strike_form(block_id: int):
                     default_idx = expiries_list.index(block_exp)
                 elif expiries_list:
                     expiries_list.append(block_exp)
-                    expiries_list = sorted(list(set(expiries_list)), key=lambda x: datetime.strptime(x, "%d-%b-%Y"))
+                    def _sort_exp(x):
+                        for f in ("%d-%b-%Y", "%Y-%m-%d"):
+                            try:
+                                return datetime.strptime(str(x).strip(), f)
+                            except Exception:
+                                pass
+                        return datetime.min
+                    expiries_list = sorted(list(set(expiries_list)), key=_sort_exp)
                     default_idx = expiries_list.index(block_exp)
                     
                 st.selectbox(
@@ -1218,8 +1197,8 @@ def render_add_strike_form(block_id: int):
                 leg_type     = "SELL",
                 anchor_price = float(anchor_price),
                 lots         = int(lots),
-                sl_pct       = float(sl_pct_display),
-                sl_price     = float(sl_calc_price)
+                sl_price     = float(add_sl_price),
+                sl_pct       = float(add_sl_pct)
             )
             
             if not sell_res["ok"]:
@@ -1296,8 +1275,8 @@ def render_add_strike_form(block_id: int):
                 leg_type     = "SELL",
                 anchor_price = float(anchor_price),
                 lots         = int(lots),
-                sl_pct       = float(sl_pct),
-                sl_price     = float(sl_calc_price)
+                sl_price     = float(add_sl_price),
+                sl_pct       = float(add_sl_pct)
             )
             
             if not sell_res["ok"]:
@@ -1362,7 +1341,7 @@ def render_add_strike_form(block_id: int):
 # ─────────────────────────────────────────────────────────────────────────────
 # SUB-BLOCK RENDERER (Inside Unit Pod)
 # ─────────────────────────────────────────────────────────────────────────────
-def render_sub_block(block_pnl: dict, unit_name: str):
+def render_sub_block(block_pnl: dict, unit_name: str, key_suffix: str = ""):
     """
     Renders an individual block (e.g. Block 1 CALL or Block 2 PUT) inside its parent Unit Pod.
     Features:
@@ -1376,6 +1355,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
     import regime_engine as re_eng
     import pnl_engine as pe
 
+    ks         = f"_{key_suffix}" if key_suffix else ""
     b          = block_pnl["block"]
     block_id   = b["block_id"]
     block_num  = b["block_number"]
@@ -1438,7 +1418,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
 
     col_t1, col_t2 = st.columns([4, 1.2])
     with col_t2:
-        is_active = st.toggle("Enable Engine", value=(is_enabled == 1), key=f"toggle_block_enable_{block_id}")
+        is_active = st.toggle("Enable Engine", value=(is_enabled == 1), key=f"toggle_block_enable_{key_suffix}_{block_id}")
         if is_active != (is_enabled == 1):
             bm.toggle_block_enabled(block_id, is_active)
             _flash(f"Block {block_num} " + ("ENABLED" if is_active else "PAUSED"), "success" if is_active else "info")
@@ -1486,35 +1466,25 @@ def render_sub_block(block_pnl: dict, unit_name: str):
                 reg_status = "⚪ ALLOWED"
 
             sl_p = float(s.get("sl_price") or 0.0)
-            sl_pct_val = float(s.get("sl_pct") or 25.0)
-            if s["leg_type"] == "SELL":
-                if sl_p > 0:
-                    pct_fmt = f"{sl_pct_val:.1f}" if abs(sl_pct_val - round(sl_pct_val)) > 0.05 else f"{int(round(sl_pct_val))}"
-                    sl_str = f"₹{sl_p:.2f} (+{pct_fmt}%)"
-                elif s["anchor_price"] > 0:
-                    pct_fmt = f"{sl_pct_val:.1f}" if abs(sl_pct_val - round(sl_pct_val)) > 0.05 else f"{int(round(sl_pct_val))}"
-                    sl_str = f"₹{s['anchor_price'] * (1.0 + sl_pct_val / 100.0):.2f} (+{pct_fmt}%)"
-                else:
-                    sl_str = f"+{sl_pct_val:.0f}%"
-            else:
-                sl_str = "🛡️ HEDGE"
-
-            trade_st = str(s.get("trade_state") or s.get("status") or "OPEN").upper()
+            sl_pct = float(s.get("sl_pct") or 25.0)
+            sl_str = f"₹{sl_p:.2f} (+{sl_pct:.0f}%)" if (s["leg_type"] == "SELL" and sl_p > 0) else "--"
+            trade_st = s.get("trade_state") or s.get("status") or "PENDING"
 
             row = {
-                "Strike"     : s["strike_price"],
-                "Type"       : s["option_type"],
-                "Leg"        : s["leg_type"],
-                "Regime"     : reg_status,
-                "Anchor"     : anchor_str,
-                "LTP"        : ltp_str,
-                "SL Trigger" : sl_str,
-                "Lots"       : s["lots"],
-                "Qty"        : s.get("qty", s["lots"] * int(db.get("lot_size","65"))),
-                "P&L"        : pnl_str,
-                "P&L%"       : pct_str,
-                "Decay%"     : decay_str,
-                "State"      : trade_st,
+                "Strike" : s["strike_price"],
+                "Type"   : s["option_type"],
+                "Leg"    : s["leg_type"],
+                "State"  : trade_st,
+                "SL Trigger": sl_str,
+                "Regime" : reg_status,
+                "Anchor" : anchor_str,
+                "LTP"    : ltp_str,
+                "Lots"   : s["lots"],
+                "Qty"    : s.get("qty", s["lots"] * int(db.get("lot_size","65"))),
+                "P&L"    : pnl_str,
+                "P&L%"   : pct_str,
+                "Decay%" : decay_str,
+                "Status" : s["status"],
             }
 
             if s["option_type"] == "CE":
@@ -1524,6 +1494,8 @@ def render_sub_block(block_pnl: dict, unit_name: str):
 
         col_cfg = {
             "Strike": st.column_config.NumberColumn("Strike", format="%d"),
+            "State" : st.column_config.TextColumn("V5 State"),
+            "SL Trigger": st.column_config.TextColumn("SL Trigger"),
             "Regime": st.column_config.TextColumn("Regime Status"),
             "P&L"  : st.column_config.TextColumn("P&L (Rs)"),
             "P&L%" : st.column_config.TextColumn("P&L %"),
@@ -1574,7 +1546,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
                     )
                 with col_oh2:
                     btn_text = f"💰 Lock Profit ({pnl_prefix}₹{pnl_val:,.2f})" if pnl_val > 0 else f"✖ Close Hedge"
-                    if st.button(btn_text, key=f"close_orphaned_{h['strike_id']}", use_container_width=True, type="primary" if pnl_val > 0 else "secondary"):
+                    if st.button(btn_text, key=f"close_orphaned_{h['strike_id']}{ks}", use_container_width=True, type="primary" if pnl_val > 0 else "secondary"):
                         res = bm.close_hedge_strike_now(h["strike_id"])
                         if res["ok"]:
                             _flash(res["message"], "success")
@@ -1586,150 +1558,148 @@ def render_sub_block(block_pnl: dict, unit_name: str):
         st.markdown('<p style="color:#64748b;font-size:0.85rem;padding:6px 0;">No strikes in this block.</p>', unsafe_allow_html=True)
 
     # ── Inline Add Strike Form Container (Right inside Block) ──
-    if st.session_state.get("add_strike_block") == block_id:
+    if st.session_state.get("add_strike_block") == block_id and key_suffix != "tab3":
         st.markdown("<div style='background:#f8fafc;border:2px solid #3b82f6;border-radius:10px;padding:16px;margin:12px 0;'>", unsafe_allow_html=True)
         render_add_strike_form(block_id)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── Inline Strike Anchor & Stop-Loss Price Editor (Right inside Block) ──
+    # ── Inline Strike Anchor, Stop Loss & Lot Size Editor (Right inside Block) ──
     all_b_strikes = db.get_strikes_by_block(block_id)
     if all_b_strikes:
-        with st.expander(f"⚙️ Quick Edit Strikes: Anchor Price & Stop Loss (Block {block_num})", expanded=False):
+        with st.expander(f"⚙️ Quick Strike Settings: Anchor Price, Stop Loss & Lots (Block {block_num})", expanded=False):
             strike_map = {
-                f"{s['strike_price']} {s['option_type']} {s['leg_type']} (#{s['strike_id']}) — [{s['status']}] | Anchor: ₹{s['anchor_price']:.2f} | SL: ₹{float(s.get('sl_price') or (s['anchor_price']*1.25)):.2f}": s["strike_id"]
+                f"{s['strike_price']} {s['option_type']} {s['leg_type']} (#{s['strike_id']}) — [{s['status']}] | Anchor: ₹{s['anchor_price']:.2f} | SL: ₹{float(s.get('sl_price') or 0):.2f} | Lots: {s['lots']}": s["strike_id"]
                 for s in all_b_strikes
             }
-            sel_s_label = st.selectbox("Select Strike to Configure", list(strike_map.keys()), key=f"inline_sel_strike_{block_id}")
+            sel_s_label = st.selectbox("Select Strike to Edit", list(strike_map.keys()), key=f"inline_sel_strike_{key_suffix}_{block_id}")
             sel_sid = strike_map[sel_s_label]
             target_s = db.get_strike(sel_sid)
 
             if target_s:
-                is_sell_leg = target_s.get("leg_type") == "SELL"
-                cur_anc = float(target_s.get("anchor_price") or 0.0)
-                cur_sl_p = float(target_s.get("sl_price") or 0.0)
-                cur_sl_pct = float(target_s.get("sl_pct") or 25.0)
-                if cur_sl_p <= 0 and cur_anc > 0:
-                    cur_sl_p = cur_anc * (1.0 + cur_sl_pct / 100.0)
-                
-                # Header card for the selected strike
-                st.markdown(
-                    f'<div style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;margin:8px 0 12px 0;">'
-                    f'<b>Selected Strike:</b> <span style="color:#0f172a;font-weight:800;">{target_s["strike_price"]} {target_s["option_type"]} {target_s["leg_type"]} (#{target_s["strike_id"]})</span> '
-                    f'| Status: <span style="font-weight:700;">{target_s["status"]}</span> '
-                    f'| Current Anchor: <b>₹{cur_anc:.2f}</b> '
-                    f'| Current SL Trigger: <b style="color:#b91c1c;">₹{cur_sl_p:.2f}</b> (+{cur_sl_pct:.1f}%)'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
+                t_leg = target_s.get("leg_type", "SELL")
+                t_anc = float(target_s.get("anchor_price") or 0.0)
+                t_sl = float(target_s.get("sl_price") or 0.0)
+                t_sl_pct = float(target_s.get("sl_pct") or 25.0)
+                if t_sl <= 0 and t_anc > 0 and t_leg == "SELL":
+                    t_sl = round(t_anc * (1.0 + (t_sl_pct / 100.0)), 2)
 
-                if is_sell_leg:
-                    c_e1, c_e2, c_e3, c_e4 = st.columns([1.5, 1.5, 1.2, 1.2])
-                    with c_e1:
-                        new_anc = st.number_input(
-                            "Anchor Price (₹)",
-                            min_value=0.05,
-                            max_value=10000.00,
-                            value=float(cur_anc),
-                            step=0.50,
-                            format="%.2f",
-                            key=f"inline_anc_val_{sel_sid}",
-                            help="Anchor price for entry calculation"
+                c_e1, c_e2, c_e3, c_e4 = st.columns([1.5, 1.6, 1.3, 1.0])
+                with c_e1:
+                    st.markdown(f"**⚓ Strike Anchor Price** (Current: ₹{t_anc:.2f})")
+                    new_anc = st.number_input(
+                        "New Anchor Price (₹)",
+                        min_value=0.05,
+                        value=float(t_anc),
+                        step=0.05,
+                        format="%.2f",
+                        key=f"inline_anc_val_{key_suffix}_{sel_sid}"
+                    )
+                    auto_recalc_sl = True
+                    if t_leg == "SELL":
+                        exp_sl = round(new_anc * (1.0 + (t_sl_pct / 100.0)), 2)
+                        auto_recalc_sl = st.checkbox(
+                            f"Auto-update SL to ₹{exp_sl:.2f} (+{t_sl_pct:.0f}%)",
+                            value=True,
+                            key=f"inline_auto_sl_{key_suffix}_{sel_sid}",
+                            help="Automatically recalculates stop-loss trigger price when Anchor is updated."
                         )
-                    with c_e2:
-                        new_sl_p = st.number_input(
-                            "Stop Loss Price (₹)",
-                            min_value=0.05,
-                            max_value=20000.00,
-                            value=float(cur_sl_p),
-                            step=0.50,
-                            format="%.2f",
-                            key=f"inline_slp_val_{sel_sid}",
-                            help="Exact stop loss exit price in rupees"
-                        )
-                    with c_e3:
-                        new_sl_pct = st.number_input(
-                            "SL %",
-                            min_value=0.1,
-                            max_value=200.0,
-                            value=float(cur_sl_pct),
-                            step=1.0,
-                            format="%.1f",
-                            key=f"inline_slpct_val_{sel_sid}"
-                        )
-                    with c_e4:
-                        new_lots = st.number_input(
-                            "Lots",
-                            min_value=1,
-                            max_value=100,
-                            value=int(target_s["lots"]),
-                            step=1,
-                            key=f"inline_lots_val_{sel_sid}"
-                        )
-                else:
-                    c_e1, c_e2 = st.columns([2, 2])
-                    with c_e1:
-                        new_anc = st.number_input(
-                            "Hedge Anchor Price (₹)",
-                            min_value=0.05,
-                            max_value=10000.00,
-                            value=float(cur_anc),
-                            step=0.50,
-                            format="%.2f",
-                            key=f"inline_anc_val_{sel_sid}"
-                        )
-                        new_sl_p = 0.0
-                        new_sl_pct = 0.0
-                    with c_e2:
-                        new_lots = st.number_input(
-                            "Lots",
-                            min_value=1,
-                            max_value=100,
-                            value=int(target_s["lots"]),
-                            step=1,
-                            key=f"inline_lots_val_{sel_sid}"
-                        )
-
-                sync_zerodha = False
-                if target_s["status"] == "OPEN" and is_sell_leg:
-                    sync_zerodha = st.checkbox("Live Sync Lot Delta on Zerodha Broker", value=False, key=f"inline_sync_{sel_sid}", help="Places delta market order on Zerodha if lot count is changed")
-
-                col_act1, col_act2 = st.columns([3, 1])
-                with col_act1:
-                    if st.button("💾 Save Price, Stop-Loss & Lots Settings", key=f"btn_save_all_inline_{sel_sid}", use_container_width=True, type="primary"):
-                        res_update = bm.update_strike_price_and_sl(
-                            strike_id=sel_sid,
-                            new_anchor=float(new_anc),
-                            new_sl_price=float(new_sl_p) if is_sell_leg else None,
-                            new_sl_pct=float(new_sl_pct) if is_sell_leg else None,
-                            new_lots=int(new_lots)
-                        )
-                        if sync_zerodha and int(new_lots) != int(target_s["lots"]):
-                            bm.change_strike_lots(sel_sid, int(new_lots), sync_live=True)
-                        if res_update["ok"]:
-                            _flash(res_update["message"], "success")
+                    if st.button("💾 Update Anchor", key=f"btn_save_inline_anc_{key_suffix}_{sel_sid}", use_container_width=True, type="primary"):
+                        res_anc = bm.update_strike_anchor_price(sel_sid, new_anc, auto_recalc_sl=auto_recalc_sl)
+                        if res_anc["ok"]:
+                            _flash(res_anc["message"], "success")
                         else:
-                            _flash(res_update["message"], "error")
+                            _flash(res_anc["message"], "error")
                         st.rerun()
 
-                with col_act2:
+                with c_e2:
+                    if t_leg == "SELL":
+                        pct_lbl = f"(+{t_sl_pct:.0f}%)" if t_sl_pct > 0 else ""
+                        st.markdown(f"**🎯 Stop Loss Price** (Current: ₹{t_sl:.2f} {pct_lbl})")
+                        new_sl = st.number_input(
+                            "New Stop Loss (₹)",
+                            min_value=0.05,
+                            value=float(t_sl),
+                            step=0.05,
+                            format="%.2f",
+                            key=f"inline_sl_val_{key_suffix}_{sel_sid}"
+                        )
+                        if t_anc > 0:
+                            calc_diff = new_sl - t_anc
+                            calc_p = (calc_diff / t_anc) * 100.0
+                            st.caption(f"Distance: **+{calc_p:.1f}%** from Anchor ₹{t_anc:.2f}")
+
+                        # Quick percentage preset buttons
+                        p_c1, p_c2, p_c3 = st.columns(3)
+                        with p_c1:
+                            if st.button("20% SL", key=f"btn_p20_{key_suffix}_{sel_sid}", use_container_width=True, help=f"Set SL to ₹{t_anc * 1.20:.2f} (+20%)"):
+                                r_sl = bm.update_strike_sl(sel_sid, round(t_anc * 1.20, 2), 20.0)
+                                if r_sl["ok"]: _flash(r_sl["message"], "success")
+                                st.rerun()
+                        with p_c2:
+                            if st.button("25% SL", key=f"btn_p25_{key_suffix}_{sel_sid}", use_container_width=True, help=f"Set SL to ₹{t_anc * 1.25:.2f} (+25%)"):
+                                r_sl = bm.update_strike_sl(sel_sid, round(t_anc * 1.25, 2), 25.0)
+                                if r_sl["ok"]: _flash(r_sl["message"], "success")
+                                st.rerun()
+                        with p_c3:
+                            if st.button("10% SL", key=f"btn_p10_{key_suffix}_{sel_sid}", use_container_width=True, help=f"Set SL to ₹{t_anc * 1.10:.2f} (+10%)"):
+                                r_sl = bm.update_strike_sl(sel_sid, round(t_anc * 1.10, 2), 10.0)
+                                if r_sl["ok"]: _flash(r_sl["message"], "success")
+                                st.rerun()
+
+                        if st.button("💾 Update Stop Loss", key=f"btn_save_inline_sl_{key_suffix}_{sel_sid}", use_container_width=True, type="primary"):
+                            res_sl = bm.update_strike_sl(sel_sid, new_sl)
+                            if res_sl["ok"]:
+                                _flash(res_sl["message"], "success")
+                            else:
+                                _flash(res_sl["message"], "error")
+                            st.rerun()
+                    else:
+                        st.markdown("**🛡️ Protective Hedge**")
+                        st.info("Hedges do not use Stop Loss triggers. Preserved open as disaster protection.")
+
+                with c_e3:
+                    st.markdown(f"**🔢 Strike Lots** (Current: {target_s['lots']} lots)")
+                    new_lots = st.number_input(
+                        "New Lot Count",
+                        min_value=1,
+                        max_value=100,
+                        value=int(target_s["lots"]),
+                        step=1,
+                        key=f"inline_lots_val_{key_suffix}_{sel_sid}"
+                    )
+                    sync_zerodha = False
+                    if target_s["status"] == "OPEN":
+                        sync_zerodha = st.checkbox("Live Sync Order on Zerodha", value=False, key=f"inline_sync_{key_suffix}_{sel_sid}", help="Automatically places delta order on Zerodha broker")
+                    if st.button("💾 Update Lots", key=f"btn_save_inline_lots_{key_suffix}_{sel_sid}", use_container_width=True, type="primary"):
+                        res_lots = bm.change_strike_lots(sel_sid, int(new_lots), sync_live=sync_zerodha)
+                        if res_lots["ok"]:
+                            _flash(res_lots["message"], "success")
+                        else:
+                            _flash(res_lots["message"], "error")
+                        st.rerun()
+
+                with c_e4:
+                    st.markdown("**🗑 Actions**")
                     if target_s["status"] == "PENDING":
-                        if st.button("🗑 Remove Strike", key=f"btn_del_strike_{sel_sid}", use_container_width=True):
+                        if st.button("🗑 Remove Strike", key=f"btn_del_strike_{key_suffix}_{sel_sid}", use_container_width=True):
                             res_del = bm.remove_strike(sel_sid)
                             if res_del["ok"]:
                                 _flash(res_del["message"], "success")
                             else:
                                 _flash(res_del["message"], "error")
                             st.rerun()
+                    elif target_s["status"] == "OPEN":
+                        st.caption("Live position. Use 'Close Strike' button below.")
 
             # Batch lot scaling for this block
             st.markdown("<hr style='margin:12px 0 8px 0;border:0;border-top:1px dashed #cbd5e1;'/>", unsafe_allow_html=True)
             col_b1, col_b2 = st.columns([2, 3])
             with col_b1:
                 default_batch = int(target_s["lots"]) if target_s else 1
-                batch_lots = st.number_input(f"Batch Scale All Strikes in Block {block_num}", min_value=1, max_value=100, value=default_batch, key=f"batch_lots_{block_id}")
+                batch_lots = st.number_input(f"Batch Scale All Strikes in Block {block_num}", min_value=1, max_value=100, value=default_batch, key=f"batch_lots_{key_suffix}_{block_id}")
             with col_b2:
                 st.markdown("<div style='height:28px;'></div>", unsafe_allow_html=True)
-                if st.button(f"⚡ Set ALL Strikes in Block {block_num} to {batch_lots} Lots", key=f"btn_batch_scale_{block_id}", use_container_width=True):
+                if st.button(f"⚡ Set ALL Strikes in Block {block_num} to {batch_lots} Lots", key=f"btn_batch_scale_{key_suffix}_{block_id}", use_container_width=True):
                     res_batch = bm.scale_block_lots(block_id, int(batch_lots), sync_live=False)
                     if res_batch["ok"]:
                         _flash(res_batch["message"], "success")
@@ -1756,7 +1726,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
 
             with rv_col1:
                 default_rv_strike = linked_hedge["strike_price"] if linked_hedge else (sell_s["strike_price"] + 300 if sell_s["option_type"] == "CE" else sell_s["strike_price"] - 300)
-                rv_strike = st.number_input("New Strike", min_value=10000, max_value=50000, value=int(default_rv_strike), step=50, key=f"rv_strike_{sell_sid}")
+                rv_strike = st.number_input("New Strike", min_value=10000, max_value=50000, value=int(default_rv_strike), step=50, key=f"rv_strike_{key_suffix}_{sell_sid}")
 
             with rv_col2:
                 rv_expiries = get_sorted_nifty_expiries()
@@ -1766,12 +1736,12 @@ def render_sub_block(block_pnl: dict, unit_name: str):
                     if e != current_exp:
                         default_rv_exp_idx = i
                         break
-                rv_expiry = st.selectbox("New Expiry", options=rv_expiries, index=default_rv_exp_idx, key=f"rv_expiry_{sell_sid}")
+                rv_expiry = st.selectbox("New Expiry", options=rv_expiries, index=default_rv_exp_idx, key=f"rv_expiry_{key_suffix}_{sell_sid}")
 
             with rv_col3:
-                rv_lots = st.number_input("Lots", min_value=1, max_value=100, value=sell_s.get("lots", 1), key=f"rv_lots_{sell_sid}")
+                rv_lots = st.number_input("Lots", min_value=1, max_value=100, value=sell_s.get("lots", 1), key=f"rv_lots_{key_suffix}_{sell_sid}")
 
-            if st.button("🔄 Execute Rollover", key=f"btn_rollover_{sell_sid}", use_container_width=True, type="primary"):
+            if st.button("🔄 Execute Rollover", key=f"btn_rollover_{key_suffix}_{sell_sid}", use_container_width=True, type="primary"):
                 with st.spinner("Rolling over hedge..."):
                     rv_res = bm.rollover_hedge(
                         sell_strike_id         = sell_sid,
@@ -1788,12 +1758,12 @@ def render_sub_block(block_pnl: dict, unit_name: str):
 
     # Block action buttons
     if status == "ACTIVE":
-        col_a, col_b, col_c, col_d = st.columns([1.5, 1.8, 1.8, 1.2])
+        col_a, col_b, col_c, col_d, col_e = st.columns([1.3, 1.4, 1.8, 1.8, 1.0])
 
         with col_a:
             is_adding = (st.session_state.get("add_strike_block") == block_id)
             add_lbl = "✖ Close Form" if is_adding else "➕ Add Strike"
-            if st.button(add_lbl, key=f"add_strike_{block_id}", use_container_width=True, type="secondary" if is_adding else "primary"):
+            if st.button(add_lbl, key=f"add_strike_{key_suffix}_{block_id}", use_container_width=True, type="secondary" if is_adding else "primary"):
                 st.session_state["add_strike_block"] = None if is_adding else block_id
                 st.rerun()
 
@@ -1802,7 +1772,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
             all_pending = [s for s in block_sum_strikes if s["status"] == "PENDING"]
             all_closed = [s for s in block_sum_strikes if s["status"] == "CLOSED"]
             if all_pending:
-                if st.button(f"▶ Execute Block ({len(all_pending)})", key=f"exec_block_{block_id}", use_container_width=True, type="primary"):
+                if st.button(f"▶ Execute Block ({len(all_pending)})", key=f"exec_block_{key_suffix}_{block_id}", use_container_width=True, type="primary"):
                     r = bm.execute_block(block_id)
                     if r["ok"]:
                         _flash(r["message"], "success")
@@ -1811,7 +1781,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
                         _flash(r["message"], "error")
                     st.rerun()
             elif all_closed:
-                if st.button(f"🔄 Re-Arm Strikes ({len(all_closed)})", key=f"rearm_block_{block_id}", use_container_width=True, help="Resets closed strikes to PENDING"):
+                if st.button(f"🔄 Re-Arm Strikes ({len(all_closed)})", key=f"rearm_block_{key_suffix}_{block_id}", use_container_width=True, help="Resets closed strikes to PENDING"):
                     res = bm.rearm_block_strikes(block_id)
                     if res["ok"]:
                         _flash(res["message"], "success")
@@ -1826,18 +1796,57 @@ def render_sub_block(block_pnl: dict, unit_name: str):
                     f"{s['strike_price']} {s['option_type']} SELL (#{s['strike_id']})": s["strike_id"]
                     for s in open_sells
                 }
-                sel_label = st.selectbox("Close Strike", options=list(strike_options.keys()), key=f"close_sel_{block_id}", label_visibility="collapsed")
-                if st.button(f"✖ Close Strike", key=f"close_btn_{block_id}", use_container_width=True):
-                    sid = strike_options[sel_label]
-                    result = bm.close_strike(sid)
-                    if result["ok"]:
-                        _flash(result["message"], "success")
-                    else:
-                        _flash(result["message"], "error")
-                    st.rerun()
+                sel_label = st.selectbox("Close Strike", options=list(strike_options.keys()), key=f"close_sel_{key_suffix}_{block_id}", label_visibility="collapsed")
+                if st.session_state.get(f"confirm_close_strike_{key_suffix}_{block_id}"):
+                    st.markdown(f'<div style="background:#fee2e2; border:1px solid #ef4444; border-radius:6px; padding:6px; margin:4px 0; text-align:center;"><span style="color:#991b1b; font-size:0.8rem; font-weight:700;">⚠️ Confirm Square-Off on Kite Broker?</span></div>', unsafe_allow_html=True)
+                    cs_yes, cs_no = st.columns(2)
+                    with cs_yes:
+                        if st.button("🔥 YES", key=f"btn_cs_yes_{key_suffix}_{block_id}", type="primary", use_container_width=True):
+                            sid = strike_options[sel_label]
+                            result = bm.close_strike(sid, close_hedge=True)
+                            st.session_state[f"confirm_close_strike_{key_suffix}_{block_id}"] = False
+                            if result["ok"]:
+                                _flash(result["message"], "success")
+                            else:
+                                _flash(result["message"], "error")
+                            st.rerun()
+                    with cs_no:
+                        if st.button("❌ Cancel", key=f"btn_cs_no_{key_suffix}_{block_id}", use_container_width=True):
+                            st.session_state[f"confirm_close_strike_{key_suffix}_{block_id}"] = False
+                            st.rerun()
+                else:
+                    if st.button(f"✖ Close Strike & Hedge", key=f"close_btn_{key_suffix}_{block_id}", use_container_width=True):
+                        st.session_state[f"confirm_close_strike_{key_suffix}_{block_id}"] = True
+                        st.rerun()
 
         with col_d:
-            if st.button(f"📊 Summary", key=f"daily_sum_{block_id}", use_container_width=True):
+            if st.session_state.get(f"confirm_close_blk_{key_suffix}_{block_id}"):
+                st.markdown(f'<div style="background:#fee2e2; border:1px solid #ef4444; border-radius:6px; padding:6px; margin:4px 0; text-align:center;"><span style="color:#991b1b; font-size:0.8rem; font-weight:700;">⚠️ Confirm Square-Off Block #{block_num}?</span></div>', unsafe_allow_html=True)
+                cb_yes, cb_no = st.columns(2)
+                with cb_yes:
+                    if st.button("🔥 YES, Close Block", key=f"btn_cb_yes_{key_suffix}_{block_id}", type="primary", use_container_width=True):
+                        st.session_state[f"confirm_close_blk_{key_suffix}_{block_id}"] = False
+                        b_rec = db.get_block(block_id)
+                        u_name = (b_rec.get("anchor_unit_name") or "").strip().upper() if b_rec else ""
+                        if u_name.startswith("M"):
+                            res_kill = bm.wipe_out_and_reset_m_unit(u_name)
+                        elif u_name.startswith("OS"):
+                            res_kill = os_engine.wipe_out_and_reset_os_unit(u_name)
+                        else:
+                            res_kill = bm.kill_block(block_id)
+                        _flash(res_kill.get("message", f"Block {block_num} closed!"), "success" if res_kill.get("ok") else "error")
+                        st.rerun()
+                with cb_no:
+                    if st.button("❌ Cancel", key=f"btn_cb_no_{key_suffix}_{block_id}", use_container_width=True):
+                        st.session_state[f"confirm_close_blk_{key_suffix}_{block_id}"] = False
+                        st.rerun()
+            else:
+                if st.button(f"💥 Close Entire Block", key=f"btn_close_blk_{key_suffix}_{block_id}", use_container_width=True, type="primary"):
+                    st.session_state[f"confirm_close_blk_{key_suffix}_{block_id}"] = True
+                    st.rerun()
+
+        with col_e:
+            if st.button(f"📊 Summary", key=f"daily_sum_{key_suffix}_{block_id}", use_container_width=True):
                 pnl_data = pe.calc_block_pnl(block_id)
                 tg.alert_block_daily_summary(pnl_data)
                 _flash(f"Block {block_num} summary sent to Telegram!", "success")
@@ -1847,7 +1856,7 @@ def render_sub_block(block_pnl: dict, unit_name: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UNIT POD CONTAINER RENDERER (Brick 4 / V3.0 Autonomous Pod Architecture)
+# UNIT POD CONTAINER RENDERER (V5.0 "Old & Gold" Multi-Unit Architecture)
 # ─────────────────────────────────────────────────────────────────────────────
 def render_unit_pod(unit_name: str, expiry_date: str, block_pnls: list):
     """
@@ -1993,9 +2002,313 @@ def render_unit_pod(unit_name: str, expiry_date: str, block_pnls: list):
 
     # ── Sub-Blocks inside this Unit Pod ──
     for bp in block_pnls:
-        render_sub_block(bp, unit_name)
+        render_sub_block(bp, unit_name, key_suffix="pod")
 
     st.markdown('</div>', unsafe_allow_html=True)  # Close Pod Container
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🏛️ ALL OPEN UNITS COCKPIT ("Ek Hi Jagah Saari Chijen")
+# ─────────────────────────────────────────────────────────────────────────────
+def render_all_units_cockpit(portfolio: dict):
+    """
+    Renders the unified 'All Open Units Cockpit' ("Ek Hi Jagah Saari Chijen").
+    Shows every active independent unit (M1, M2, M3...) side-by-side with:
+    - Master Anchor & Spot distance
+    - Directional Regime (BULLISH / BEARISH)
+    - Active Live Sold Leg + Protective Hedge + Armed Counter Wing
+    - Stop-Loss price & SL %
+    - Re-entry readiness
+    - 3:00 PM Continuation Status
+    - Live Unit M2M P&L
+    - Quick Action buttons (Lock Spot, Re-evaluate, Square-Off)
+    """
+    import regime_engine as re_eng
+    live_spot = re_eng.get_current_nifty_spot()
+    if live_spot <= 0:
+        try:
+            live_spot = float(db.get("last_nifty_spot", "0.0") or 0.0)
+        except Exception:
+            live_spot = 0.0
+
+    block_pnls = portfolio.get("block_pnls", [])
+    active_bps = [
+        bp for bp in block_pnls 
+        if bp.get("block", {}).get("status") == "ACTIVE" 
+        and not (bp.get("block", {}).get("anchor_unit_name") or "").strip().upper().startswith("OS")
+    ]
+
+    if not active_bps:
+        st.markdown("""
+        <div style="background:#f8fafc;border:2px dashed #cbd5e1;border-radius:12px;padding:22px;text-align:center;margin-bottom:18px;">
+            <div style="font-size:1.6rem;">🏛️</div>
+            <div style="font-weight:700;color:#1e293b;font-size:1.05rem;margin-top:6px;">No Active Autonomous Units Deployed</div>
+            <div style="font-size:0.85rem;color:#64748b;margin-top:4px;">
+                Deploy independent units (<b>M1, M2, M3...</b>) in the Single-Window Console below. All open units will appear here in one unified cockpit.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    # Group by Unit Tag
+    from collections import OrderedDict
+    units_map = OrderedDict()
+    for bp in active_bps:
+        b = bp["block"]
+        u_name = (b.get("anchor_unit_name") or f"M{b['block_number']}").strip().upper()
+        if u_name not in units_map:
+            units_map[u_name] = {
+                "unit_name": u_name,
+                "blocks": [],
+                "strike_pnls": [],
+                "total_pnl": 0.0,
+                "expiry_date": b.get("expiry_date", ""),
+                "expiry_type": b.get("expiry_type", "MONTHLY"),
+                "master_anchor": float(b.get("master_anchor_price") or 0.0),
+                "regime_buffer": float(b.get("regime_buffer") or 15.0),
+                "current_regime": (b.get("current_regime") or "NEUTRAL").upper(),
+                "lots": int(b.get("custom_lots") or b.get("recommended_lots") or 1),
+            }
+        units_map[u_name]["blocks"].append(b)
+        units_map[u_name]["strike_pnls"].extend(bp.get("strike_pnls", []))
+        units_map[u_name]["total_pnl"] += bp.get("total_pnl", 0.0)
+
+    combined_pnl = sum(u["total_pnl"] for u in units_map.values())
+    comb_color = "#10b981" if combined_pnl >= 0 else "#ef4444"
+    comb_sign = "+" if combined_pnl >= 0 else ""
+
+    # Master Header Bar
+    master_hdr_html = (
+        f'<div style="background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%);border-left:6px solid #3b82f6;border-radius:12px;padding:16px 20px;margin-bottom:18px;color:#ffffff;box-shadow:0 4px 14px rgba(0,0,0,0.15);">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
+        f'<div>'
+        f'<div style="font-weight:800;font-size:1.15rem;letter-spacing:0.5px;display:flex;align-items:center;gap:8px;">'
+        f'<span>🏛️ ALL OPEN UNITS COCKPIT (M1, M2, M3... AT ONE PLACE)</span>'
+        f'<span style="background:#3b82f6;color:#ffffff;font-size:0.75rem;font-weight:700;padding:2px 10px;border-radius:12px;">{len(units_map)} UNITS ACTIVE</span>'
+        f'</div>'
+        f'<div style="font-size:0.83rem;color:#94a3b8;margin-top:3px;">'
+        f'Independent Master Anchors • Isolated Directional Regimes • Decoupled Stop-Loss • 3:00 PM Continuation'
+        f'</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div style="font-size:0.72rem;color:#94a3b8;font-weight:700;text-transform:uppercase;">Combined Units M2M P&L</div>'
+        f'<div style="font-size:1.45rem;font-weight:900;font-family:\'JetBrains Mono\',monospace;color:{comb_color};">{comb_sign}₹{abs(combined_pnl):,.2f}</div>'
+        f'</div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(master_hdr_html, unsafe_allow_html=True)
+
+    # Render each unit's card
+    for u_name, u_data in units_map.items():
+        u_pnl = u_data["total_pnl"]
+        u_color = "#16a34a" if u_pnl >= 0 else "#dc2626"
+        u_sign = "+" if u_pnl >= 0 else ""
+        u_anc = u_data["master_anchor"]
+        u_buf = u_data["regime_buffer"]
+        u_reg = u_data["current_regime"]
+        exp_str = u_data["expiry_date"]
+        exp_type = u_data["expiry_type"]
+
+        dist_pts = live_spot - u_anc if (live_spot > 0 and u_anc > 0) else 0.0
+        dist_str = f"{dist_pts:+.2f} pts"
+        dist_color = "#15803d" if dist_pts >= 0 else "#b91c1c"
+
+        if u_reg == "BULLISH":
+            reg_badge = '<span style="background:#ecfdf5;border:1px solid #10b981;color:#065f46;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">🟢 BULLISH (PE Active | CE Muted)</span>'
+            p3m_forecast = "<b>PUT SELL</b> continues overnight; CE Wing covered."
+        elif u_reg == "BEARISH":
+            reg_badge = '<span style="background:#fef2f2;border:1px solid #ef4444;color:#991b1b;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">🔴 BEARISH (CE Active | PE Muted)</span>'
+            p3m_forecast = "<b>CALL SELL</b> continues overnight; PE Wing covered."
+        else:
+            reg_badge = '<span style="background:#f8fafc;border:1px solid #cbd5e1;color:#334155;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">⚪ NEUTRAL / UNSET</span>'
+            p3m_forecast = "Both sides neutral; evaluates at 15:00 IST."
+
+        # Separate open vs pending vs closed strikes
+        strikes = u_data["strike_pnls"]
+        open_sells = [s for s in strikes if s.get("status") == "OPEN" and s.get("leg_type") == "SELL"]
+        open_hedges = [s for s in strikes if s.get("status") == "OPEN" and s.get("leg_type") == "HEDGE_BUY"]
+        pending_legs = [s for s in strikes if s.get("status") == "PENDING" or s.get("trade_state") == "PENDING"]
+        sl_hits = [s for s in strikes if s.get("trade_state") in ("SL_HIT", "REENTRY_ELIGIBLE")]
+
+        with st.container():
+            unit_hdr_html = (
+                f'<div style="background:#ffffff;border:2px solid #e2e8f0;border-radius:12px;padding:16px 20px;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,0.04);">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;border-bottom:1px solid #f1f5f9;padding-bottom:10px;margin-bottom:12px;gap:8px;">'
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+                f'<span style="background:#1e293b;color:#ffffff;font-size:1rem;font-weight:800;padding:4px 14px;border-radius:8px;letter-spacing:0.5px;">🎯 UNIT {u_name}</span>'
+                f'<span style="font-size:0.88rem;font-weight:700;color:#334155;">Expiry: {exp_str} ({exp_type.title()})</span>'
+                f'{reg_badge}'
+                f'</div>'
+                f'<div style="text-align:right;">'
+                f'<span style="font-size:0.75rem;color:#64748b;font-weight:700;text-transform:uppercase;">Unit P&L: </span>'
+                f'<span style="font-size:1.3rem;font-weight:900;font-family:\'JetBrains Mono\',monospace;color:{u_color};">{u_sign}₹{abs(u_pnl):,.2f}</span>'
+                f'</div>'
+                f'</div>'
+                f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;font-size:0.85rem;">'
+                f'<div>'
+                f'Anchor: <b>₹{u_anc:,.2f}</b> (±{u_buf:.1f}pts) &nbsp;|&nbsp; '
+                f'Spot: <b>₹{live_spot:,.2f}</b> &nbsp;|&nbsp; '
+                f'Distance: <b style="color:{dist_color};">{dist_str}</b>'
+                f'</div>'
+                f'<div style="color:#475569;font-size:0.82rem;">'
+                f'⏰ 3:00 PM Continuation: {p3m_forecast}'
+                f'</div>'
+                f'</div>'
+                f'</div>'
+            )
+            st.markdown(unit_hdr_html, unsafe_allow_html=True)
+
+            if not strikes:
+                c_emp1, c_emp2 = st.columns([4, 1])
+                with c_emp1:
+                    st.info(f"Unit {u_name} is created @ Anchor ₹{u_anc:,.2f}, but has no active strikes. Configure strikes in the V5 Console below.")
+                with c_emp2:
+                    if st.button(f"🗑️ Clear Unit {u_name}", key=f"btn_del_emp_{u_name}", use_container_width=True):
+                        for b in u_data["blocks"]:
+                            db.force_delete_block(b["block_id"])
+                        _flash(f"Empty Unit {u_name} removed.", "info")
+                        st.rerun()
+            else:
+                # Positions Grid (Active Sells, Hedges, Pending Wings)
+                c_pos1, c_pos2, c_pos3 = st.columns([2.5, 2.5, 2])
+                with c_pos1:
+                    st.markdown("<div style='font-size:0.82rem;font-weight:700;color:#1e40af;margin-bottom:6px;'>🟢 ACTIVE SOLD LEGS</div>", unsafe_allow_html=True)
+                    if open_sells:
+                        for s in open_sells:
+                            pnl_val = s.get("pnl", 0.0)
+                            p_col = "#16a34a" if pnl_val >= 0 else "#dc2626"
+                            p_sgn = "+" if pnl_val >= 0 else ""
+                            sl_pr = float(s.get("sl_price") or 0.0)
+                            sl_pct_val = float(s.get("sl_pct") or 25.0)
+                            re_pr = float(s.get("reentry_price") or 0.0)
+                            sl_str = f"₹{sl_pr:.2f} (+{sl_pct_val:.0f}%)" if sl_pr > 0 else "Unset"
+                            re_str = f"≤ ₹{re_pr:.2f}" if re_pr > 0 else "Disabled"
+                            sell_html = (
+                                f"<div style='background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:0.82rem;'>"
+                                f"<div style='display:flex;justify-content:space-between;'>"
+                                f"<b>{s['strike_price']} {s['option_type']} SELL</b>"
+                                f"<b style='color:{p_col};'>{p_sgn}₹{pnl_val:,.2f}</b>"
+                                f"</div>"
+                                f"<div style='color:#64748b;font-size:0.75rem;margin-top:2px;'>"
+                                f"Qty: {s.get('qty', 65)} ({s.get('lots', 1)} lot) | Entry: ₹{s.get('anchor_price', 0):.2f} | LTP: ₹{s.get('ltp', 0):.2f}"
+                                f"</div>"
+                                f"<div style='color:#475569;font-size:0.75rem;margin-top:2px;'>"
+                                f"🎯 SL: <b>{sl_str}</b> | Re-entry: <b>{re_str}</b>"
+                                f"</div>"
+                                f"</div>"
+                            )
+                            st.markdown(sell_html, unsafe_allow_html=True)
+                            with st.expander(f"✏️ Adjust Anchor / SL ({s['strike_price']} {s['option_type']})", expanded=False):
+                                c_ck1, c_ck2 = st.columns(2)
+                                with c_ck1:
+                                    st.markdown(f"**Anchor**: ₹{s.get('anchor_price', 0.0):.2f}")
+                                    ck_anc = st.number_input("New Anchor", min_value=0.05, value=float(s.get('anchor_price', 0.0)), step=0.05, format="%.2f", key=f"ck_anc_in_{s['strike_id']}")
+                                    ck_auto_sl = st.checkbox(f"Auto SL (+{sl_pct_val:.0f}%)", value=True, key=f"ck_auto_sl_{s['strike_id']}")
+                                    if st.button("💾 Set Anchor", key=f"btn_ck_save_anc_{s['strike_id']}", use_container_width=True):
+                                        r = bm.update_strike_anchor_price(s['strike_id'], ck_anc, auto_recalc_sl=ck_auto_sl)
+                                        if r["ok"]: _flash(r["message"], "success")
+                                        st.rerun()
+                                with c_ck2:
+                                    ck_curr_sl = float(sl_pr if sl_pr > 0 else (float(s.get('anchor_price', 0.0)) * 1.25))
+                                    st.markdown(f"**Stop Loss**: ₹{ck_curr_sl:.2f}")
+                                    ck_sl = st.number_input("New SL", min_value=0.05, value=float(ck_curr_sl), step=0.05, format="%.2f", key=f"ck_sl_in_{s['strike_id']}")
+                                    if st.button("💾 Set SL", key=f"btn_ck_save_sl_{s['strike_id']}", use_container_width=True):
+                                        r = bm.update_strike_sl(s['strike_id'], ck_sl)
+                                        if r["ok"]: _flash(r["message"], "success")
+                                        st.rerun()
+                    else:
+                        st.caption("No open short positions currently running.")
+
+                with c_pos2:
+                    st.markdown("<div style='font-size:0.82rem;font-weight:700;color:#0369a1;margin-bottom:6px;'>🛡️ PROTECTIVE HEDGES</div>", unsafe_allow_html=True)
+                    if open_hedges:
+                        for h in open_hedges:
+                            hpnl = h.get("pnl", 0.0)
+                            hp_col = "#16a34a" if hpnl >= 0 else "#dc2626"
+                            hp_sgn = "+" if hpnl >= 0 else ""
+                            hedge_html = (
+                                f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;margin-bottom:6px;font-size:0.82rem;'>"
+                                f"<div style='display:flex;justify-content:space-between;'>"
+                                f"<b>{h['strike_price']} {h['option_type']} HEDGE BUY</b>"
+                                f"<b style='color:{hp_col};'>{hp_sgn}₹{hpnl:,.2f}</b>"
+                                f"</div>"
+                                f"<div style='color:#64748b;font-size:0.75rem;margin-top:2px;'>"
+                                f"Qty: {h.get('qty', 65)} | Entry: ₹{h.get('anchor_price', 0):.2f} | LTP: ₹{h.get('ltp', 0):.2f}"
+                                f"</div>"
+                                f"</div>"
+                            )
+                            st.markdown(hedge_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("No active hedges currently open.")
+
+                with c_pos3:
+                    st.markdown("<div style='font-size:0.82rem;font-weight:700;color:#64748b;margin-bottom:6px;'>⚪ STAGED / COUNTER WING</div>", unsafe_allow_html=True)
+                    if pending_legs:
+                        for p in pending_legs:
+                            p_html = (
+                                f"<div style='background:#f8fafc;border:1px dashed #cbd5e1;border-radius:6px;padding:6px 8px;margin-bottom:4px;font-size:0.78rem;color:#475569;'>"
+                                f"<b>{p['strike_price']} {p['option_type']} {p.get('leg_type', '')}</b>"
+                                f"<span style='color:#94a3b8;margin-left:4px;'>[ARMED PENDING]</span>"
+                                f"</div>"
+                            )
+                            st.markdown(p_html, unsafe_allow_html=True)
+                    elif sl_hits:
+                        for sh in sl_hits:
+                            sh_html = (
+                                f"<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:6px 8px;margin-bottom:4px;font-size:0.78rem;color:#991b1b;'>"
+                                f"<b>{sh['strike_price']} {sh['option_type']}</b>: SL HIT (Cooldown Active)"
+                                f"</div>"
+                            )
+                            st.markdown(sh_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("No counter legs staged.")
+
+            # Quick Action Buttons
+            c_act1, c_act2, c_act3, _ = st.columns([1.5, 1.5, 1.5, 3.5])
+            with c_act1:
+                if st.button(f"⚡ Lock Spot to Unit {u_name}", key=f"btn_ck_lock_spot_{u_name}", use_container_width=True):
+                    if live_spot > 0:
+                        for b in u_data["blocks"]:
+                            db.update_block_anchor(b["block_id"], live_spot, u_buf, u_name)
+                            up_b = db.get_block(b["block_id"])
+                            re_eng.evaluate_block_regime(up_b, current_spot=live_spot, force_eval=True)
+                        _flash(f"Unit {u_name} Anchor locked to live spot ₹{live_spot:,.2f}!", "success")
+                        st.rerun()
+            with c_act2:
+                if st.button(f"🔄 Re-Eval Unit {u_name}", key=f"btn_ck_reeval_{u_name}", use_container_width=True):
+                    for b in u_data["blocks"]:
+                        up_b = db.get_block(b["block_id"])
+                        re_eng.evaluate_block_regime(up_b, current_spot=live_spot, force_eval=True)
+                    _flash(f"Unit {u_name} re-evaluated against live spot ₹{live_spot:,.2f}!", "info")
+                    st.rerun()
+            with c_act3:
+                if st.session_state.get(f"confirm_ck_kill_{u_name}"):
+                    st.markdown(f'<div style="background:#fee2e2; border:1px solid #ef4444; border-radius:6px; padding:4px; margin:2px 0; text-align:center;"><span style="color:#991b1b; font-size:0.75rem; font-weight:700;">Confirm Kill {u_name}?</span></div>', unsafe_allow_html=True)
+                    k_yes, k_no = st.columns(2)
+                    with k_yes:
+                        if st.button("🔥 YES", key=f"btn_ck_yes_{u_name}", type="primary", use_container_width=True):
+                            st.session_state[f"confirm_ck_kill_{u_name}"] = False
+                            if u_name.startswith("M"):
+                                res_k = bm.wipe_out_and_reset_m_unit(u_name)
+                            elif u_name.startswith("OS"):
+                                res_k = os_engine.wipe_out_and_reset_os_unit(u_name)
+                            else:
+                                for b in u_data["blocks"]:
+                                    bm.kill_block(b["block_id"])
+                                res_k = {"ok": True, "message": f"Unit {u_name} closed."}
+                            _flash(res_k.get("message", f"Unit {u_name} and all its positions squared off!"), "success" if res_k.get("ok") else "error")
+                            st.rerun()
+                    with k_no:
+                        if st.button("❌ Cancel", key=f"btn_ck_no_{u_name}", use_container_width=True):
+                            st.session_state[f"confirm_ck_kill_{u_name}"] = False
+                            st.rerun()
+                else:
+                    if st.button(f"🛑 Kill Unit {u_name}", key=f"btn_ck_kill_{u_name}", use_container_width=True):
+                        st.session_state[f"confirm_ck_kill_{u_name}"] = True
+                        st.rerun()
+
+            st.markdown("<hr style='margin:12px 0 16px 0; border:0; border-top:1px solid #e2e8f0;'/>", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2013,13 +2326,15 @@ def render_master_regime_controller():
     
     # Header Banner Card
     st.markdown(
-        '<div style="background:linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0369a1 100%);border:2px solid #38bdf8;border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:0 4px 18px rgba(56,189,248,0.25);">'
-        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">'
+        '<div style="background:linear-gradient(135deg, #1e293b 0%, #0f172a 100%);border:2px solid #059669;border-radius:12px;padding:16px 20px;margin-bottom:14px;box-shadow:0 4px 15px rgba(5,150,105,0.25);">'
+        '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">'
         '<div>'
-        '<span style="font-size:1.25rem;font-weight:900;color:#ffffff;letter-spacing:0.5px;">🎯 MASTER NIFTY CONTROLLER</span>'
-        '<span style="background:#38bdf8;color:#0f172a;font-size:0.75rem;font-weight:800;padding:3px 10px;border-radius:12px;margin-left:8px;">V5.0 "OLD & GOLD" ARCHITECTURE</span>'
+        '<div style="font-size:1.2rem;font-weight:800;color:#ffffff;letter-spacing:0.5px;">🎯 MASTER NIFTY CONTROLLER (V5.0 "OLD & GOLD" ARCHITECTURE)</div>'
+        '<div style="font-size:0.82rem;color:#cbd5e1;margin-top:4px;">Autonomous Multi-Unit Architecture (M1, M2, M3...) • Independent Master Anchors & Isolated Regimes • 3:00 PM Continuation Decision • Decoupled Individual Stop-Loss • Orphan Hedge Preservation</div>'
         '</div>'
-        '<div style="font-size:0.82rem;color:#cbd5e1;font-weight:500;">Unified Console • Decoupled M1 Anchor • 14:57 IST M-Decision (15:01 OS1) • Even/Odd Parity Grid</div>'
+        '<div>'
+        '<span style="background:#059669;color:#ffffff;font-size:0.8rem;font-weight:700;padding:5px 14px;border-radius:20px;letter-spacing:0.5px;">⚡ V5.0 OLD & GOLD ACTIVE</span>'
+        '</div>'
         '</div>'
         '</div>',
         unsafe_allow_html=True
@@ -2087,400 +2402,424 @@ def render_master_regime_controller():
     st.markdown('<hr style="margin:10px 0 14px 0;border:0;border-top:1px solid #e2e8f0;"/>', unsafe_allow_html=True)
 
 
-def render_unified_v5_console():
-    """
-    V5.0 'Old & Gold' Architecture: Unified Single-Window Console ('Ek Hi Jagah Saari Chijen').
-    Configures Call Sell Wing and/or Put Sell Wing with zero-default clean inputs,
-    dynamic real-time LTP fetching on strike entry, smart Unit Pod selector, and strict deployment validation.
-    """
-    import regime_engine as re_eng
-    live_spot = re_eng.get_current_nifty_spot()
-    expiries_list = get_sorted_nifty_expiries()
-    
-    with st.expander("🚀 UNIFIED V5 CONSOLE — EK HI JAGAH SAARI CHIJEN (M1, M2... Deployer)", expanded=True):
-        st.markdown(
-            '<div style="background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%);color:#ffffff;border-radius:12px;padding:16px 20px;margin-bottom:16px;box-shadow:0 4px 15px rgba(0,0,0,0.15);">'
-            '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">'
-            '<div>'
-            '<span style="font-size:1.15rem;font-weight:900;color:#38bdf8;">🚀 UNIFIED SINGLE-WINDOW V5.0 MASTER DEPLOYER</span>'
-            '<div style="font-size:0.8rem;color:#cbd5e1;margin-top:2px;">Configure Call & Put Wings (EVEN Strikes Grid) • 14:57 IST Continuation • Decoupled M-Anchors.</div>'
-            '</div>'
-            f'<div style="background:#0284c7;color:#ffffff;padding:4px 12px;border-radius:20px;font-weight:800;font-size:0.85rem;">Live Spot: ₹{live_spot:,.2f}</div>'
-            '</div>'
-            '</div>',
-            unsafe_allow_html=True
-        )
 
-        # ── LIVE ZERODHA BROKER POSITIONS SYNC STRIP ──
-        try:
-            from kite_executor import kite_executor
-            kite_executor.load_session_from_db()
-            if kite_executor.ensure_logged_in():
-                raw_pos = kite_executor.get_positions()
-                pos_list = raw_pos if isinstance(raw_pos, list) else raw_pos.get("net", [])
-                active_pos = [p for p in pos_list if p.get("quantity", 0) != 0]
-                if active_pos:
-                    pos_badges = []
-                    for p in active_pos:
-                        qty = p.get("quantity", 0)
-                        sym = p.get("tradingsymbol", "")
-                        pnl = p.get("pnl", 0.0)
-                        ltp = p.get("last_price", 0.0)
-                        badge_color = "#22c55e" if pnl >= 0 else "#ef4444"
-                        pnl_sign = "+" if pnl >= 0 else ""
-                        pos_badges.append(
-                            f"<span style='background:#f8fafc;border:1px solid #cbd5e1;padding:4px 10px;border-radius:6px;font-size:0.8rem;margin-right:8px;display:inline-block;margin-bottom:4px;'>"
-                            f"<b>{sym}</b> (Qty: {qty:+d}) | LTP: ₹{ltp:.2f} | PnL: <b style='color:{badge_color};'>{pnl_sign}₹{pnl:,.2f}</b>"
-                            f"</span>"
-                        )
-                    st.markdown(
-                        f"<div style='background:#f1f5f9;border:1px solid #94a3b8;border-left:4px solid #3b82f6;border-radius:8px;padding:8px 12px;margin-bottom:14px;'>"
-                        f"<div style='font-size:0.75rem;font-weight:800;color:#1e293b;margin-bottom:4px;'>📡 LIVE BROKER POSITIONS (Zerodha Kite Sync):</div>"
-                        f"{''.join(pos_badges)}"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-        except Exception:
-            pass
+# ─────────────────────────────────────────────────────────────────────────────
+# V5.0 UNIFIED MASTER STRATEGY CONSOLE ("Ek Hi Jagah Saari Chijen")
+# ─────────────────────────────────────────────────────────────────────────────
+def render_unified_v5_master_console():
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1.5px solid #0284c7; border-radius: 12px; padding: 18px 24px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+            <div>
+                <span style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">
+                    🏛️ Directional M-Units Cockpit (V6.0 — Asymmetric Trend & Auto-Hunter)
+                </span>
+                <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 4px;">
+                    User-Defined Spot Anchor &bull; ~₹200 Premium Hunter (EVEN 100s) &bull; 500-pt Hedge Helmet &bull; Strict 25% SL on Entry Fill
+                </div>
+            </div>
+            <div style="margin-top: 8px;">
+                <span style="background: rgba(2, 132, 199, 0.2); border: 1px solid #0284c7; color: #38bdf8; font-size: 0.75rem; padding: 4px 12px; border-radius: 20px; font-weight: 600;">
+                    V6.0 ACTIVE
+                </span>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        # Top Macro Config Row
-        c1, c2, c3, c4 = st.columns([2, 1.5, 2, 1.5])
-        with c1:
-            expiry_val = st.selectbox("Expiry Date", options=expiries_list, key="v5_exp_select")
-        with c2:
-            unit_options = ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"]
-            suggested_u = db.get_next_unit_name(expiry_val) if expiry_val else "M1"
-            if suggested_u not in unit_options:
-                unit_options.append(suggested_u)
-            default_u_idx = unit_options.index(suggested_u) if suggested_u in unit_options else 0
-            unit_val = st.selectbox("Unit Pod", options=unit_options, index=default_u_idx, key="v5_unit_name_select", help="Autonomous Unit Pod (e.g. M1, M2, M3)")
-        with c3:
-            default_anc = float(live_spot) if live_spot > 0 else 23500.0
-            anchor_val = st.number_input("Master Anchor Price (₹)", min_value=0.0, max_value=100000.0, value=default_anc, step=50.0, format="%.2f", key="v5_anchor_price", help="Master anchor price for directional decision")
-        with c4:
-            lots_val = st.number_input("Lots per Wing", min_value=1, max_value=100, value=1, step=1, key="v5_lots_val")
+    # 1. Pod Selection (M1, M2, M3, M4)
+    selected_pod = st.selectbox("Select Directional M-Unit Pod", ["M1", "M2", "M3", "M4"], index=0, key="m_cockpit_pod_select")
 
-        st.markdown('<hr style="margin:12px 0 16px 0;border:0;border-top:1px solid #e2e8f0;"/>', unsafe_allow_html=True)
+    m_cfg = db.get_m_unit_settings(selected_pod)
+    is_locked = m_cfg.get("locked", False)
 
-        # Helper to fetch live option LTP reliably
-        def _fetch_opt_live_price(exp_date, strike, opt_type):
-            if not exp_date or not strike or int(strike) <= 0:
-                return 0.0
-            try:
-                from kite_executor import kite_executor
-                kite_executor.load_session_from_db()
-                kite_executor.ensure_logged_in()
-                sym_info = kite_executor.search_option_symbol(exp_date, int(strike), opt_type)
-                if sym_info:
-                    token = sym_info.get("token")
-                    tsym = sym_info.get("trading_symbol")
-                    p = kite_executor.get_ltp(token, tsym)
-                    if p > 0:
-                        return float(p)
-                    if kite_executor.kite:
-                        q = kite_executor.kite.ltp([f"NFO:{tsym}"])
-                        if f"NFO:{tsym}" in q:
-                            return float(q[f"NFO:{tsym}"].get("last_price", 0.0))
-            except Exception as e:
-                print(f"[UI][LTP] Error fetching {opt_type} {strike}: {e}")
-            return 0.0
+    cat_expiries = os_engine.get_categorized_expiries()
+    all_expiries = cat_expiries.get("all", ["2026-10-27"])
 
-        # Side-by-side Wings: LEFT = CALL WING, RIGHT = PUT WING
-        col_call, col_put = st.columns(2)
+    from kite_executor import kite_executor
+    live_spot = kite_executor.get_nifty_spot()
+    if live_spot <= 0:
+        live_spot = float(db.get("last_nifty_spot_price", "23200.0") or "23200.0")
 
-        # ── CALL SELL WING (LEFT) ──
-        with col_call:
-            st.markdown(
-                '<div style="background:#fef2f2;border:2px solid #fecaca;border-radius:10px;padding:12px 16px;margin-bottom:12px;">'
-                '<div style="font-weight:900;color:#991b1b;font-size:1rem;display:flex;align-items:center;gap:6px;">'
-                '🔴 CALL SELL WING (BEARISH TREND)'
-                '</div>'
-                '<div style="font-size:0.75rem;color:#b91c1c;">Executes LIVE when Spot &lt; Master Anchor. Held in PENDING if Bullish.</div>'
-                '</div>',
-                unsafe_allow_html=True
-            )
-            c_s1, c_s2 = st.columns(2)
-            with c_s1:
-                ce_sell_strike = st.number_input("CE Sell Strike", min_value=0, max_value=100000, value=0, step=50, key="v5_ce_sell_strike", help="Enter Strike Price (e.g. 23700) or leave 0 to skip")
-                ce_sell_live = _fetch_opt_live_price(expiry_val, ce_sell_strike, "CE") if ce_sell_strike > 0 else 0.0
-            with c_s2:
-                if ce_sell_strike > 0:
-                    ce_sell_anchor = st.number_input("CE Sell Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=float(ce_sell_live), step=0.5, format="%.2f", key=f"v5_ce_sell_anchor_{expiry_val}_{ce_sell_strike}", help="Live Market LTP. Triggers when LTP <= Anchor.")
-                else:
-                    ce_sell_anchor = 0.0
-                    st.number_input("CE Sell Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=0.0, step=0.5, format="%.2f", key="v5_ce_sell_anchor_dis", disabled=True)
+    # ── CASE A: LOCKED & ARMED MODE ──────────────────────────────────────────
+    if is_locked:
+        s_anchor = m_cfg.get("anchor_price", 23350.0)
+        s_horizon = m_cfg.get("horizon", "Monthly Expiry")
+        s_exp = m_cfg.get("expiry_date", "")
+        s_lots = m_cfg.get("lots", 1)
+        s_ls = m_cfg.get("lot_size", 65)
+        s_total_qty = s_lots * s_ls
+        s_mode = m_cfg.get("mode", "AUTO")
+        s_ce = m_cfg.get("manual_ce", 0)
+        s_pe = m_cfg.get("manual_pe", 0)
+        s_tp = m_cfg.get("target_premium", 200.0)
+        s_locked_at = m_cfg.get("locked_at", "")
 
-            c_h1, c_h2 = st.columns(2)
-            with c_h1:
-                ce_hedge_strike = st.number_input("CE Hedge Strike (OTM)", min_value=0, max_value=100000, value=0, step=50, key="v5_ce_hedge_strike", help="Enter Hedge Strike (e.g. 24200) or leave 0 to skip")
-                ce_hedge_live = _fetch_opt_live_price(expiry_val, ce_hedge_strike, "CE") if ce_hedge_strike > 0 else 0.0
-            with c_h2:
-                if ce_hedge_strike > 0:
-                    ce_hedge_anchor = st.number_input("CE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=float(ce_hedge_live), step=0.5, format="%.2f", key=f"v5_ce_hedge_anchor_{expiry_val}_{ce_hedge_strike}", help="Live Hedge Market LTP.")
-                else:
-                    ce_hedge_anchor = 0.0
-                    st.number_input("CE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=0.0, step=0.5, format="%.2f", key="v5_ce_hedge_anchor_dis", disabled=True)
+        regime = "BULLISH" if live_spot >= s_anchor else "BEARISH"
+        diff = live_spot - s_anchor
+        diff_str = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
+        reg_badge = '<span style="background: #10b981; color: #ffffff; padding: 3px 10px; border-radius: 6px; font-weight: 800; font-size: 0.85rem;">🟢 BULLISH (Spot ≥ Anchor)</span>' if regime == "BULLISH" else '<span style="background: #ef4444; color: #ffffff; padding: 3px 10px; border-radius: 6px; font-weight: 800; font-size: 0.85rem;">🔴 BEARISH (Spot < Anchor)</span>'
+        mode_badge = f"🎯 Manual Strikes ({s_ce} CE / {s_pe} PE)" if s_mode == "MANUAL" else f"🏹 Auto Hunter (~₹{s_tp:.0f} on EVEN 100s)"
 
-            c_sl1, c_sl2, c_sl3 = st.columns([1.5, 1.5, 1.0])
-            with c_sl2:
-                ce_sl_choice = st.selectbox("CE SL % Presets", options=["25% (Standard)", "10%", "20%", "30%", "40%", "Custom"], index=0, key="v5_ce_sl_choice")
-                ce_sl_pct = 25.0
-                if ce_sl_choice == "10%": ce_sl_pct = 10.0
-                elif ce_sl_choice == "20%": ce_sl_pct = 20.0
-                elif ce_sl_choice == "25% (Standard)": ce_sl_pct = 25.0
-                elif ce_sl_choice == "30%": ce_sl_pct = 30.0
-                elif ce_sl_choice == "40%": ce_sl_pct = 40.0
-                elif ce_sl_choice == "Custom":
-                    ce_sl_pct = st.number_input("Custom CE SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key="v5_ce_custom_sl")
+        st.markdown(f'''
+        <div style="background: #04241a; border: 2px solid #10b981; border-radius: 12px; padding: 18px 24px; margin-bottom: 20px; color: #ffffff;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                <div>
+                    <span style="font-size: 1.2rem; font-weight: 800; color: #34d399;">
+                        🔒 {selected_pod} SETTINGS LOCKED & ARMED
+                    </span>
+                    <span style="background: #064e3b; color: #a7f3d0; font-size: 0.75rem; padding: 2px 10px; border-radius: 12px; font-weight: 700; margin-left: 10px;">
+                        SYSTEM ACTIVE
+                    </span>
+                    <div style="font-size: 0.90rem; color: #ffffff; margin-top: 6px;">
+                        Locked on: <b style="color: #a7f3d0;">{s_locked_at}</b> &bull; Watching Spot vs User-Set Anchor for continuation.
+                    </div>
+                </div>
+                <div>
+                    {reg_badge}
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 14px; background: #021a13; padding: 14px; border-radius: 8px; font-size: 0.92rem; color: #ffffff;">
+                <div>🏛️ <b style="color: #93c5fd;">User Anchor:</b> <span style="font-size: 1.1rem; color: #38bdf8; font-weight: 700;">₹{s_anchor:,.2f}</span></div>
+                <div>📊 <b style="color: #93c5fd;">Live Spot:</b> <b>₹{live_spot:,.2f}</b> <span style="color: {'#4ade80' if diff >= 0 else '#f87171'}; font-weight: 600;">({diff_str})</span></div>
+                <div>🎯 <b style="color: #93c5fd;">Expiry Date:</b> {s_exp} ({s_horizon})</div>
+                <div>📦 <b style="color: #93c5fd;">Lots & Size:</b> {s_lots} Lot(s) &times; {s_ls} Qty = <b style="color: #fde047;">{s_total_qty} units</b></div>
+                <div>⚡ <b style="color: #93c5fd;">Strategy Mode:</b> <span style="color: #34d399; font-weight: 700;">{mode_badge}</span></div>
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
 
-            with c_sl1:
-                eff_ce_anc = float(ce_sell_anchor) if float(ce_sell_anchor) > 0 else float(ce_sell_live)
-                if ce_sell_strike > 0 and eff_ce_anc > 0:
-                    default_ce_sl = eff_ce_anc * (1.0 + ce_sl_pct / 100.0)
-                    ce_sl_price_val = st.number_input(
-                        "CE Stop Loss Price (₹)",
-                        min_value=0.05,
-                        max_value=10000.0,
-                        value=float(default_ce_sl),
-                        step=0.5,
-                        format="%.2f",
-                        key=f"v5_ce_sl_price_{expiry_val}_{ce_sell_strike}_{ce_sl_pct}",
-                        help="Exact SL trigger in rupees"
-                    )
-                else:
-                    ce_sl_price_val = 0.0
-                    st.number_input("CE Stop Loss Price (₹)", min_value=0.0, max_value=10000.0, value=0.0, step=0.5, format="%.2f", key="v5_ce_sl_price_dis", disabled=True)
+        col_l1, col_l2, col_l3 = st.columns([1.2, 1.8, 2.0])
+        with col_l1:
+            if st.button(f"🔓 Unlock {selected_pod} Settings", key=f"btn_m_unlock_{selected_pod}", use_container_width=True):
+                db.unlock_m_unit_settings(selected_pod)
+                st.session_state.pop(f"m_inspection_{selected_pod}", None)
+                _flash(f"{selected_pod} settings unlocked. Returned to Draft Mode.", "info")
+                st.rerun()
 
-                if eff_ce_anc > 0 and float(ce_sl_price_val) > eff_ce_anc:
-                    ce_effective_pct = ((float(ce_sl_price_val) - eff_ce_anc) / eff_ce_anc) * 100.0
-                else:
-                    ce_effective_pct = float(ce_sl_pct)
-
-            with c_sl3:
-                st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-                ce_reentry = st.checkbox("Re-entry", value=True, key="v5_ce_reentry")
-
-            # Dynamic Live Metrics & SL Preview Card
-            if ce_sell_strike > 0:
-                st.markdown(
-                    f'<div style="background:#fff1f2;border:1px dashed #f43f5e;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.82rem;">'
-                    f'📈 <b>Live LTP:</b> ₹{ce_sell_live:,.2f} &nbsp;|&nbsp; 🛡️ <b>Hedge LTP:</b> ₹{ce_hedge_live:,.2f}<br/>'
-                    f'🛑 <b>Stop-Loss Trigger:</b> <span style="color:#b91c1c;font-weight:800;font-size:0.95rem;">₹{float(ce_sl_price_val):,.2f}</span> '
-                    f'<span style="color:#64748b;">(+{ce_effective_pct:.1f}% on Anchor ₹{eff_ce_anc:,.2f})</span>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    '<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.8rem;color:#64748b;">'
-                    '⚪ Enter CE Sell Strike above to fetch live LTP and calculate Stop-Loss.'
-                    '</div>',
-                    unsafe_allow_html=True
-                )
-
-        # ── PUT SELL WING (RIGHT) ──
-        with col_put:
-            st.markdown(
-                '<div style="background:#ecfdf5;border:2px solid #a7f3d0;border-radius:10px;padding:12px 16px;margin-bottom:12px;">'
-                '<div style="font-weight:900;color:#065f46;font-size:1rem;display:flex;align-items:center;gap:6px;">'
-                '🟢 PUT SELL WING (BULLISH TREND)'
-                '</div>'
-                '<div style="font-size:0.75rem;color:#047857;">Executes LIVE when Spot &ge; Master Anchor. Held in PENDING if Bearish.</div>'
-                '</div>',
-                unsafe_allow_html=True
-            )
-            p_s1, p_s2 = st.columns(2)
-            with p_s1:
-                pe_sell_strike = st.number_input("PE Sell Strike", min_value=0, max_value=100000, value=0, step=50, key="v5_pe_sell_strike", help="Enter Strike Price (e.g. 23100) or leave 0 to skip")
-                pe_sell_live = _fetch_opt_live_price(expiry_val, pe_sell_strike, "PE") if pe_sell_strike > 0 else 0.0
-            with p_s2:
-                if pe_sell_strike > 0:
-                    pe_sell_anchor = st.number_input("PE Sell Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=float(pe_sell_live), step=0.5, format="%.2f", key=f"v5_pe_sell_anchor_{expiry_val}_{pe_sell_strike}", help="Live Market LTP. Triggers when LTP <= Anchor.")
-                else:
-                    pe_sell_anchor = 0.0
-                    st.number_input("PE Sell Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=0.0, step=0.5, format="%.2f", key="v5_pe_sell_anchor_dis", disabled=True)
-
-            p_h1, p_h2 = st.columns(2)
-            with p_h1:
-                pe_hedge_strike = st.number_input("PE Hedge Strike (OTM)", min_value=0, max_value=100000, value=0, step=50, key="v5_pe_hedge_strike", help="Enter Hedge Strike (e.g. 22600) or leave 0 to skip")
-                pe_hedge_live = _fetch_opt_live_price(expiry_val, pe_hedge_strike, "PE") if pe_hedge_strike > 0 else 0.0
-            with p_h2:
-                if pe_hedge_strike > 0:
-                    pe_hedge_anchor = st.number_input("PE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=float(pe_hedge_live), step=0.5, format="%.2f", key=f"v5_pe_hedge_anchor_{expiry_val}_{pe_hedge_strike}", help="Live Hedge Market LTP.")
-                else:
-                    pe_hedge_anchor = 0.0
-                    st.number_input("PE Hedge Anchor (Auto-LTP ₹)", min_value=0.0, max_value=5000.0, value=0.0, step=0.5, format="%.2f", key="v5_pe_hedge_anchor_dis", disabled=True)
-
-            p_sl1, p_sl2, p_sl3 = st.columns([1.5, 1.5, 1.0])
-            with p_sl2:
-                pe_sl_choice = st.selectbox("PE SL % Presets", options=["25% (Standard)", "10%", "20%", "30%", "40%", "Custom"], index=0, key="v5_pe_sl_choice")
-                pe_sl_pct = 25.0
-                if pe_sl_choice == "10%": pe_sl_pct = 10.0
-                elif pe_sl_choice == "20%": pe_sl_pct = 20.0
-                elif pe_sl_choice == "25% (Standard)": pe_sl_pct = 25.0
-                elif pe_sl_choice == "30%": pe_sl_pct = 30.0
-                elif pe_sl_choice == "40%": pe_sl_pct = 40.0
-                elif pe_sl_choice == "Custom":
-                    pe_sl_pct = st.number_input("Custom PE SL %", min_value=1.0, max_value=200.0, value=25.0, step=1.0, key="v5_pe_custom_sl")
-
-            with p_sl1:
-                eff_pe_anc = float(pe_sell_anchor) if float(pe_sell_anchor) > 0 else float(pe_sell_live)
-                if pe_sell_strike > 0 and eff_pe_anc > 0:
-                    default_pe_sl = eff_pe_anc * (1.0 + pe_sl_pct / 100.0)
-                    pe_sl_price_val = st.number_input(
-                        "PE Stop Loss Price (₹)",
-                        min_value=0.05,
-                        max_value=10000.0,
-                        value=float(default_pe_sl),
-                        step=0.5,
-                        format="%.2f",
-                        key=f"v5_pe_sl_price_{expiry_val}_{pe_sell_strike}_{pe_sl_pct}",
-                        help="Exact SL trigger in rupees"
-                    )
-                else:
-                    pe_sl_price_val = 0.0
-                    st.number_input("PE Stop Loss Price (₹)", min_value=0.0, max_value=10000.0, value=0.0, step=0.5, format="%.2f", key="v5_pe_sl_price_dis", disabled=True)
-
-                if eff_pe_anc > 0 and float(pe_sl_price_val) > eff_pe_anc:
-                    pe_effective_pct = ((float(pe_sl_price_val) - eff_pe_anc) / eff_pe_anc) * 100.0
-                else:
-                    pe_effective_pct = float(pe_sl_pct)
-
-            with p_sl3:
-                st.markdown("<div style='height:24px;'></div>", unsafe_allow_html=True)
-                pe_reentry = st.checkbox("Re-entry", value=True, key="v5_pe_reentry", help="Auto re-entry upon SL trigger")
-
-            # Dynamic Live Metrics & SL Preview Card
-            if pe_sell_strike > 0:
-                st.markdown(
-                    f'<div style="background:#f0fdf4;border:1px dashed #22c55e;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.82rem;">'
-                    f'📈 <b>Live LTP:</b> ₹{pe_sell_live:,.2f} &nbsp;|&nbsp; 🛡️ <b>Hedge LTP:</b> ₹{pe_hedge_live:,.2f}<br/>'
-                    f'🛑 <b>Stop-Loss Trigger:</b> <span style="color:#15803d;font-weight:800;font-size:0.95rem;">₹{float(pe_sl_price_val):,.2f}</span> '
-                    f'<span style="color:#64748b;">(+{pe_effective_pct:.1f}% on Anchor ₹{eff_pe_anc:,.2f})</span>'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                st.markdown(
-                    '<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;padding:8px 12px;margin-top:6px;font-size:0.8rem;color:#64748b;">'
-                    '⚪ Enter PE Sell Strike above to fetch live LTP and calculate Stop-Loss.'
-                    '</div>',
-                    unsafe_allow_html=True
-                )
-
-        # 📖 Embedded Student-Friendly Guide
-        with st.expander("📖 10TH CLASS STUDENT GUIDE — KAISE TRADE KAREIN & RULES (Click to Read)", expanded=False):
-            st.markdown(
-                """
-                ### 🌟 Bharat V5 Simple Trading Rules (10th/12th Class Level):
-                1. **Master Anchor (Direction):** 
-                   - Spot >= Anchor $\\rightarrow$ **BULLISH**: Put Wing Live bikega (Zerodha me order jayega), Call Wing wait karega.
-                   - Spot < Anchor $\\rightarrow$ **BEARISH**: Call Wing Live bikega (Zerodha me order jayega), Put Wing wait karega.
-                2. **Auto LTP & Anchor:**
-                   - Strike price dalte hi system Live Market Price (LTP) ko Anchor bana leta hai taaki trade turant execute ho sake.
-                3. **Stop Loss Customization:**
-                   - Aap chahein toh Stop Loss Price (₹) ko seedhe change kar sakte hain (jaise ₹60 ka anchor aur ₹61 ya ₹75 ka SL).
-                4. **Hedge-First Safety:**
-                   - Zerodha me pehle Hedge Buy order execute hota hai taaki margin kam lage, fir Sell leg execute hoti hai.
-                5. **3:00 PM Continuation:**
-                   - 3:00 PM par agar trend aapke favor me hai toh overnight hold rahega, opposing side close ho jayegi.
-                """
-            )
-
-        # Live Directional Indicator Banner
-        has_any_strike = (ce_sell_strike > 0 or pe_sell_strike > 0)
-        is_bullish_preview = live_spot >= anchor_val
-
-        if not has_any_strike:
-            st.markdown(
-                '<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:10px;padding:12px 18px;margin:16px 0;text-align:center;">'
-                '<span style="color:#475569;font-weight:700;font-size:0.95rem;">⚪ CLEAN CONSOLE: Enter at least one Wing (Strike Price &gt; 0) above to arm deployment.</span>'
-                '</div>',
-                unsafe_allow_html=True
-            )
-        elif is_bullish_preview:
-            preview_banner = (
-                f'<div style="background:#ecfdf5;border:2px solid #10b981;border-radius:10px;padding:12px 18px;margin:16px 0;text-align:center;">'
-                f'<span style="color:#065f46;font-weight:900;font-size:1.05rem;">🟢 LIVE BULLISH SIGNAL (Spot ₹{live_spot:,.2f} &ge; Anchor ₹{anchor_val:,.2f})</span><br/>'
-                f'<span style="color:#047857;font-size:0.85rem;font-weight:600;">⚡ <b>PUT WING</b> will execute LIVE (Buy Hedge ₹{pe_hedge_strike} ➔ Sell PE ₹{pe_sell_strike} | SL: ₹{float(pe_sl_price_val):,.2f}). <b>CALL WING</b> held in PENDING.</span>'
-                f'</div>'
-            )
-            st.markdown(preview_banner, unsafe_allow_html=True)
-        else:
-            preview_banner = (
-                f'<div style="background:#fef2f2;border:2px solid #ef4444;border-radius:10px;padding:12px 18px;margin:16px 0;text-align:center;">'
-                f'<span style="color:#991b1b;font-weight:900;font-size:1.05rem;">🔴 LIVE BEARISH SIGNAL (Spot ₹{live_spot:,.2f} &lt; Anchor ₹{anchor_val:,.2f})</span><br/>'
-                f'<span style="color:#b91c1c;font-size:0.85rem;font-weight:600;">⚡ <b>CALL WING</b> will execute LIVE (Buy Hedge ₹{ce_hedge_strike} ➔ Sell CE ₹{ce_sell_strike} | SL: ₹{float(ce_sl_price_val):,.2f}). <b>PUT WING</b> held in PENDING.</span>'
-                f'</div>'
-            )
-            st.markdown(preview_banner, unsafe_allow_html=True)
-
-        # Deploy Button with Strict Safeguard Validation
-        if st.button("🚀 DEPLOY UNIFIED MASTER UNIT NOW", key="btn_deploy_v5_master_unit", type="primary", use_container_width=True):
-            eff_ce_anc = float(ce_sell_anchor) if float(ce_sell_anchor) > 0 else float(ce_sell_live)
-            eff_ce_h_anc = float(ce_hedge_anchor) if float(ce_hedge_anchor) > 0 else float(ce_hedge_live)
-            eff_pe_anc = float(pe_sell_anchor) if float(pe_sell_anchor) > 0 else float(pe_sell_live)
-            eff_pe_h_anc = float(pe_hedge_anchor) if float(pe_hedge_anchor) > 0 else float(pe_hedge_live)
-
-            # Strict Pre-Deploy Safeguards
-            if not expiry_val:
-                _flash("❌ Expiry date must be selected.", "error")
-            elif anchor_val <= 0:
-                _flash("❌ Master Anchor Price must be greater than 0.", "error")
-            elif ce_sell_strike <= 0 and pe_sell_strike <= 0:
-                _flash("❌ Please enter at least one valid Strike Price (CE Sell Strike or PE Sell Strike > 0) to deploy.", "error")
-            elif ce_sell_strike > 0 and ce_hedge_strike <= 0:
-                _flash("❌ Call Wing requires a valid CE Hedge Strike (OTM > 0).", "error")
-            elif ce_sell_strike > 0 and ce_hedge_strike <= ce_sell_strike:
-                _flash(f"❌ CE Hedge Strike ({ce_hedge_strike}) must be higher than CE Sell Strike ({ce_sell_strike}) for OTM protection.", "error")
-            elif pe_sell_strike > 0 and pe_hedge_strike <= 0:
-                _flash("❌ Put Wing requires a valid PE Hedge Strike (OTM > 0).", "error")
-            elif pe_sell_strike > 0 and pe_hedge_strike >= pe_sell_strike:
-                _flash(f"❌ PE Hedge Strike ({pe_hedge_strike}) must be lower than PE Sell Strike ({pe_sell_strike}) for OTM protection.", "error")
-            else:
-                with st.spinner(f"Deploying V5 Unified Master Unit {unit_val}..."):
-                    res_dep = bm.deploy_unified_master_unit(
-                        expiry_date=expiry_val,
-                        anchor_unit_name=unit_val,
-                        master_anchor_price=float(anchor_val),
-                        regime_buffer=15.0,
-                        recommended_lots=int(lots_val),
-                        ce_sell_strike=int(ce_sell_strike),
-                        ce_sell_anchor=float(eff_ce_anc),
-                        ce_hedge_strike=int(ce_hedge_strike),
-                        ce_hedge_anchor=float(eff_ce_h_anc),
-                        ce_sl_pct=float(ce_sl_pct),
-                        ce_sl_price=float(ce_sl_price_val),
-                        ce_reentry_enabled=1 if ce_reentry else 0,
-                        pe_sell_strike=int(pe_sell_strike),
-                        pe_sell_anchor=float(eff_pe_anc),
-                        pe_hedge_strike=int(pe_hedge_strike),
-                        pe_hedge_anchor=float(eff_pe_h_anc),
-                        pe_sl_pct=float(pe_sl_pct),
-                        pe_sl_price=float(pe_sl_price_val),
-                        pe_reentry_enabled=1 if pe_reentry else 0,
-                        execute_live=True,
-                        current_spot=live_spot
-                    )
-                    if res_dep.get("ok"):
-                        _flash(f"✅ {res_dep.get('message')}", "success")
+        with col_l2:
+            if st.session_state.get(f"confirm_wipe_m_{selected_pod}"):
+                st.markdown(f'<div style="background:#fee2e2; border:1px solid #ef4444; border-radius:6px; padding:4px; margin:2px 0; text-align:center;"><span style="color:#991b1b; font-size:0.75rem; font-weight:700;">Confirm Wipe {selected_pod}?</span></div>', unsafe_allow_html=True)
+                w_yes, w_no = st.columns(2)
+                with w_yes:
+                    if st.button(f"🔥 YES, Wipe", key=f"btn_wipe_yes_{selected_pod}", type="primary", use_container_width=True):
+                        st.session_state[f"confirm_wipe_m_{selected_pod}"] = False
+                        res_w = bm.wipe_out_and_reset_m_unit(selected_pod)
+                        st.session_state.pop(f"m_inspection_{selected_pod}", None)
+                        if res_w.get("ok"):
+                            _flash(res_w.get("message"), "success")
+                        else:
+                            _flash(res_w.get("message"), "error")
                         st.rerun()
-                    else:
-                        _flash(f"❌ Deployment failed: {res_dep.get('message')}", "error")
+                with w_no:
+                    if st.button("❌ Cancel", key=f"btn_wipe_no_{selected_pod}", use_container_width=True):
+                        st.session_state[f"confirm_wipe_m_{selected_pod}"] = False
+            else:
+                if st.button(f"💥 Wipe Out & Reset {selected_pod}", key=f"btn_m_wipe_{selected_pod}", use_container_width=True, type="primary", help="Safely closes broker legs, purges DB records for this pod, and unlocks settings."):
+                    st.session_state[f"confirm_wipe_m_{selected_pod}"] = True
+                    st.rerun()
 
+        with col_l3:
+            btn_fetch_locked = st.button("🔍 Fetch Live Candidate Prices & Regime Status", key=f"btn_m_fetch_locked_{selected_pod}", use_container_width=True)
 
+        if btn_fetch_locked or f"m_inspection_{selected_pod}" not in st.session_state:
+            with st.spinner(f"Fetching live EVEN 100 contracts for {selected_pod}..."):
+                st.session_state[f"m_inspection_{selected_pod}"] = bm.inspect_m_unit_candidates(
+                    expiry_date=s_exp,
+                    unit_name=selected_pod,
+                    master_anchor_price=s_anchor,
+                    target_premium=s_tp,
+                    manual_ce_strike=s_ce if s_mode == "MANUAL" else None,
+                    manual_pe_strike=s_pe if s_mode == "MANUAL" else None,
+                    hedge_dist=500
+                )
 
+        selected_exp = s_exp
+        user_anchor = s_anchor
+        lots = s_lots
+        user_lot_size = s_ls
+        target_prem = s_tp
+        m_ce = s_ce if s_mode == "MANUAL" else None
+        m_pe = s_pe if s_mode == "MANUAL" else None
+
+    # ── CASE B: UNLOCKED DRAFT MODE ──────────────────────────────────────────
+    else:
+        st.markdown(f'''
+        <div style="background: #1e1b10; border: 2px solid #f59e0b; border-radius: 12px; padding: 18px 24px; margin-bottom: 20px; color: #ffffff;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+                <div>
+                    <span style="font-size: 1.2rem; font-weight: 800; color: #fbbf24;">
+                        ⚠️ {selected_pod} IN UNLOCKED DRAFT MODE
+                    </span>
+                    <span style="background: #451a03; color: #fde68a; font-size: 0.75rem; padding: 2px 10px; border-radius: 12px; font-weight: 700; margin-left: 10px;">
+                        NO TRADES ALLOWED
+                    </span>
+                    <div style="font-size: 0.90rem; color: #ffffff; margin-top: 6px; line-height: 1.5;">
+                        Configure your <b>Master Anchor Price</b>, Expiry, Lots, and Strike Mode below, preview candidate strikes, and click <b style="color: #fbbf24;">'🔒 Lock & Arm {selected_pod} Settings'</b> to activate.
+                    </div>
+                </div>
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
+
+        st.markdown(f'<p class="section-title">🎛️ STEP 1: CONFIGURE & PREVIEW STRIKES ({selected_pod} DRAFT)</p>', unsafe_allow_html=True)
+
+        with st.container():
+            st.markdown('<div class="block-card">', unsafe_allow_html=True)
+            col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns([1.5, 2, 1.4, 0.9, 1.2])
+
+            with col_h1:
+                cur_hor = m_cfg.get("horizon", "Monthly Expiry")
+                horizon = st.radio("Expiry Horizon", ["Monthly Expiry", "Weekly Expiry"], index=0 if cur_hor == "Monthly Expiry" else 1, horizontal=True, key=f"m_tab_horizon_{selected_pod}")
+                active_list = cat_expiries.get("monthly", []) if horizon == "Monthly Expiry" else cat_expiries.get("weekly", [])
+                if not active_list:
+                    active_list = all_expiries
+
+            with col_h2:
+                cur_exp = m_cfg.get("expiry_date", "")
+                exp_idx = active_list.index(cur_exp) if cur_exp in active_list else 0
+                selected_exp = st.selectbox(f"Select {horizon} Date", active_list, index=exp_idx, key=f"m_tab_exp_{selected_pod}")
+
+            with col_h3:
+                user_anchor = st.number_input(
+                    f"🏛️ {selected_pod} Anchor (Nifty Spot)",
+                    value=float(m_cfg.get("anchor_price", 23350.0)),
+                    step=25.0,
+                    format="%.2f",
+                    key=f"m_tab_user_anchor_{selected_pod}",
+                    help="Benchmark Anchor Price strictly specified by the user for this pod."
+                )
+
+            with col_h4:
+                lots = st.number_input("Lots", min_value=1, max_value=50, value=m_cfg.get("lots", 1), step=1, key=f"m_tab_lots_{selected_pod}")
+                user_lot_size = int(db.get("lot_size", "65") or "65")
+
+            with col_h5:
+                target_prem = st.number_input("Target Premium (~₹)", value=m_cfg.get("target_premium", 200.0), step=10.0, format="%.1f", key=f"m_tab_tp_{selected_pod}")
+
+            calc_qty = lots * user_lot_size
+            st.markdown(f'''
+            <div style="background: #0f172a; border: 1.5px solid #0284c7; border-radius: 8px; padding: 10px 16px; margin: 8px 0 14px 0; font-size: 0.92rem; color: #ffffff; display: flex; justify-content: space-between; align-items: center;">
+                <span>🏛️ <b style="color: #93c5fd;">{selected_pod} User Anchor:</b> ₹{user_anchor:,.2f} &bull; Spot: ₹{live_spot:,.2f}</span>
+                <span style="background: #0369a1; color: #e0f2fe; font-weight: 700; padding: 4px 12px; border-radius: 12px;">Total Order Qty: {calc_qty} units ({lots} Lots &times; {user_lot_size})</span>
+            </div>
+            ''', unsafe_allow_html=True)
+
+            col_adv1, col_adv2 = st.columns([2, 2])
+            with col_adv1:
+                cur_mode_idx = 0 if m_cfg.get("mode", "AUTO") == "AUTO" else 1
+                stk_mode = st.radio("Strike Hunter Mode", [f"Auto Hunter (~₹{target_prem:.0f} on EVEN 100s)", "Manual Strike Override"], index=cur_mode_idx, horizontal=True, key=f"m_tab_stk_mode_{selected_pod}")
+
+            m_ce = None
+            m_pe = None
+            with col_adv2:
+                if stk_mode == "Manual Strike Override":
+                    cm1, cm2 = st.columns(2)
+                    nearest_even = int(round(live_spot / 200.0) * 200)
+                    def_ce = m_cfg.get("manual_ce") or (nearest_even + 200)
+                    def_pe = m_cfg.get("manual_pe") or (nearest_even - 200)
+                    with cm1:
+                        m_ce = st.number_input("Manual CE Strike", value=int(def_ce), step=100, key=f"m_tab_man_ce_{selected_pod}")
+                    with cm2:
+                        m_pe = st.number_input("Manual PE Strike", value=int(def_pe), step=100, key=f"m_tab_man_pe_{selected_pod}")
+
+            st.markdown("<hr style='margin: 12px 0;'/>", unsafe_allow_html=True)
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                btn_fetch = st.button("🔍 Fetch & Preview Strikes", key=f"btn_m_fetch_{selected_pod}", use_container_width=True)
+            with col_b2:
+                btn_lock = st.button(f"🔒 Lock & Arm {selected_pod} Settings", key=f"btn_m_lock_{selected_pod}", use_container_width=True, type="primary")
+
+            if btn_fetch:
+                with st.spinner(f"Scanning option chain for {selected_pod}..."):
+                    st.session_state[f"m_inspection_{selected_pod}"] = bm.inspect_m_unit_candidates(
+                        expiry_date=selected_exp,
+                        unit_name=selected_pod,
+                        master_anchor_price=user_anchor,
+                        target_premium=target_prem,
+                        manual_ce_strike=m_ce,
+                        manual_pe_strike=m_pe,
+                        hedge_dist=500
+                    )
+
+            if btn_lock:
+                db.set_m_unit_settings(
+                    unit_name=selected_pod,
+                    locked=True,
+                    anchor_price=user_anchor,
+                    horizon=horizon,
+                    expiry_date=selected_exp,
+                    lots=lots,
+                    lot_size=user_lot_size,
+                    mode="MANUAL" if stk_mode == "Manual Strike Override" else "AUTO",
+                    manual_ce=m_ce or 0,
+                    manual_pe=m_pe or 0,
+                    target_premium=target_prem
+                )
+                _flash(f"✅ {selected_pod} Settings LOCKED & ARMED with Anchor ₹{user_anchor:,.2f}!", "success")
+                st.rerun()
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # INSPECTION RESULTS DISPLAY (PREVIEW CARDS)
+    # ─────────────────────────────────────────────────────────────────────────
+    inspection = st.session_state.get(f"m_inspection_{selected_pod}")
+    if inspection and inspection.get("ok"):
+        h_ce = inspection.get("ce", {})
+        h_pe = inspection.get("pe", {})
+        unit_regime = inspection.get("regime", "BEARISH")
+
+        col_ce_box, col_pe_box = st.columns(2)
+
+        with col_ce_box:
+            if h_ce.get("sell_strike"):
+                is_qual_ce = (unit_regime == "BEARISH")
+                ce_border = "#3b82f6" if is_qual_ce else "#94a3b8"
+                ce_badge = "🟢 QUALIFIED TO SELL (BEARISH REGIME)" if is_qual_ce else "⚪ ARMED IN PENDING (STANDBY)"
+
+                st.markdown(f'''
+                <div style="background: #0f172a; border: 2px solid {ce_border}; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom: 1px solid #334155; padding-bottom: 8px;">
+                        <span style="font-weight:800; font-size:1.15rem; color:#ffffff;">📞 CALL WING: {h_ce.get('sell_strike', '--')} CE</span>
+                        <span style="font-size:0.80rem; font-weight:800; color:{ce_border}; background: #1e293b; padding: 4px 10px; border-radius: 6px; border: 1px solid {ce_border};">{ce_badge}</span>
+                    </div>
+                    <div style="font-size:0.95rem; color:#ffffff; line-height:1.8;">
+                        &bull; SELL Strike: <b style="color:#ffffff; font-size:1.05rem;">{h_ce.get('sell_strike')} CE</b> (LTP: ₹{h_ce.get('sell_ltp', 0.0):.2f})<br/>
+                        &bull; 500-pt Hedge Helmet: <b style="color:#60a5fa; font-weight:700;">{h_ce.get('hedge_strike', '--')} CE</b> (LTP: ₹{h_ce.get('hedge_ltp', 0.0):.2f})<br/>
+                        &bull; Strict 25% SL Trigger: <b style="color:#fca5a5; font-weight:700;">₹{h_ce.get('sl_price', 0.0):.2f}</b> (+25% on entry fill)<br/>
+                        &bull; Net Credit: ₹{(h_ce.get('sell_ltp', 0.0) - h_ce.get('hedge_ltp', 0.0)):.2f} pts
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+            else:
+                st.markdown(f'''
+                <div style="background: #1e1b10; border: 2px solid #ef4444; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff;">
+                    <span style="font-weight:800; font-size:1.15rem; color:#f87171;">📞 CALL WING: NOT AVAILABLE</span>
+                </div>
+                ''', unsafe_allow_html=True)
+
+        with col_pe_box:
+            if h_pe.get("sell_strike"):
+                is_qual_pe = (unit_regime == "BULLISH")
+                pe_border = "#10b981" if is_qual_pe else "#94a3b8"
+                pe_badge = "🟢 QUALIFIED TO SELL (BULLISH REGIME)" if is_qual_pe else "⚪ ARMED IN PENDING (STANDBY)"
+
+                st.markdown(f'''
+                <div style="background: #0f172a; border: 2px solid {pe_border}; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom: 1px solid #334155; padding-bottom: 8px;">
+                        <span style="font-weight:800; font-size:1.15rem; color:#ffffff;">📉 PUT WING: {h_pe.get('sell_strike', '--')} PE</span>
+                        <span style="font-size:0.80rem; font-weight:800; color:{pe_border}; background: #1e293b; padding: 4px 10px; border-radius: 6px; border: 1px solid {pe_border};">{pe_badge}</span>
+                    </div>
+                    <div style="font-size:0.95rem; color:#ffffff; line-height:1.8;">
+                        &bull; SELL Strike: <b style="color:#ffffff; font-size:1.05rem;">{h_pe.get('sell_strike')} PE</b> (LTP: ₹{h_pe.get('sell_ltp', 0.0):.2f})<br/>
+                        &bull; 500-pt Hedge Helmet: <b style="color:#60a5fa; font-weight:700;">{h_pe.get('hedge_strike', '--')} PE</b> (LTP: ₹{h_pe.get('hedge_ltp', 0.0):.2f})<br/>
+                        &bull; Strict 25% SL Trigger: <b style="color:#fca5a5; font-weight:700;">₹{h_pe.get('sl_price', 0.0):.2f}</b> (+25% on entry fill)<br/>
+                        &bull; Net Credit: ₹{(h_pe.get('sell_ltp', 0.0) - h_pe.get('hedge_ltp', 0.0)):.2f} pts
+                    </div>
+                </div>
+                ''', unsafe_allow_html=True)
+            else:
+                st.markdown(f'''
+                <div style="background: #1e1b10; border: 2px solid #ef4444; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff;">
+                    <span style="font-weight:800; font-size:1.15rem; color:#f87171;">📉 PUT WING: NOT AVAILABLE</span>
+                </div>
+                ''', unsafe_allow_html=True)
+
+        # ── STEP 2: EXECUTION ACTION ─────────────────────────────────────────
+        st.markdown(f'<p class="section-title" style="margin-top:20px;">🚀 STEP 2: EXECUTE OR ARM {selected_pod} (TREND DEPLOY)</p>', unsafe_allow_html=True)
+
+        qual_wing_name = "CALL WING (BEARISH)" if unit_regime == "BEARISH" else "PUT WING (BULLISH)"
+        btn_c1, btn_c2 = st.columns([2, 1])
+
+        with btn_c1:
+            if st.button(f"🚀 Execute Qualified {qual_wing_name} Now (Manual Deploy)", key=f"btn_m_exec_now_{selected_pod}", use_container_width=True, type="primary"):
+                if not is_locked:
+                    db.set_m_unit_settings(
+                        unit_name=selected_pod,
+                        locked=True,
+                        anchor_price=user_anchor,
+                        horizon=horizon if 'horizon' in locals() else "Monthly Expiry",
+                        expiry_date=selected_exp,
+                        lots=lots,
+                        lot_size=user_lot_size,
+                        mode="MANUAL" if ('stk_mode' in locals() and stk_mode == "Manual Strike Override") else "AUTO",
+                        manual_ce=m_ce or 0,
+                        manual_pe=m_pe or 0,
+                        target_premium=target_prem
+                    )
+
+                res = bm.deploy_or_update_m_unit(
+                    unit_name=selected_pod,
+                    expiry_date=selected_exp,
+                    master_anchor_price=user_anchor,
+                    lots=lots,
+                    ce_sell_strike=h_ce.get("sell_strike", 0),
+                    ce_hedge_strike=h_ce.get("hedge_strike", 0),
+                    ce_sell_ltp=h_ce.get("sell_ltp", 0.0),
+                    ce_hedge_ltp=h_ce.get("hedge_ltp", 0.0),
+                    pe_sell_strike=h_pe.get("sell_strike", 0),
+                    pe_hedge_strike=h_pe.get("hedge_strike", 0),
+                    pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
+                    pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
+                    sl_pct=25.0,
+                    deploy_now=True
+                )
+                if res.get("ok"):
+                    _flash(f"🚀 {res.get('message')}", "success")
+                else:
+                    _flash(f"Execution note: {res.get('message')}", "error")
+                st.rerun()
+
+        with btn_c2:
+            if st.button(f"⏱️ Arm Both Wings in PENDING (Standby)", key=f"btn_m_arm_pending_{selected_pod}", use_container_width=True):
+                if not is_locked:
+                    db.set_m_unit_settings(
+                        unit_name=selected_pod,
+                        locked=True,
+                        anchor_price=user_anchor,
+                        horizon=horizon if 'horizon' in locals() else "Monthly Expiry",
+                        expiry_date=selected_exp,
+                        lots=lots,
+                        lot_size=user_lot_size,
+                        mode="MANUAL" if ('stk_mode' in locals() and stk_mode == "Manual Strike Override") else "AUTO",
+                        manual_ce=m_ce or 0,
+                        manual_pe=m_pe or 0,
+                        target_premium=target_prem
+                    )
+
+                res = bm.deploy_or_update_m_unit(
+                    unit_name=selected_pod,
+                    expiry_date=selected_exp,
+                    master_anchor_price=user_anchor,
+                    lots=lots,
+                    ce_sell_strike=h_ce.get("sell_strike", 0),
+                    ce_hedge_strike=h_ce.get("hedge_strike", 0),
+                    ce_sell_ltp=h_ce.get("sell_ltp", 0.0),
+                    ce_hedge_ltp=h_ce.get("hedge_ltp", 0.0),
+                    pe_sell_strike=h_pe.get("sell_strike", 0),
+                    pe_hedge_strike=h_pe.get("hedge_strike", 0),
+                    pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
+                    pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
+                    sl_pct=25.0,
+                    deploy_now=False
+                )
+                if res.get("ok"):
+                    _flash(f"⏱️ {selected_pod} both wings armed in PENDING in database.", "info")
+                else:
+                    _flash(f"Arming failed: {res.get('message')}", "error")
+                st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NEW BLOCK FORM (V3.0 MULTI-ANCHOR POD SETUP)
+# NEW BLOCK FORM (V5.0 "OLD & GOLD" MULTI-UNIT ARCHITECTURE)
 # ─────────────────────────────────────────────────────────────────────────────
 def render_new_block_form():
     import regime_engine as re_eng
     live_spot = re_eng.get_current_nifty_spot()
 
     with st.expander("➕ CREATE NEW BLOCK / UNIT (M1, M2, M3...)", expanded=False):
-        st.markdown('<p class="section-title">New Block Setup (V3.0 Autonomous Pod Architecture)</p>', unsafe_allow_html=True)
+        st.markdown('<p class="section-title">New Block Setup (V5.0 "Old & Gold" Multi-Unit Architecture)</p>', unsafe_allow_html=True)
         col1, col2, col3 = st.columns([2, 2, 2])
 
         with col1:
@@ -2803,7 +3142,13 @@ def render_block_management():
                 if st.button("🔴 YES, KILL IT", key=f"confirm_kill_myes_{b['block_id']}", type="primary", use_container_width=True):
                     st.session_state[f"confirm_kill_mgt_{b['block_id']}"] = False
                     with st.spinner(f"Executing Kill Switch for Block {b['block_number']}..."):
-                        r = bm.kill_block(b["block_id"])
+                        u_name = (b.get("anchor_unit_name") or "").strip().upper()
+                        if u_name.startswith("M"):
+                            r = bm.wipe_out_and_reset_m_unit(u_name)
+                        elif u_name.startswith("OS"):
+                            r = os_engine.wipe_out_and_reset_os_unit(u_name)
+                        else:
+                            r = bm.kill_block(b["block_id"])
                     if r["ok"]:
                         _flash(r["message"], "success")
                     else:
@@ -3174,6 +3519,270 @@ def render_commodity_tab():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# EMERGENCY SYSTEM SHUTDOWN & SQUARE-OFF CONSOLE (2-STEP CONFIRMED)
+# ─────────────────────────────────────────────────────────────────────────────
+def render_emergency_shutdown_bar():
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #450a0a 0%, #7f1d1d 50%, #991b1b 100%); border: 2px solid #ef4444; border-radius: 12px; padding: 14px 20px; margin-bottom: 16px; box-shadow: 0 4px 14px rgba(239,68,68,0.35);">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <span style="font-size:1.20rem; font-weight:900; color:#ffffff; letter-spacing:0.5px;">🚨 EMERGENCY SYSTEM SHUTDOWN &amp; 1-CLICK CLOSE CONSOLE</span>
+                <div style="font-size:0.85rem; color:#fecaca; margin-top:3px; font-weight:600;">
+                    Instant 1-Click Square-Off on Zerodha Kite Broker &bull; Protected by 2-Step Confirmation &bull; High Visibility for Mobile &amp; Senior Operators
+                </div>
+            </div>
+            <span style="background:#dc2626; color:#ffffff; padding:4px 12px; border-radius:8px; font-weight:800; font-size:0.85rem; border:1px solid #fca5a5;">2-STEP VERIFIED</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c_m1, c_m2, c_os = st.columns(3)
+
+    # ── M1 CLOSE ──
+    with c_m1:
+        if st.session_state.get("confirm_close_m1"):
+            st.markdown("""
+            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:12px; margin-bottom:8px; text-align:center;">
+                <b style="color:#991b1b; font-size:1.0rem;">⚠️ ARE YOU REALLY SURE?</b><br/>
+                <span style="color:#7f1d1d; font-size:0.82rem;">Immediate Market Exit of ALL M1 positions on Zerodha Kite Broker Terminal!</span>
+            </div>
+            """, unsafe_allow_html=True)
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("🔥 YES, CLOSE M1", key="btn_confirm_close_m1_yes", type="primary", use_container_width=True):
+                    with st.spinner("Squaring off M1 on Zerodha Kite..."):
+                        res = bm.wipe_out_and_reset_m_unit("M1")
+                        st.session_state["confirm_close_m1"] = False
+                        _flash(res.get("message", "M1 Closed"), "success" if res.get("ok") else "error")
+                        st.rerun()
+            with b2:
+                if st.button("❌ Cancel", key="btn_confirm_close_m1_no", use_container_width=True):
+                    st.session_state["confirm_close_m1"] = False
+                    st.rerun()
+        else:
+            if st.button("🚨 CLOSE WHOLE M1 SYSTEM", key="btn_req_close_m1", use_container_width=True, type="primary", help="Immediately squares off all M1 trades on Zerodha Kite broker, purges DB records, and resets M1 to idle."):
+                st.session_state["confirm_close_m1"] = True
+                st.rerun()
+
+    # ── M2 CLOSE ──
+    with c_m2:
+        if st.session_state.get("confirm_close_m2"):
+            st.markdown("""
+            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:12px; margin-bottom:8px; text-align:center;">
+                <b style="color:#991b1b; font-size:1.0rem;">⚠️ ARE YOU REALLY SURE?</b><br/>
+                <span style="color:#7f1d1d; font-size:0.82rem;">Immediate Market Exit of ALL M2 positions on Zerodha Kite Broker Terminal!</span>
+            </div>
+            """, unsafe_allow_html=True)
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("🔥 YES, CLOSE M2", key="btn_confirm_close_m2_yes", type="primary", use_container_width=True):
+                    with st.spinner("Squaring off M2 on Zerodha Kite..."):
+                        res = bm.wipe_out_and_reset_m_unit("M2")
+                        st.session_state["confirm_close_m2"] = False
+                        _flash(res.get("message", "M2 Closed"), "success" if res.get("ok") else "error")
+                        st.rerun()
+            with b2:
+                if st.button("❌ Cancel", key="btn_confirm_close_m2_no", use_container_width=True):
+                    st.session_state["confirm_close_m2"] = False
+                    st.rerun()
+        else:
+            if st.button("🚨 CLOSE WHOLE M2 SYSTEM", key="btn_req_close_m2", use_container_width=True, type="primary", help="Immediately squares off all M2 trades on Zerodha Kite broker, purges DB records, and resets M2 to idle."):
+                st.session_state["confirm_close_m2"] = True
+                st.rerun()
+
+    # ── WHOLE OS SYSTEM CLOSE ──
+    with c_os:
+        if st.session_state.get("confirm_close_os_all"):
+            st.markdown("""
+            <div style="background:#fef3c7; border:2px solid #d97706; border-radius:10px; padding:12px; margin-bottom:8px; text-align:center;">
+                <b style="color:#92400e; font-size:1.0rem;">⚠️ ARE YOU REALLY SURE?</b><br/>
+                <span style="color:#78350f; font-size:0.82rem;">Immediate Market Exit of ALL OS units (OS1–OS5) on Zerodha Kite Broker Terminal!</span>
+            </div>
+            """, unsafe_allow_html=True)
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("🔥 YES, CLOSE OS", key="btn_confirm_close_os_yes", type="primary", use_container_width=True):
+                    with st.spinner("Squaring off all OS units on Zerodha Kite..."):
+                        res = bm.wipe_out_and_reset_whole_os_system()
+                        st.session_state["confirm_close_os_all"] = False
+                        _flash(res.get("message", "OS System Closed"), "success" if res.get("ok") else "error")
+                        st.rerun()
+            with b2:
+                if st.button("❌ Cancel", key="btn_confirm_close_os_no", use_container_width=True):
+                    st.session_state["confirm_close_os_all"] = False
+                    st.rerun()
+        else:
+            if st.button("🚨 CLOSE WHOLE OS SYSTEM", key="btn_req_close_os_all", use_container_width=True, type="primary", help="Immediately squares off all OS units (OS1–OS5) on Zerodha Kite broker, purges DB records, and resets OS to idle."):
+                st.session_state["confirm_close_os_all"] = True
+                st.rerun()
+
+    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXECUTIVE POD MATRIX (Zerodha — Instant M-Unit & OS-Unit Clarity at Top)
+# ─────────────────────────────────────────────────────────────────────────────
+def render_executive_pod_matrix(portfolio: dict):
+    """
+    Provides 100% immediate clarity at the very top of the dashboard:
+    - Left: Directional M-Units (M1, M2, M3) with Spot vs Anchor & regime.
+    - Right: Momentum OS-Units (OS1..OS5) with 3:00 PM decay status.
+    - Direct 1-Click Quick Close buttons with 2-step confirmation.
+    """
+    block_pnls = portfolio.get("block_pnls", [])
+    try:
+        import regime_engine as _re_mat
+        live_spot = _re_mat.get_current_nifty_spot()
+    except Exception:
+        live_spot = 0.0
+
+    m_units  = [bp for bp in block_pnls if not (bp.get("block", {}).get("anchor_unit_name") or "").strip().upper().startswith("OS")]
+    os_units = [bp for bp in block_pnls if (bp.get("block", {}).get("anchor_unit_name") or "").strip().upper().startswith("OS")]
+
+    col_m, col_os = st.columns(2)
+
+    with col_m:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #1f1f2e 0%, #111119 100%); border: 2px solid #f4511e; border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; color: #ffffff;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-weight:800; font-size:1.05rem; color:#ff8a65;">🏛️ DIRECTIONAL M-UNITS (M1–M3)</span>
+                <span style="font-size:0.75rem; background:#3e1a07; color:#ffcc80; padding:2px 10px; border-radius:12px; font-weight:700;">Spot Anchor Regime</span>
+            </div>
+            <div style="font-size:0.75rem; color:#cbd5e1; margin-top:3px;">
+                Directional credit spreads governed by Spot vs Master Anchor with 25% Autonomous SL.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not m_units:
+            st.info("⚪ **All M-Units are currently IDLE / FLAT.** (No active positions)")
+        else:
+            for bp in m_units:
+                b   = bp.get("block") or {}
+                bid = bp["block_id"]
+                uname = (b.get("anchor_unit_name") or f"M{b.get('block_number',1)}").strip().upper()
+                strikes = bp.get("strikes", [])
+                open_s  = [s for s in strikes if s.get("status") in ("OPEN", "EXECUTED", "PENDING")]
+                anc_price = float(b.get("master_anchor_price") or 0.0)
+                tot_pnl   = bp.get("total_pnl", 0.0)
+                expiry    = b.get("expiry_date", "")
+
+                if open_s:
+                    pnl_col = "#22c55e" if tot_pnl >= 0 else "#ef4444"
+                    sign    = "+" if tot_pnl >= 0 else ""
+                    regime_tag = "🟢 BULLISH" if (live_spot >= anc_price if anc_price > 0 else True) else "🔴 BEARISH"
+                    legs_str   = ", ".join(f"{s['strike_price']} {s['option_type']}" for s in open_s)
+                    st.markdown(f"""
+                    <div style="background:#ffffff; border:1.5px solid #f4511e; border-radius:8px; padding:12px 14px; margin-bottom:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-weight:800; color:#b71c1c; font-size:0.95rem;">🟢 {uname} ACTIVE &bull; Exp: {expiry}</span>
+                            <span style="font-weight:800; font-family:'JetBrains Mono',monospace; color:{pnl_col}; font-size:1.05rem;">{sign}₹{abs(tot_pnl):,.2f}</span>
+                        </div>
+                        <div style="font-size:0.80rem; color:#475569; margin-top:4px;">
+                            <b>Regime:</b> {regime_tag} | <b>Anchor:</b> ₹{anc_price:,.1f} | <b>Legs:</b> {legs_str}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if st.session_state.get(f"confirm_qclose_m_{bid}"):
+                        st.markdown(f'<div style="background:#fee2e2; border:1px solid #ef4444; border-radius:6px; padding:6px; margin:4px 0; text-align:center;"><span style="color:#991b1b; font-size:0.8rem; font-weight:700;">Are you sure to close {uname}?</span></div>', unsafe_allow_html=True)
+                        c_yes, c_no = st.columns(2)
+                        with c_yes:
+                            if st.button(f"🔥 YES, Close {uname}", key=f"btn_confirm_m_{bid}_yes", type="primary", use_container_width=True):
+                                res_w = bm.wipe_out_and_reset_m_unit(uname)
+                                st.session_state[f"confirm_qclose_m_{bid}"] = False
+                                _flash(f"✅ {uname} closed on Zerodha Kite!", "success")
+                                st.rerun()
+                        with c_no:
+                            if st.button("❌ Cancel", key=f"btn_confirm_m_{bid}_no", use_container_width=True):
+                                st.session_state[f"confirm_qclose_m_{bid}"] = False
+                                st.rerun()
+                    else:
+                        if st.button(f"💥 1-Click Close {uname}", key=f"zrd_qclose_m_{bid}", use_container_width=True, type="secondary"):
+                            st.session_state[f"confirm_qclose_m_{bid}"] = True
+                            st.rerun()
+                else:
+                    st.markdown(f"""
+                    <div style="background:#f8fafc; border:1px dashed #94a3b8; border-radius:8px; padding:10px 14px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="color:#334155; font-size:0.90rem; font-weight:700;">⚪ {uname}: IDLE / FLAT</span>
+                            <span style="font-size:0.75rem; color:#64748b; margin-left:8px;">(0 Open Strikes &bull; Exp: {expiry})</span>
+                        </div>
+                        <span style="font-size:0.80rem; color:#ff5722; font-weight:600;">Anchor: ₹{anc_price:,.1f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+    with col_os:
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #1f1f2e 0%, #111119 100%); border: 2px solid #10b981; border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; color: #ffffff;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-weight:800; font-size:1.05rem; color:#34d399;">🎯 MOMENTUM OS-UNITS (OS1–OS5)</span>
+                <span style="font-size:0.75rem; background:#064e3b; color:#6ee7b7; padding:2px 10px; border-radius:12px; font-weight:700;">3:00 PM Option Decay</span>
+            </div>
+            <div style="font-size:0.75rem; color:#cbd5e1; margin-top:3px;">
+                Pure option decay momentum engine with OTM hedge helmet and 1.382 SL multiplier.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if not os_units:
+            st.info("⚪ **All OS-Units are currently IDLE / ARMED.** (No active positions)")
+        else:
+            for bp in os_units:
+                b   = bp.get("block") or {}
+                bid = bp["block_id"]
+                uname  = (b.get("anchor_unit_name") or "OS1").strip().upper()
+                strikes = bp.get("strikes", [])
+                open_s  = [s for s in strikes if s.get("status") in ("OPEN", "EXECUTED", "PENDING")]
+                tot_pnl = bp.get("total_pnl", 0.0)
+                expiry  = b.get("expiry_date", "")
+
+                if open_s:
+                    pnl_col    = "#22c55e" if tot_pnl >= 0 else "#ef4444"
+                    sign       = "+" if tot_pnl >= 0 else ""
+                    legs_detail = ", ".join(f"{s['strike_price']} {s['option_type']} ({s.get('leg_type','')})" for s in open_s)
+                    st.markdown(f"""
+                    <div style="background:#ffffff; border:1.5px solid #10b981; border-radius:8px; padding:12px 14px; margin-bottom:8px; box-shadow:0 2px 4px rgba(0,0,0,0.05);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-weight:800; color:#065f46; font-size:0.95rem;">🟢 {uname} ACTIVE &bull; Exp: {expiry}</span>
+                            <span style="font-weight:800; font-family:'JetBrains Mono',monospace; color:{pnl_col}; font-size:1.05rem;">{sign}₹{abs(tot_pnl):,.2f}</span>
+                        </div>
+                        <div style="font-size:0.80rem; color:#047857; margin-top:4px;">
+                            <b>Hedge Security:</b> 🛡️ 100% Hedged | <b>Legs ({len(open_s)}):</b> {legs_detail}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    if st.session_state.get(f"confirm_qclose_os_{bid}"):
+                        st.markdown(f'<div style="background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; padding:6px; margin:4px 0; text-align:center;"><span style="color:#92400e; font-size:0.8rem; font-weight:700;">Are you sure to close {uname}?</span></div>', unsafe_allow_html=True)
+                        c_yes, c_no = st.columns(2)
+                        with c_yes:
+                            if st.button(f"🔥 YES, Close {uname}", key=f"btn_confirm_os_{bid}_yes", type="primary", use_container_width=True):
+                                import os_engine
+                                res_w = os_engine.wipe_out_and_reset_os_unit(uname)
+                                st.session_state[f"confirm_qclose_os_{bid}"] = False
+                                _flash(f"✅ {uname} closed on Zerodha Kite!", "success")
+                                st.rerun()
+                        with c_no:
+                            if st.button("❌ Cancel", key=f"btn_confirm_os_{bid}_no", use_container_width=True):
+                                st.session_state[f"confirm_qclose_os_{bid}"] = False
+                                st.rerun()
+                    else:
+                        if st.button(f"💥 1-Click Close {uname} Entire Unit", key=f"zrd_qclose_os_{bid}", use_container_width=True, type="secondary"):
+                            st.session_state[f"confirm_qclose_os_{bid}"] = True
+                            st.rerun()
+                else:
+                    st.markdown(f"""
+                    <div style="background:#f8fafc; border:1px dashed #94a3b8; border-radius:8px; padding:10px 14px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <span style="color:#334155; font-size:0.90rem; font-weight:700;">⚪ {uname}: IDLE / ARMED</span>
+                            <span style="font-size:0.75rem; color:#64748b; margin-left:8px;">(0 Open Strikes &bull; Exp: {expiry})</span>
+                        </div>
+                        <span style="font-size:0.80rem; color:#10b981; font-weight:600;">Armed for 3:00 PM</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
@@ -3200,7 +3809,7 @@ def main():
     # Render sidebar
     render_sidebar()
 
-    # Fetch portfolio P&L
+    # Fetch portfolio P&L (uses cached LTP — never blocks)
     portfolio = _get_portfolio()
     st.session_state["portfolio_pnl"] = portfolio
 
@@ -3215,27 +3824,39 @@ def main():
 
     st.markdown("<br/>", unsafe_allow_html=True)
 
-    # Global Red Alert Popup Banner (appears across all 3 pages if any holding < 200 DMA)
+    # Global Red Alert Popup Banner (200 DMA watch)
     eq_engine.render_global_red_alert_banner()
 
-    tab_options, tab_os, tab_commodity, tab_equity = st.tabs([
-        "💰 Nifty Multi-Anchor (M1-M3)", 
-        "🎯 OS Option Selling (3:00 PM Line)",
-        "🛢️ MCX Commodities FUT", 
-        "📊 Equity & Gold (200 DMA Monitor)"
+    # ── EMERGENCY SHUTDOWN & 1-CLICK CLOSE BAR (2-Step Verified) ──
+    render_emergency_shutdown_bar()
+
+    # ── EXECUTIVE POD MATRIX (M-Units LEFT | OS-Units RIGHT) ──
+    render_executive_pod_matrix(portfolio)
+
+    st.divider()
+
+    # ── CLEAN 7-TAB ARCHITECTURE ───────────────────────────────────────────
+    tab_m, tab_os, tab_weekly_st, tab_blocks, tab_commodity, tab_equity, tab_logs = st.tabs([
+        "🏛️ Directional M-Units Cockpit (M1–M4)",
+        "🎯 Momentum OS-Units Cockpit (OS1–OS5)",
+        "⚡ Weekly ST-2H Cockpit (W1 — V7.5)",
+        "📦 Active Expiry Blocks & Live Positions",
+        "🛢️ MCX Commodities FUT",
+        "📊 Equity & Gold (200 DMA Monitor)",
+        "📜 Order History & Audit Logs"
     ])
 
-    with tab_options:
-        # Master Nifty Anchor & Single-Directional Regime Governor (Brick 4)
-        render_master_regime_controller()
+    # ── TAB 1: M-UNITS NIFTY COCKPIT ────────────────────────────────────
+    with tab_m:
+        # V6.0 Directional M-Units Cockpit (Asymmetric Trend & Auto-Hunter)
+        render_unified_v5_master_console()
 
-        # V5.0 Unified Single-Window Console ("Ek Hi Jagah Saari Chijen")
-        render_unified_v5_console()
+        st.markdown("<br/>", unsafe_allow_html=True)
 
-        # New block form (Legacy fallback)
-        render_new_block_form()
+        with st.expander("➕ Deploy New Expiry Block", expanded=False):
+            render_new_block_form()
 
-        # Active & Orphan Hedges Profit Lock Monitor
+        # Active & Orphan Hedges Monitor
         render_hedges_profit_lock_monitor(portfolio)
 
         st.markdown("<br/>", unsafe_allow_html=True)
@@ -3243,20 +3864,12 @@ def main():
         # Unit Pod Containers (M-Series Only)
         block_pnls = portfolio.get("block_pnls", [])
         m_block_pnls = [
-            bp for bp in block_pnls 
+            bp for bp in block_pnls
             if not (bp["block"].get("anchor_unit_name") or "").strip().upper().startswith("OS")
         ]
 
         if not m_block_pnls:
-            st.markdown("""
-            <div style="text-align:center;padding:60px 0;color:#374151;">
-                <div style="font-size:3rem;">📦</div>
-                <div style="font-size:1.1rem;font-weight:600;color:#6b7280;margin-top:12px;">No Active M-Series Blocks</div>
-                <div style="font-size:0.85rem;color:#374151;margin-top:6px;">
-                    Create your first block above to start trading M-series units
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.info("📦 No Active M-Series Blocks. Deploy using the form above.")
         else:
             from collections import OrderedDict
             unit_groups = OrderedDict()
@@ -3274,33 +3887,48 @@ def main():
             for (unit_name, exp_date), unit_bps in unit_groups.items():
                 render_unit_pod(unit_name, exp_date, unit_bps)
 
-        # Block management (archive/delete)
         with st.expander("⚙️ Block Management (Archive / Delete)", expanded=False):
             render_block_management()
 
+    # ── TAB 2: OS-UNITS COCKPIT ───────────────────────────────────────
     with tab_os:
         import os_engine
         os_engine.render_os_tab(portfolio)
 
+    # ── TAB 3: WEEKLY ST-2H COCKPIT (W1) ──────────────────────────────
+    with tab_weekly_st:
+        wst_engine.render_weekly_st_tab(portfolio)
+
+    # ── TAB 3: ACTIVE BLOCKS ──────────────────────────────────────────
+    with tab_blocks:
+        st.markdown('<p class="section-title">📦 Active Expiry Blocks & Live Positions</p>', unsafe_allow_html=True)
+        block_pnls_all = portfolio.get("block_pnls", [])
+        if not block_pnls_all:
+            st.info("✨ **CLEAN SLATE: 0 Active Blocks.** Deploy from the M-Units tab.")
+        else:
+            for bp in block_pnls_all:
+                b = bp.get("block") or {}
+                u_name = (b.get("anchor_unit_name") or f"M{b.get('block_number',1)}").strip().upper()
+                render_sub_block(bp, u_name, key_suffix="tab3")
+
+    # ── TAB 4: MCX COMMODITIES ─────────────────────────────────────────
     with tab_commodity:
         render_commodity_tab()
 
+    # ── TAB 5: EQUITY 200 DMA ─────────────────────────────────────────
     with tab_equity:
         eq_engine.render_equity_tab()
 
-
-    # Trade history log
-    if st.session_state.get("show_trade_log"):
+    # ── TAB 6: AUDIT LOGS ───────────────────────────────────────────
+    with tab_logs:
         render_trade_log()
-
-    # Paper Mode notice removed
 
     # Footer
     st.markdown("---")
     updated = portfolio.get("last_updated", "--")
     st.markdown(
         f'<div style="text-align:center;font-size:0.68rem;color:#374151;">'
-        f'Zerodha OptionSelling Engine v1.01 | NIFTY Only | Port 9007 | '
+        f'Zerodha OptionSelling Engine V5.0 Old & Gold | NIFTY Only | Port 9007 | '
         f'Last updated: {updated}'
         f'</div>',
         unsafe_allow_html=True,

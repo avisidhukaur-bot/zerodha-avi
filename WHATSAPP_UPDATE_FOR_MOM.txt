@@ -1,0 +1,46 @@
+🚨 *ZERODHA DASHBOARD — BIG BUTTON & 2-STEP SAFETY CONFIRMATION UPGRADE* 🚨
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 28 September 2026
+👤 *For*: Mom / Trading Desk
+🌐 *Dashboard Live*: http://5.75.250.104:9007
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mom ke feedback ke hisaab se Dashboard par sabhi buttons ko **BOHOT BADA, BOLD AUR 100% CLEAR** kar diya gaya hai, sath hi **Accidental Click Protection (Galti se close hone se bachane ke liye 2-Step Confirmation)** add kar diya gaya hai.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 *1️⃣ M-SERIES UNITS (M1, M2, M3...) KE LIYE:*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Nifty Multi-Anchor Tab me har Unit (M1, M2, M3) ke card ke neeche ek **Bada Red Danger Banner aur Button** add ho gaya hai:
+  👉 **`🛑 CLOSE ALL TRADES & DELETE UNIT M1`** (ya M2, M3)
+
+🔒 *2-Step Accidental Click Protection*:
+1. **Pehle Click par**: Trade turant close nahi hogi! Screen par ek bada warning box khulega:
+   *"⚠️ ARE YOU REALLY SURE YOU WANT TO CLOSE & DELETE UNIT M1?"*
+2. **Dusre Click par (Confirmation)**:
+   • 🔴 **`YES, CONFIRM CLOSE & DELETE NOW`** (Ispe click karte hi saare Sell & Hedge trades close honge aur block delete hoga)
+   • 🟢 **`NO, CANCEL (KEEP ACTIVE)`** (Ispe click karte hi action cancel ho jayega)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 *2️⃣ OS-SYSTEM (OS1, OS2...) KE LIYE:*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• OS Option Selling Tab me bhi Pod ke neeche ek **Bada Red Button** add kiya gaya hai:
+  👉 **`🛑 CLOSE ALL TRADES & WIPE OUT OS1 (BOOK PROFIT / RESET)`**
+
+🔒 *2-Step Accidental Click Protection*:
+1. **Pehle Click par**: Ek bada red warning box khulega:
+   *"⚠️ ARE YOU REALLY SURE YOU WANT TO CLOSE & WIPE OUT OS1?"*
+2. **Dusre Click par (Confirmation)**:
+   • 🔴 **`YES, CONFIRM CLOSE & WIPE OUT NOW`** (Kite par saare trades close honge, profit book hoga aur OS1 wipe out ho jayega)
+   • 🟢 **`NO, CANCEL (KEEP OS1 ACTIVE)`** (Action cancel ho jayega)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✨ *3️⃣ MOBILE & TOUCH-FRIENDLY DESIGN*:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Sabhi buttons ki height badi (48px+) kar di gayi hai.
+• Font size bada, mota (bold) aur high-contrast red/gradient color me hai.
+• Mobile par bina zoom kiye 1 second me saaf-saaf dikhega aur asani se touch hoga.
+• Galti se click hone ka koi risk nahi hai!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ *Live Status*: Yeh upgrade VPS server par deploy ho chuka hai aur active hai.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

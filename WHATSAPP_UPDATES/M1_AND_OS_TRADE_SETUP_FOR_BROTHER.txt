@@ -1,0 +1,88 @@
+📊 *ZERODHA ALGO V5.2 — M1 & OS NEW TRADE SETUP GUIDE* 📊
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 01 October 2026
+📈 *NIFTY Live Spot*: ~`22,480`
+📆 *Target Expiry*: **`27-Oct-2026`** (Monthly Expiry)
+👤 *For*: Bhai ke liye Decision & WhatsApp Guide (Copy-Paste)
+🌐 *System*: Zerodha Option Selling V5.2 (Port 9007)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bhai, purani saari trades clean close ho chuki hain (Account me 0 open exposure hai). Current market weakness aur option chain decay ke mutabiq **M1** aur **OS** ke best trade options ye rahe:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 *1️⃣ LIVE MARKET & DECAY REALITY*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Aaj Nifty gir raha hai (`22,480` spot).
+• 🟢 **Call Options (CE)**: Zabardast decay ho rahe hain (-22% down from yesterday close). CE bechna sabse safe aur profitable hai.
+• ⚠️ **Put Options (PE)**: Market girne ki wajah se premium badh rahe hain (+33% up). Direct PE sell nahi karna hai, isko armed/pending rakhna hai.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 *2️⃣ OPTION A: M1 TRADE SETUP (Master Anchor Grid)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Agar hume **M1 Unit** lagana hai:
+
+📍 *Master Anchor Price*: **`22,480.00`** *(ya `22,500.00`)*
+
+🔴 *CALL WING (CE SIDE)*:
+• *Sell Strike (Even)*: **`23000 CE`** ➔ Premium: **~₹139.10**
+  *(Safer Option: `23200 CE` @ ~₹88.25)*
+• *Hedge Strike (500-pt)*: **`23500 CE`** ➔ Premium: **~₹45.40**
+• *25% Stop Loss Trigger*: **₹173.85** *(for 23000 CE)* / **₹110.30** *(for 23200 CE)*
+
+🟢 *PUT WING (PE SIDE)*:
+• *Sell Strike (Even)*: **`22000 PE`** ➔ Premium: **~₹132.05**
+  *(Safer Option: `21800 PE` @ ~₹95.00)*
+• *Hedge Strike (500-pt)*: **`21500 PE`** ➔ Premium: **~₹57.55**
+• *25% Stop Loss Trigger*: **₹165.05** *(for 22000 PE)* / **₹118.75** *(for 21800 PE)*
+
+⚡ *M1 Execution Rule*:
+Kyunki Spot (`22,480`) Anchor (`22,480`/`22,500`) ke neeche hai:
+1. Software turant **`23500 CE` Hedge BUY** karega.
+2. Uske baad **`23000 CE` SELL** karega (Live Execute).
+3. Put Wing ko sidelines par **PENDING (Armed)** rakhega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ *3️⃣ OPTION B: OS TRADE SETUP (Pure Option Momentum)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Agar hume **OS Engine** se trade karna hai:
+
+🏆 *CALL SIDE (CE) — 🟢 100% QUALIFIED DECAY TRADE*:
+• *Sell Strike*: **`23100 CE`** ➔ Premium: **~₹111.35** *(Yesterday Close: ₹142.65)*
+  *(Higher Premium Option: `23000 CE` @ ~₹139.10)*
+• *Hedge Strike (500-pt)*: **`23600 CE`** ➔ Premium: **~₹35.90**
+• *Net Premium Capture*: **~₹75.45 / share** (~₹4,900 per lot)
+• *Stop Loss*: **₹154.20** *(1.382 SL)* / **₹139.20** *(25% SL)*
+
+⚠️ *PUT SIDE (PE) — PENDING / ARMED SIDE*:
+• *Sell Strike*: **`21900 PE`** (~₹112.20) ya **`21800 PE`** (~₹95.00)
+• *Hedge Strike (500-pt)*: **`21400 PE`** (~₹49.05) ya **`21300 PE`** (~₹42.85)
+• *Note*: Market sambhalne par jab Put decay hoga tabhi ye trigger hoga.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 *4️⃣ AAPKE LIYE FINAL RECOMMENDATION (BEST DECISION)*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. **Agar Single Best & Safest Trade Chahiye**:
+   👉 **OS Call Trade (`23100 CE` Sell + `23600 CE` Hedge)** lagayein. Ye aaj 22% decay ho chuka hai aur theta harvest karega.
+
+2. **Agar Dual-Sided Grid Manage Karna Hai**:
+   👉 **M1 Deploy karein (Anchor `22480`)**. Software pehle Call leg live bechega aur Put leg ko safe sidelines par rakhega.
+
+---
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🖥️ *DASHBOARD SE DEPLOY KAISE KAREIN*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Dashboard (`http://5.75.250.104:9007`) open karein.
+2. *Unified V5 Deployer* me:
+   • **Unit Pod**: `M1`
+   • **Expiry**: `27-Oct-2026`
+   • **Master Anchor**: `22480.00`
+   • **Lots**: `1` ya `2` lots
+3. **"Deploy Unified V5"** click karein!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

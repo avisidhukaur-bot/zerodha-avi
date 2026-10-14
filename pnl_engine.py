@@ -320,10 +320,6 @@ def calc_strike_pnl(strike: dict, ltp: float) -> dict:
         "ltp_available": ltp_avail if status == "OPEN" else (exit_price > 0),
         "hedge_strike_id": strike.get("hedge_strike_id"),
         "expiry_date"  : strike.get("expiry_date"),
-        "sl_price"     : float(strike.get("sl_price") or 0.0),
-        "sl_pct"       : float(strike.get("sl_pct") or 25.0),
-        "trade_state"  : strike.get("trade_state", "PENDING"),
-        "reentry_enabled": strike.get("reentry_enabled", 1),
     }
 
 
@@ -594,7 +590,46 @@ def run_pnl_cycle() -> dict:
     except Exception as sync_err:
         _log(f"Error syncing positions: {sync_err}", "ERROR")
 
-    # Run Master Nifty Multi-Unit Regime Evaluation (V3.0 Autonomous Multi-Anchor Units)
+    # ── Active Broker Terminal Reconciliation & Naked Short Sentinel (Rule 6) ──
+    try:
+        from kite_executor import kite_executor
+        import block_manager as bm
+        import telegram_bot as tg
+        if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
+            broker_pos = kite_executor.get_net_positions() or []
+            if broker_pos:
+                pos_summary = ", ".join([f"{p['trading_symbol']} ({p['side']} {abs(p['net_qty'])})" for p in broker_pos])
+                _log(f"[BROKER POSITIONS LIVE] Net Open on Zerodha: {pos_summary}", "CYCLE")
+
+                # Active Naked Short Sentinel: Compare Live Short vs Long Quantities
+                short_ce_qty = sum(abs(p['net_qty']) for p in broker_pos if p.get('side') == 'SHORT' and (p.get('option_type') or '').upper() in ('CE', 'CALL'))
+                long_ce_qty = sum(abs(p['net_qty']) for p in broker_pos if p.get('side') == 'LONG' and (p.get('option_type') or '').upper() in ('CE', 'CALL'))
+                short_pe_qty = sum(abs(p['net_qty']) for p in broker_pos if p.get('side') == 'SHORT' and (p.get('option_type') or '').upper() in ('PE', 'PUT'))
+                long_pe_qty = sum(abs(p['net_qty']) for p in broker_pos if p.get('side') == 'LONG' and (p.get('option_type') or '').upper() in ('PE', 'PUT'))
+
+                naked_ce = short_ce_qty - long_ce_qty
+                naked_pe = short_pe_qty - long_pe_qty
+
+                if naked_ce > 0 or naked_pe > 0:
+                    ce_line = f"⚠️ NAKED CE SHORT: {naked_ce} Qty unhedged!\n" if naked_ce > 0 else ""
+                    pe_line = f"⚠️ NAKED PE SHORT: {naked_pe} Qty unhedged!\n" if naked_pe > 0 else ""
+                    err_msg = (
+                        f"🚨 <b>CRITICAL EMERGENCY: NAKED SHORT POSITION DETECTED ON ZERODHA!</b> 🚨\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{ce_line}"
+                        f"{pe_line}"
+                        f"Broker Positions: {pos_summary}\n"
+                        f"Action: Auto-Emergency Sentinel Protection Initiated!"
+                    )
+                    _log(err_msg, "ALERT")
+                    tg.send(err_msg)
+
+                    # Trigger auto-protection
+                    bm.reconcile_and_auto_protect_naked_shorts(broker_pos, naked_ce, naked_pe)
+    except Exception as ex_recon:
+        _log(f"Broker position reconciliation error: {ex_recon}", "WARN")
+
+    # Run Master Nifty Multi-Unit Regime Evaluation (V5.0 Old & Gold Multi-Anchor Units)
     try:
         import regime_engine as re_eng
         regime_res = re_eng.evaluate_all_block_regimes()
@@ -621,84 +656,73 @@ def run_pnl_cycle() -> dict:
             now_time_str = now_ist.strftime("%H:%M")
             today_str = now_ist.strftime("%Y-%m-%d")
             
-            # ── 14:57–15:00 IST Continuation Decision Check (Runs once daily before 3:00 PM VWAP session) ──
-            last_3pm_date = db.get("last_3pm_continuation_date", "")
-            m_start_time = getattr(cfg, "M_DECISION_WINDOW_START", "14:57")
-            if now_time_str >= m_start_time and now_time_str < "15:30" and last_3pm_date != today_str:
-                _log(f"⏰ [M-DECISION] Triggering {m_start_time} IST M-Unit Master Anchor Continuation Decision...", "CYCLE")
-                try:
-                    re_eng.execute_3pm_master_anchor_decision()
-                    db.set("last_3pm_continuation_date", today_str)
-                except Exception as e_3pm:
-                    _log(f"Error in M-Unit Continuation decision: {e_3pm}", "ERROR")
-
             for b in blocks:
                 # Skip PAUSED blocks
                 if not b.get("is_enabled", 1):
                     continue
-                # 1. V5 Stop-Loss Exit Check (Decoupled from M1, percentage-based or absolute SL price)
+                # 1. Stop-Loss Exit Check (Runs every cycle / every 30 seconds)
                 strikes = db.get_strikes_by_block(b["block_id"], status_filter="OPEN")
                 for s in strikes:
                     if s["leg_type"] == "SELL":
                         strike_id = s["strike_id"]
-                        anchor_price = float(s.get("anchor_price", 0.0))
+                        anchor_price = float(s["anchor_price"])
+                        sl_price = float(s.get("sl_price") or 0.0)
+                        sl_pct = float(s.get("sl_pct") or 25.0)
                         
-                        open_leg = db.get_open_leg(strike_id)
-                        entry_price = float(open_leg["entry_price"]) if open_leg else anchor_price
-                        if entry_price <= 0:
-                            entry_price = anchor_price
-                            
                         ltp = fetch_ltp(s, force_refresh=True)
                         if ltp <= 0:
                             continue
                             
-                        # V5 Percentage SL calculation (Guaranteed >= 25% away from entry)
-                        sl_pct = float(s.get("sl_pct") or 25.0)
-                        sl_price = float(s.get("sl_price") or 0.0)
-                        
+                        buffer_tolerance = float(db.get("buffer_tolerance", "2.0"))
                         if sl_price > 0:
                             exit_threshold = sl_price
-                        elif entry_price > 0:
-                            exit_threshold = entry_price * (1.0 + (sl_pct / 100.0))
-                            db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exit_threshold)
-                        elif anchor_price > 0:
-                            exit_threshold = anchor_price * (1.0 + (sl_pct / 100.0))
-                            db.update_strike_sl_config(strike_id, sl_pct=sl_pct, sl_price=exit_threshold)
+                            sl_desc = f"SL Trigger ₹{sl_price:.2f}"
+                        elif sl_pct > 0 and anchor_price > 0:
+                            exit_threshold = round(anchor_price * (1.0 + (sl_pct / 100.0)), 2)
+                            sl_desc = f"SL {sl_pct:.1f}% (₹{exit_threshold:.2f})"
                         else:
-                            exit_threshold = 999999.0  # Safe guard: never trigger at LTP
-                            
-                        _log(f"[AUTO-EXIT-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP=₹{ltp:.2f} | Entry=₹{entry_price:.2f} | SL={sl_pct}% (Threshold=₹{exit_threshold:.2f})", "CYCLE")
+                            exit_threshold = anchor_price + buffer_tolerance
+                            sl_desc = f"Anchor ₹{anchor_price:.2f} + Buffer ₹{buffer_tolerance:.2f}"
+                        
+                        _log(f"[AUTO-EXIT-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP={ltp:.2f} | Threshold={exit_threshold:.2f} ({sl_desc})", "CYCLE")
                         
                         if ltp >= exit_threshold:
-                            _log(f"[AUTO-EXIT] LTP ₹{ltp:.2f} >= Threshold ₹{exit_threshold:.2f} ({sl_pct}% SL) for Strike {s['strike_price']} {s['option_type']}. Triggering close...", "WARN")
+                            _log(f"[AUTO-EXIT] LTP {ltp:.2f} >= Threshold {exit_threshold:.2f} ({sl_desc}) for Strike {s['strike_price']} {s['option_type']}. Triggering close...", "WARN")
                             
-                            # V5 Invariant: close_hedge=False: NEVER auto-liquidate long hedge!
+                            # V5.0 Orphan Hedge Invariant: Never auto-close the hedge on parent SL hit.
+                            # Preserve orphan hedge as capital shield!
                             res = bm.close_strike(strike_id, close_hedge=False)
                             db.update_strike_trade_state(strike_id, "SL_HIT")
-                            
-                            # Preserve hedge as ORPHAN
-                            hedge_id = s.get("hedge_strike_id")
-                            if hedge_id:
-                                db.update_strike_trade_state(hedge_id, "ORPHAN")
-                                
                             block_num = b["block_number"]
-                            unit_name = b.get("anchor_unit_name", f"M{block_num}")
                             
-                            if res.get("ok"):
+                            # Determine hedge status for the alert
+                            hedge_id = s.get("hedge_strike_id")
+                            hedge_info = db.get_strike(hedge_id) if hedge_id else None
+                            hedge_status_msg = ""
+                            if hedge_info and hedge_info["status"] == "OPEN":
+                                hedge_status_msg = (
+                                    f"🛡️ Orphan Hedge ({hedge_info['strike_price']} {hedge_info['option_type']}): PRESERVED UNTOUCHED (V5.0)\n"
+                                    f"   → Retained as tail-risk protection. Manual profit-lock available in Dashboard."
+                                )
+                            else:
+                                hedge_status_msg = "🛡️ Hedge: No linked hedge found."
+                            
+                            if res["ok"]:
                                 alert_msg = (
-                                    f"🚨 <b>V5 STOP LOSS TRIGGERED</b> 🚨\n"
-                                    f"Unit <b>{unit_name}</b> (Block #{block_num}) | Strike <b>{s['strike_price']} {s['option_type']} SELL</b>\n"
-                                    f"Entry: ₹<b>{entry_price:.2f}</b> | SL Trigger ({sl_pct}%): ₹<b>{exit_threshold:.2f}</b> | Exit LTP: ₹<b>{ltp:.2f}</b>\n"
+                                    f"🚨 <b>AUTO-EXIT STOP LOSS TRIGGERED</b> 🚨\n"
+                                    f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
+                                    f"Reason: LTP ₹{ltp:.2f} breached {sl_desc}\n"
                                     f"✅ Sell leg CLOSED on broker.\n"
-                                    f"🛡️ <b>ORPHAN HEDGE PRESERVED</b>: Long hedge left active as capital shield."
+                                    f"{hedge_status_msg}"
                                 )
                                 tg.send(alert_msg)
                             else:
                                 alert_msg = (
-                                    f"⚠️ <b>STOP LOSS EXECUTION FAILED</b> ⚠️\n"
+                                    f"⚠️ <b>AUTO-EXIT FAILED</b> ⚠️\n"
                                     f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
-                                    f"Error: {res.get('message')}\n"
-                                    f"<b>Action required: Please close manually from Dashboard!</b>"
+                                    f"Reason: LTP ₹{ltp:.2f} breached threshold ₹{exit_threshold:.2f}\n"
+                                    f"Error: {res['message']}\n"
+                                    f"<b>⚠️ Action required: Please close manually on Zerodha!</b>"
                                 )
                                 tg.send(alert_msg)
                                     
@@ -706,282 +730,222 @@ def run_pnl_cycle() -> dict:
                 # GUARD (Fix #2): Only consider re-entry for:
                 #   a) Strikes closed TODAY (same trading day)
                 #   b) Block has not yet expired
-                #   c) We are still within market trading hours (before 15:36 IST)
+                #   c) We are still within active trading hours (before 15:13 IST)
                 #   d) Master Regime ALLOWS this option type (PE in Bullish, CE in Bearish)
-                is_market_open_for_reentry = now_time_str < "15:36"
-                if not is_market_open_for_reentry:
-                    pass  # Skip re-entry after 15:36 — EOD watchdog handles hedge close below
+                active_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:13")
+                is_market_open_for_reentry = now_time_str < active_cutoff
+                is_os_unit = (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")
+                if not is_market_open_for_reentry or is_os_unit:
+                    pass  # Skip re-entry after 15:13 or for OS units (OS units do not use spot re-entry)
                 else:
                     closed_strikes = db.get_strikes_by_block(b["block_id"], status_filter="CLOSED")
                     for s in closed_strikes:
-                        if s["leg_type"] == "SELL":
-                            strike_id = s["strike_id"]
-                            anchor_price = float(s["anchor_price"])
-
-                            # MASTER REGIME GOVERNOR CHECK (V3.0 Multi-Unit Pod Gating)
-                            is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(s["option_type"], block=b)
-                            if not is_allowed:
-                                _log(f"[RE-ENTRY-MUTED] Strike {s['strike_price']} {s['option_type']} (Unit {b.get('anchor_unit_name', 'M')}): {regime_reason}. Skipping re-entry.", "CYCLE")
-                                continue
-
-                            
-                            # GUARD: Only re-enter if the sell was closed TODAY
-                            legs = db.get_legs_by_strike(strike_id)
-                            closed_today_count = 0
-                            last_exit_dt = None
-                            for leg in legs:
-                                exit_time = leg.get("exit_time", "")
-                                if exit_time and exit_time.startswith(today_str):
-                                    closed_today_count += 1
-                                    try:
-                                        exit_dt = datetime.strptime(exit_time, "%Y-%m-%d %H:%M:%S")
-                                        if last_exit_dt is None or exit_dt > last_exit_dt:
-                                            last_exit_dt = exit_dt
-                                    except Exception:
-                                        pass
-                                        
-                            if closed_today_count == 0:
-                                continue  # Strike was not closed today — skip re-entry
-
-                            # WHIPSAW PROTECTION 1: Max daily re-entry limit (0 = Unlimited)
-                            max_reentries_per_day = int(db.get("max_reentries_per_day", "0"))
-                            if max_reentries_per_day > 0 and closed_today_count > max_reentries_per_day:
-                                _log(f"[RE-ENTRY-BLOCKED] Strike {s['strike_price']} {s['option_type']}: Daily re-entry limit ({max_reentries_per_day}) reached today (Closed count={closed_today_count}). Skipping re-entry.", "CYCLE")
-                                continue
-
-                            # WHIPSAW PROTECTION 2: Cooldown timer since last exit
-                            cooldown_sec = int(db.get("reentry_cooldown_sec", "300"))
-                            if last_exit_dt:
-                                elapsed_sec = (now_ist.replace(tzinfo=None) - last_exit_dt).total_seconds()
-                                if elapsed_sec < cooldown_sec:
-                                    _log(f"[RE-ENTRY-BLOCKED] Strike {s['strike_price']} {s['option_type']}: Cooldown active ({elapsed_sec:.0f}s / {cooldown_sec}s since last exit). Skipping re-entry.", "CYCLE")
-                                    continue
-                            
-                            # GUARD: Block must not be expired
-                            block_expiry = b.get("expiry_date", "")
-                            if block_expiry:
-                                try:
-                                    exp_date = datetime.strptime(block_expiry, "%d-%b-%Y").date()
-                                    if exp_date < now_ist.date():
-                                        continue  # Block expired — skip re-entry
-                                except Exception as parse_err:
-                                    _log(f"Error parsing expiry date '{block_expiry}' for re-entry check: {parse_err}", "WARN")
-                            
-                            # Verify linked hedge strike exists (if CLOSED, bm.execute_strike will re-buy hedge first)
-                            hedge_id = s.get("hedge_strike_id")
-                            if not hedge_id:
-                                continue
-                            
-                            hedge_strike = db.get_strike(hedge_id)
-                            if not hedge_strike or hedge_strike["status"] not in ("OPEN", "PENDING", "CLOSED"):
-                                continue
-                            
-                            # BROKER GROUND TRUTH PRE-CHECK: Prevent duplicate re-entry if position already open on broker
-                            sym_info = bm._resolve_symbol(s)
-                            if sym_info:
-                                b_qty = kite_executor.get_net_position_qty(sym_info["trading_symbol"])
-                                if b_qty != 0:
-                                    _log(f"[BROKER-GROUND-TRUTH] Strike {sym_info['trading_symbol']} already held on broker (Qty: {b_qty}). Syncing DB to OPEN and skipping re-entry.", "INFO")
-                                    db.update_strike_status(strike_id, "OPEN")
-                                    db.update_strike_trade_state(strike_id, "ACTIVE")
-                                    continue
-
-                            ltp = fetch_ltp(s, force_refresh=True)
-                            if ltp <= 0:
-                                continue
-                                
-                            # WHIPSAW PROTECTION 3: Re-entry Discount Buffer & Continuous 5-Minute Hold
-                            reentry_discount_buffer = float(db.get("reentry_discount_buffer", "1.0"))
-                            reentry_threshold = anchor_price - reentry_discount_buffer
-                            entry_delay_sec = int(db.get("entry_delay_seconds", "300"))
-                                
-                            _log(f"[RE-ENTRY-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP={ltp:.2f} | Re-entry Threshold={reentry_threshold:.2f} (Anchor={anchor_price:.2f} - Buffer={reentry_discount_buffer:.2f})", "CYCLE")
-                            
-                            if ltp <= reentry_threshold:
-                                # Continuous below-anchor timer check
-                                if entry_delay_sec > 0:
-                                    t_trigger = float(db.get(f"reentry_trigger_time_{strike_id}", "0"))
-                                    if t_trigger == 0:
-                                        db.set(f"reentry_trigger_time_{strike_id}", str(time.time()))
-                                        _log(f"[RE-ENTRY-TIMER-START] Strike {s['strike_price']} {s['option_type']}: LTP ₹{ltp:.2f} <= ₹{reentry_threshold:.2f}. Starting 5-minute ({entry_delay_sec}s) continuous hold countdown...", "WARN")
-                                        continue
-                                    else:
-                                        hold_duration = time.time() - t_trigger
-                                        if hold_duration < entry_delay_sec:
-                                            rem_sec = entry_delay_sec - hold_duration
-                                            _log(f"[RE-ENTRY-TIMER-WAIT] Strike {s['strike_price']} {s['option_type']}: Held below anchor for {hold_duration:.0f}s / {entry_delay_sec}s. {rem_sec:.0f}s remaining before re-entry.", "CYCLE")
-                                            continue
-                                
-                                # 5-minute continuous hold satisfied -> Trigger re-entry
-                                db.set(f"reentry_trigger_time_{strike_id}", "0")
-                                _log(f"[RE-ENTRY] LTP {ltp:.2f} continuously held below Anchor {anchor_price:.2f} for 5 min for Strike {s['strike_price']} {s['option_type']}. Triggering re-entry...", "WARN")
-                                
-                                res = bm.execute_strike(strike_id)
-                                block_num = b["block_number"]
-                                
-                                if res["ok"]:
-                                    alert_msg = (
-                                        f"🔄 <b>AUTO-RE-ENTRY TRIGGERED (5-Min Confirmed)</b> 🔄\n"
-                                        f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
-                                        f"Reason: LTP ₹{ltp:.2f} continuously stayed below Anchor ₹{anchor_price:.2f} for 5 minutes\n"
-                                        f"✅ Re-entered SELL leg on broker (using existing open hedge)."
-                                    )
-                                    tg.send(alert_msg)
-                                else:
-                                    alert_msg = (
-                                        f"⚠️ <b>AUTO-RE-ENTRY FAILED</b> ⚠️\n"
-                                        f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
-                                        f"Reason: LTP ₹{ltp:.2f} fell back below Anchor ₹{anchor_price:.2f}\n"
-                                        f"Error: {res['message']}\n"
-                                        f"<b>⚠️ Action required: Please review from Dashboard!</b>"
-                                    )
-                                    tg.send(alert_msg)
-                            else:
-                                # Price bounced back above threshold -> Reset 5-minute countdown immediately (Anti-whipsaw)
-                                if float(db.get(f"reentry_trigger_time_{strike_id}", "0")) > 0:
-                                    db.set(f"reentry_trigger_time_{strike_id}", "0")
-                                    _log(f"[RE-ENTRY-TIMER-RESET] Strike {s['strike_price']} {s['option_type']}: LTP ₹{ltp:.2f} rose above threshold ₹{reentry_threshold:.2f}. 5-Min timer reset.", "CYCLE")
-
-                    # 2b. Auto-Entry for Pending Strikes (Runs every cycle / every 30 seconds)
-                    # If a strike is PENDING, we auto-execute it if LTP < anchor_price continuously for 5 min AND Master Regime permits it.
-                    pending_strikes = db.get_strikes_by_block(b["block_id"], status_filter="PENDING")
-                    for s in pending_strikes:
-                        if s["leg_type"] == "SELL":
-                            strike_id = s["strike_id"]
-                            anchor_price = float(s["anchor_price"])
-
-                            # MODE 2 GUARD (Time-Staggered Anti-Overcrowding):
-                            # M-units (M1, M2, M3...) execute at 14:57 IST.
-                            # OS-units (OS1, OS2...) execute at 15:01 IST (Staggered by 4 mins to prevent broker order clashes).
-                            # Manual entry, modifications, and cuts from Dashboard remain 100% available anytime.
-                            auto_entry_mode = db.get("auto_entry_mode", "MODE_2_3PM").upper()
-                            is_os_unit = (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")
-                            target_auto_time = getattr(cfg, "OS_AUDIT_WINDOW_START", "15:01") if is_os_unit else getattr(cfg, "M_DECISION_WINDOW_START", "14:57")
-                            if auto_entry_mode in ("MODE_2_3PM", "3PM_ONLY") and now_time_str < target_auto_time:
-                                continue
-
-                            # MASTER REGIME GOVERNOR CHECK (V3.0 Multi-Unit Pod Gating)
-                            is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(s["option_type"], block=b)
-                            if not is_allowed:
-                                _log(f"[PENDING-ENTRY-MUTED] Strike {s['strike_price']} {s['option_type']} (Unit {b.get('anchor_unit_name', 'M')}): {regime_reason}. Skipping auto-entry.", "CYCLE")
-                                continue
-
-                            # BROKER GROUND TRUTH PRE-CHECK: Prevent duplicate entry if position already open on broker
-                            sym_info = bm._resolve_symbol(s)
-                            if sym_info:
-                                b_qty = kite_executor.get_net_position_qty(sym_info["trading_symbol"])
-                                if b_qty != 0:
-                                    _log(f"[BROKER-GROUND-TRUTH] Strike {sym_info['trading_symbol']} already held on broker (Qty: {b_qty}). Syncing DB to OPEN and skipping auto-entry.", "INFO")
-                                    db.update_strike_status(strike_id, "OPEN")
-                                    db.update_strike_trade_state(strike_id, "ACTIVE")
-                                    continue
-
-                            ltp = fetch_ltp(s, force_refresh=True)
-                            if ltp <= 0:
-                                continue
-                                
-                            _log(f"[PENDING-ENTRY-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP={ltp:.2f} | Anchor={anchor_price:.2f}", "CYCLE")
-                            
-                            buffer_tolerance = float(db.get("buffer_tolerance", "2.0"))
-                            entry_delay_sec = int(db.get("entry_delay_seconds", "300"))
-                            
-                            if (0 < ltp <= anchor_price + buffer_tolerance) or anchor_price <= 0:
-                                # Continuous below-anchor timer check for initial entry
-                                if entry_delay_sec > 0 and anchor_price > 0:
-                                    t_trigger = float(db.get(f"entry_trigger_time_{strike_id}", "0"))
-                                    if t_trigger == 0:
-                                        db.set(f"entry_trigger_time_{strike_id}", str(time.time()))
-                                        _log(f"[PENDING-TIMER-START] Strike {s['strike_price']} {s['option_type']}: LTP ₹{ltp:.2f} <= Anchor ₹{anchor_price:.2f}. Starting 5-minute ({entry_delay_sec}s) countdown...", "WARN")
-                                        continue
-                                    else:
-                                        hold_duration = time.time() - t_trigger
-                                        if hold_duration < entry_delay_sec:
-                                            rem_sec = entry_delay_sec - hold_duration
-                                            _log(f"[PENDING-TIMER-WAIT] Strike {s['strike_price']} {s['option_type']}: Held below anchor for {hold_duration:.0f}s / {entry_delay_sec}s. {rem_sec:.0f}s remaining before entry.", "CYCLE")
-                                            continue
-
-                                # 5-minute continuous hold satisfied -> Trigger entry
-                                db.set(f"entry_trigger_time_{strike_id}", "0")
-                                _log(f"[PENDING-ENTRY] LTP {ltp:.2f} <= Anchor {anchor_price:.2f} continuously held for 5 min for Strike {s['strike_price']} {s['option_type']}. Triggering entry...", "WARN")
-                                
-                                res = bm.execute_strike(strike_id)
-                                block_num = b["block_number"]
-                                
-                                if res["ok"]:
-                                    alert_msg = (
-                                        f"🚀 <b>AUTO-ENTRY TRIGGERED (5-Min Confirmed)</b> 🚀\n"
-                                        f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
-                                        f"Reason: LTP ₹{ltp:.2f} continuously stayed below Anchor ₹{anchor_price:.2f} for 5 minutes\n"
-                                        f"✅ Executed new Hedge Buy & Sell leg on broker."
-                                    )
-                                    tg.send(alert_msg)
-                                else:
-                                    alert_msg = (
-                                        f"⚠️ <b>AUTO-ENTRY FAILED</b> ⚠️\n"
-                                        f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
-                                        f"Reason: LTP ₹{ltp:.2f} fell below Anchor ₹{anchor_price:.2f}\n"
-                                        f"Error: {res['message']}\n"
-                                        f"<b>⚠️ Action required: Please review from Dashboard!</b>"
-                                    )
-                                    tg.send(alert_msg)
-                            else:
-                                # Price rose above anchor -> Reset timer immediately
-                                if float(db.get(f"entry_trigger_time_{strike_id}", "0")) > 0:
-                                    db.set(f"entry_trigger_time_{strike_id}", "0")
-                                    _log(f"[PENDING-TIMER-RESET] Strike {s['strike_price']} {s['option_type']}: LTP ₹{ltp:.2f} rose above Anchor ₹{anchor_price:.2f}. 5-Min timer reset.", "CYCLE")
-
-            
-            # ── 3. EOD Hedge Orphan Watchdog (Fix #1) ────────────────────────
-            # After 15:36 IST, find any SELL strike that is CLOSED but its
-            # linked hedge is still OPEN (orphaned hedge). Auto-schedule hedge
-            # close via PENDING_CLOSE queue. This covers the case where:
-            #   - Auto-exit fired with close_hedge=False (re-entry window)
-            #   - Re-entry did NOT happen before trading cutoff (15:36)
-            #   - Hedge is now stranded open with no one to close it
-            if now_time_str >= "15:36":
-                _log("Running EOD hedge orphan watchdog...", "CYCLE")
-                orphan_key_prefix = "eod_orphan_warned_"
-                for b in blocks:
-                    closed_sells = db.get_strikes_by_block(b["block_id"], status_filter="CLOSED")
-                    for s in closed_sells:
                         if s["leg_type"] != "SELL":
                             continue
-                        if s.get("trade_state") == "CONTINUED":
-                            continue  # Positional trade carried forward overnight — DO NOT TOUCH!
+                        if int(s.get("reentry_enabled", 1)) == 0:
+                            continue
+
+                        strike_id = s["strike_id"]
+                        anchor_price = float(s["anchor_price"])
+
+                        # MASTER REGIME GOVERNOR CHECK (V3.0 Multi-Unit Pod Gating)
+                        is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(s["option_type"], block=b)
+                        if not is_allowed:
+                            _log(f"[RE-ENTRY-MUTED] Strike {s['strike_price']} {s['option_type']} (Unit {b.get('anchor_unit_name', 'M')}): {regime_reason}. Skipping re-entry.", "CYCLE")
+                            continue
+
+                        
+                        # GUARD: Only re-enter if the sell was closed TODAY
+                        legs = db.get_legs_by_strike(strike_id)
+                        closed_today_count = 0
+                        last_exit_dt = None
+                        for leg in legs:
+                            exit_time = leg.get("exit_time", "")
+                            if exit_time and exit_time.startswith(today_str):
+                                closed_today_count += 1
+                                try:
+                                    exit_dt = datetime.strptime(exit_time, "%Y-%m-%d %H:%M:%S")
+                                    if last_exit_dt is None or exit_dt > last_exit_dt:
+                                        last_exit_dt = exit_dt
+                                except Exception:
+                                    pass
+                                    
+                        if closed_today_count == 0:
+                            continue  # Strike was not closed today — skip re-entry
+
+                        # WHIPSAW PROTECTION 1: Max daily re-entry limit (0 = Unlimited)
+                        max_reentries_per_day = int(db.get("max_reentries_per_day", "0"))
+                        if max_reentries_per_day > 0 and closed_today_count > max_reentries_per_day:
+                            _log(f"[RE-ENTRY-BLOCKED] Strike {s['strike_price']} {s['option_type']}: Daily re-entry limit ({max_reentries_per_day}) reached today (Closed count={closed_today_count}). Skipping re-entry.", "CYCLE")
+                            continue
+
+                        # WHIPSAW PROTECTION 2: Cooldown timer since last exit
+                        cooldown_sec = int(db.get("reentry_cooldown_sec", "300"))
+                        if last_exit_dt:
+                            elapsed_sec = (now_ist.replace(tzinfo=None) - last_exit_dt).total_seconds()
+                            if elapsed_sec < cooldown_sec:
+                                _log(f"[RE-ENTRY-BLOCKED] Strike {s['strike_price']} {s['option_type']}: Cooldown active ({elapsed_sec:.0f}s / {cooldown_sec}s since last exit). Skipping re-entry.", "CYCLE")
+                                continue
+                        
+                        # GUARD: Block must not be expired
+                        block_expiry = b.get("expiry_date", "")
+                        if block_expiry:
+                            exp_date = None
+                            for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y", "%d/%m/%Y", "%Y%m%d"):
+                                try:
+                                    exp_date = datetime.strptime(str(block_expiry).strip(), fmt).date()
+                                    break
+                                except (ValueError, TypeError):
+                                    continue
+                            if exp_date and exp_date < now_ist.date():
+                                continue  # Block expired — skip re-entry
+                            elif not exp_date:
+                                _log(f"Error parsing expiry date '{block_expiry}' for re-entry check", "WARN")
+                        
+                        # Verify linked hedge strike exists (if CLOSED, bm.execute_strike will re-buy hedge first)
                         hedge_id = s.get("hedge_strike_id")
                         if not hedge_id:
                             continue
-                        hedge = db.get_strike(hedge_id)
-                        if not hedge or hedge["status"] != "OPEN" or hedge.get("trade_state") == "CONTINUED":
+                        
+                        hedge_strike = db.get_strike(hedge_id)
+                        if not hedge_strike or hedge_strike["status"] not in ("OPEN", "PENDING", "CLOSED"):
                             continue
                         
-                        # Found an orphaned open hedge — schedule it for immediate close
-                        warn_key = f"{orphan_key_prefix}{hedge_id}_{today_str}"
-                        already_warned = db.get(warn_key, "")
-                        if already_warned:
-                            continue  # Already queued today
+                        ltp = fetch_ltp(s, force_refresh=True)
+                        if ltp <= 0:
+                            continue
+                            
+                        # WHIPSAW PROTECTION 3: Re-entry Discount Buffer
+                        reentry_discount_buffer = float(db.get("reentry_discount_buffer", "1.0"))
+                        reentry_threshold = anchor_price - reentry_discount_buffer
+                            
+                        _log(f"[RE-ENTRY-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP={ltp:.2f} | Re-entry Threshold={reentry_threshold:.2f} (Anchor={anchor_price:.2f} - Buffer={reentry_discount_buffer:.2f})", "CYCLE")
                         
-                        _log(
-                            f"[EOD-WATCHDOG] Orphaned hedge found: Strike {hedge['strike_price']} "
-                            f"{hedge['option_type']} HEDGE_BUY (id={hedge_id}) for closed SELL "
-                            f"{s['strike_price']} {s['option_type']} (id={s['strike_id']}). "
-                            f"Scheduling for immediate close.",
-                            "WARN"
-                        )
-                        
-                        # Schedule it via the standard PENDING_CLOSE queue
-                        db.update_strike_status(hedge_id, "PENDING_CLOSE")
-                        db.set(f"pending_close_time_{hedge_id}", str(time.time()))  # immediate
-                        db.set(warn_key, "1")  # Mark as warned/queued for today
-                        
-                        tg.send(
-                            f"🛡️ <b>EOD HEDGE ORPHAN DETECTED & QUEUED</b>\n"
-                            f"Block {b['block_number']} | Hedge {hedge['strike_price']} "
-                            f"{hedge['option_type']} HEDGE_BUY\n"
-                            f"Sell leg {s['strike_price']} {s['option_type']} was closed earlier today.\n"
-                            f"Trading cutoff reached (after 15:36). Scheduling hedge close now.\n"
-                            f"⏳ Background engine will execute hedge exit shortly."
-                        )
+                        if ltp <= reentry_threshold:
+                            _log(f"[RE-ENTRY] LTP {ltp:.2f} < Anchor {anchor_price:.2f} for Strike {s['strike_price']} {s['option_type']}. Triggering re-entry...", "WARN")
+                            
+                            res = bm.execute_strike(strike_id)
+                            block_num = b["block_number"]
+                            
+                            if res["ok"]:
+                                db.update_strike_trade_state(strike_id, "OPEN")
+                                alert_msg = (
+                                    f"🔄 <b>AUTO-RE-ENTRY TRIGGERED</b> 🔄\n"
+                                    f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
+                                    f"Reason: LTP ₹{ltp:.2f} fell back below Anchor ₹{anchor_price:.2f}\n"
+                                    f"✅ Re-entered SELL leg on broker (using existing open hedge)."
+                                )
+                                tg.send(alert_msg)
+                            else:
+                                alert_msg = (
+                                    f"⚠️ <b>AUTO-RE-ENTRY FAILED</b> ⚠️\n"
+                                    f"Block {block_num} | Strike {s['strike_price']} {s['option_type']} SELL\n"
+                                    f"Reason: LTP ₹{ltp:.2f} fell back below Anchor ₹{anchor_price:.2f}\n"
+                                    f"Error: {res['message']}\n"
+                                    f"<b>⚠️ Action required: Please review from Dashboard!</b>"
+                                )
+                                tg.send(alert_msg)
+
+                    # 2b. Auto-Entry for Pending Strikes (Runs every cycle / every 30 seconds)
+                    # If a strike is PENDING, we auto-execute it if LTP < anchor_price AND Master Regime permits it.
+                    # STRICT CUTOFF: No new pending entries allowed at or after 15:13 IST
+                    # STRICT FIREWALL: OS units NEVER auto-execute from 30s cycle; only manual or 15:00 IST audit!
+                    uname = (b.get("anchor_unit_name") or "").strip().upper()
+                    if uname.startswith("OS"):
+                        continue
+
+                    # POST-3PM / EOD ENTRY FREEZE for M-Units:
+                    # Once the 3:00 PM Master Decision runs (or after 14:55), M-units must NEVER
+                    # auto-enter fresh pending trades into market close.
+                    is_3pm_frozen = (db.get("last_3pm_decision_date", "") == today_str) or (now_time_str >= "14:55")
+                    if is_3pm_frozen and not uname.startswith("OS"):
+                        continue
+
+                    if now_time_str < active_cutoff:
+                        pending_strikes = db.get_strikes_by_block(b["block_id"], status_filter="PENDING")
+                        for s in pending_strikes:
+                            if s["leg_type"] == "SELL":
+                                strike_id = s["strike_id"]
+                                anchor_price = float(s["anchor_price"])
+
+                                # MASTER REGIME GOVERNOR CHECK (V3.0 Multi-Unit Pod Gating)
+                                is_allowed, regime_reason = re_eng.is_strike_allowed_by_regime(s["option_type"], block=b)
+                                if not is_allowed:
+                                    _log(f"[PENDING-ENTRY-MUTED] Strike {s['strike_price']} {s['option_type']} (Unit {b.get('anchor_unit_name', 'M')}): {regime_reason}. Skipping auto-entry.", "CYCLE")
+                                    continue
+
+                                # V8.0 ASYMMETRIC TREND-ALIGNED ENTRY:
+                                # When Spot crosses the Magical Line (Master Anchor), trend-aligned deployment
+                                # is permitted as an asymmetric hedge. An existing opposing leg is held peacefully
+                                # under 25% SL protection until the 15:00 IST audit. It does NOT block trend-aligned entry.
+                                if not uname.startswith("OS"):
+                                    strikes_in_b = db.get_strikes_by_block(b["block_id"])
+                                    opposing_opt = "PE" if s["option_type"].upper() == "CE" else "CE"
+                                    has_open_opposing = any(
+                                        other_s["leg_type"] == "SELL" and other_s["status"] == "OPEN" and other_s["option_type"].upper() == opposing_opt
+                                        for other_s in strikes_in_b
+                                    )
+                                    if has_open_opposing:
+                                        _log(f"[PENDING-ENTRY-ASYMMETRIC] Unit {uname}: Trend-aligned {s['option_type']} entering as asymmetric hedge while opposing {opposing_opt} is running (protected by 25% SL).", "INFO")
+
+                                ltp = fetch_ltp(s, force_refresh=True)
+                                if ltp <= 0:
+                                    continue
+
+                                _log(f"[PENDING-ENTRY-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP={ltp:.2f} | Anchor={anchor_price:.2f}", "CYCLE")
+
+                                buffer_tolerance = float(db.get("buffer_tolerance", "2.0"))
+                                if (0 < ltp <= anchor_price + buffer_tolerance) or anchor_price <= 0:
+                                    _log(f"[PENDING-ENTRY] Triggering dynamic entry for Unit {uname} {s['strike_price']} {s['option_type']}...", "WARN")
+
+                                    # V6.3 JIT Dynamic Auto-Hunter & Floor Guard:
+                                    # Rather than blindly executing the stale pre-drafted strike,
+                                    # query live option chain for fresh ~200 strike and enforce >= 70% floor!
+                                    if uname.startswith("M"):
+                                        res = bm.hunt_and_execute_jit_m_strike(b["block_id"], s["option_type"], pending_strike_id=strike_id)
+                                    else:
+                                        res = bm.execute_strike(strike_id)
+
+                                    block_num = b["block_number"]
+                                    if res.get("skipped_below_floor"):
+                                        # Do nothing further, junk decayed trade safely rejected
+                                        continue
+
+                                    if res.get("ok"):
+                                        fill_stk = res.get("fill_strike", s["strike_price"])
+                                        fill_p = res.get("fill_price", ltp)
+                                        alert_msg = (
+                                            f"🚀 <b>AUTO-ENTRY TRIGGERED</b> 🚀\n"
+                                            f"Block {block_num} ({uname}) | Strike {fill_stk} {s['option_type']} SELL\n"
+                                            f"Reason: LTP ₹{fill_p:.2f} executed via JIT Hunter\n"
+                                            f"✅ Executed fresh Hedge Buy & Sell leg on broker."
+                                        )
+                                        tg.send(alert_msg)
+                                    else:
+                                        alert_msg = (
+                                            f"⚠️ <b>AUTO-ENTRY FAILED</b> ⚠️\n"
+                                            f"Block {block_num} ({uname}) | Strike {s['strike_price']} {s['option_type']} SELL\n"
+                                            f"Reason: {res.get('message')}\n"
+                                            f"<b>⚠️ Action required: Please review from Dashboard!</b>"
+                                        )
+                                        tg.send(alert_msg)
+
+            
+            # ── 3. EOD Hedge Orphan Watchdog (V5.1 Broker Ground Truth & Rule 7 Guard) ──
+            # Cardinal Law: Under ZERO circumstances may the system square off a Long Hedge
+            # if there is ANY live Short position on the Zerodha broker terminal.
+            # Delegated to bm.sweep_orphan_hedges_now() which enforces live broker cross-matching.
+            orphan_sweep_time = getattr(cfg, "ORPHAN_SWEEP_START", "15:13")
+            if now_time_str >= orphan_sweep_time:
+                last_sweep = db.get("last_eod_hedge_sweep_date", "")
+                if last_sweep != today_str:
+                    _log("🧹 EOD ORPHAN HEDGE WATCHDOG TRIGGERED: Running broker-ground-truth guarded sweep...", "SWEEP")
+                    try:
+                        res_swp = bm.sweep_orphan_hedges_now()
+                        db.set("last_eod_hedge_sweep_date", today_str)
+                        _log(f"🧹 EOD Orphan Hedge Sweep Complete! Closed: {res_swp.get('closed_count', 0)}", "OK")
+                    except Exception as ex_swp:
+                        _log(f"EOD Orphan Hedge Sweep error: {ex_swp}", "WARN")
         except Exception as ae_err:
             _log(f"Error in P&L cycle auto-exit/watchdog: {ae_err}", "ERROR")
 

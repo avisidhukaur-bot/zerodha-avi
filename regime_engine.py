@@ -50,24 +50,65 @@ def get_current_nifty_spot() -> float:
 
 def is_strike_allowed_by_regime(option_type: str, block: Optional[dict] = None) -> Tuple[bool, str]:
     """
-    Checks if a given option_type ('CE' or 'PE') is permitted.
-    PURE OPTION MOMENTUM INVARIANT:
-    Option Selling is independent of Nifty Spot index price. Both Call (CE) and Put (PE)
-    wings are allowed simultaneously based strictly on each strike's individual option premium decay.
+    Checks if a given option_type ('CE' or 'PE') is permitted under Master Regime.
+    In V3.0, prioritizes the block's own Unit Master Anchor and regime state.
+    Returns: (is_allowed: bool, reason: str)
     """
+    # OS units (Option Selling) are pure option decay driven — strictly bypass spot regime!
+    if block:
+        uname = (block.get("anchor_unit_name") or "").strip().upper()
+        if uname.startswith("OS"):
+            return True, f"OS Unit {uname} is pure option decay driven (Spot regime bypassed)"
+
+    mode = db.get_regime_mode()
+    if mode == "OFF":
+        return True, "Regime governor is OFF (Dual-sided allowed)"
+
     opt_type_upper = str(option_type).strip().upper()
 
-    # If block is strictly single-sided (e.g. user created a pure 'CALL' or pure 'PUT' container):
+    # 1. Block-Level Unit Regime (V3.0 Autonomous Pods)
     if block:
-        b_side = (block.get("side_type") or "BOTH").strip().upper()
-        if b_side == "CALL" and opt_type_upper != "CE":
-            return False, f"Block is configured for CALL side only (PE not permitted in this block)"
-        if b_side == "PUT" and opt_type_upper != "PE":
-            return False, f"Block is configured for PUT side only (CE not permitted in this block)"
-        return True, f"🟢 ALLOWED: Dual-Sided Pure Option Price Action Active ({opt_type_upper})"
+        if not block.get("auto_regime_enabled", 1):
+            return True, f"Unit {block.get('anchor_unit_name', 'M')} auto-governor is disabled"
 
-    return True, f"🟢 ALLOWED: Pure Option Price Action Active ({opt_type_upper})"
+        b_anchor = float(block.get("master_anchor_price") or 0.0)
+        if b_anchor > 0:
+            b_regime = (block.get("current_regime") or "NEUTRAL").strip().upper()
+            unit_name = block.get("anchor_unit_name") or f"M{block.get('block_number', '')}"
+            if b_regime == "BULLISH":
+                if opt_type_upper == "PE":
+                    return True, f"🟢 BULLISH Unit {unit_name}: PE Selling Active"
+                else:
+                    return False, f"🔴 MUTED: Unit {unit_name} is BULLISH (Only PE selling allowed, CE muted)"
+            elif b_regime == "BEARISH":
+                if opt_type_upper == "CE":
+                    return True, f"🔴 BEARISH Unit {unit_name}: CE Selling Active"
+                else:
+                    return False, f"🟢 MUTED: Unit {unit_name} is BEARISH (Only CE selling allowed, PE muted)"
+            else:
+                return True, f"⚪ NEUTRAL Unit {unit_name}: Dual-sided allowed"
 
+    # 2. Global Master Anchor Fallback (V2.0 Legacy)
+    anchor = db.get_master_nifty_anchor()
+    if anchor <= 0:
+        return True, "Master Anchor not set (Dual-sided allowed)"
+
+    active_regime = db.get_active_regime()
+
+    if active_regime == "BULLISH":
+        if opt_type_upper == "PE":
+            return True, "🟢 BULLISH Regime: PE Selling Active"
+        else:
+            return False, "🔴 MUTED: Regime is BULLISH (Only PE selling allowed, CE muted)"
+
+    elif active_regime == "BEARISH":
+        if opt_type_upper == "CE":
+            return True, "🔴 BEARISH Regime: CE Selling Active"
+        else:
+            return False, "🟢 MUTED: Regime is BEARISH (Only CE selling allowed, PE muted)"
+
+    # NEUTRAL
+    return True, "NEUTRAL Regime (Both sides allowed)"
 
 
 def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, force_eval: bool = False) -> Dict[str, Any]:
@@ -79,7 +120,24 @@ def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, for
 
     block_id = block["block_id"]
     block_num = block.get("block_number", block_id)
-    unit_name = block.get("anchor_unit_name") or f"M{block_num}"
+    unit_name = (block.get("anchor_unit_name") or f"M{block_num}").strip().upper()
+
+    # STRICT FIREWALL: OS units (Option Selling) are driven by pure option decay at 3:00 PM.
+    # They have ZERO relation to spot price and MUST NEVER be evaluated or auto-traded by the Spot Regime Engine!
+    if unit_name.startswith("OS"):
+        return {
+            "block_id": block_id,
+            "unit_name": unit_name,
+            "anchor": 0.0,
+            "buffer": 0.0,
+            "spot": current_spot if current_spot else 0.0,
+            "regime": "NEUTRAL",
+            "shifted": False,
+            "closed_opposing": 0,
+            "deployed_aligned": 0,
+            "message": f"Unit {unit_name} is an OS Option Selling pod. Spot regime evaluation strictly ignored."
+        }
+
     anchor = float(block.get("master_anchor_price") or 0.0)
     buffer_pts = float(block.get("regime_buffer") or 15.0)
     old_regime = (block.get("current_regime") or "NEUTRAL").strip().upper()
@@ -108,56 +166,118 @@ def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, for
                 "message": f"Unit {unit_name} Anchor not set."
             }
 
-    # Regime calculation with hysteresis buffer
+    # ── Regime calculation with hysteresis buffer & 5-minute stay confirmation timer ──
+    # Minimum continuous stay duration in seconds (default: 300s = 5 minutes)
+    required_stay_sec = float(db.get("regime_stay_duration_sec", "300") or 300)
+    now_ts = time.time()
+
     new_regime = old_regime
     if old_regime == "BULLISH":
         bearish_trigger = anchor - buffer_pts
         if current_spot < bearish_trigger:
-            new_regime = "BEARISH"
-            _log(f"[UNIT-FLIP] Unit {unit_name} Spot ₹{current_spot:.2f} < Bearish Trigger ₹{bearish_trigger:.2f} (Anchor {anchor:.2f} - Buffer {buffer_pts:.2f}). Flipping BULLISH ➔ BEARISH!", "WARN")
+            if force_eval:
+                new_regime = "BEARISH"
+                db.set(f"breakout_ts_bearish_{block_id}", "0")
+                _log(f"[UNIT-FLIP] Unit {unit_name} Spot ₹{current_spot:.2f} < Bearish Trigger ₹{bearish_trigger:.2f} (Force Eval). Flipping BULLISH ➔ BEARISH!", "WARN")
+            else:
+                raw_ts = db.get(f"breakout_ts_bearish_{block_id}", "0")
+                b_start = float(raw_ts) if raw_ts and raw_ts != "0" else 0.0
+                if b_start <= 0:
+                    db.set(f"breakout_ts_bearish_{block_id}", str(now_ts))
+                    new_regime = "BULLISH"
+                    _log(f"[UNIT-STAY-TIMER] Unit {unit_name} Spot ₹{current_spot:.2f} < Bearish Trigger ₹{bearish_trigger:.2f}. Timer started: awaiting {required_stay_sec:.0f}s (5 min) sustained breakdown.", "INFO")
+                else:
+                    elapsed = now_ts - b_start
+                    if elapsed >= required_stay_sec:
+                        new_regime = "BEARISH"
+                        db.set(f"breakout_ts_bearish_{block_id}", "0")
+                        _log(f"[UNIT-FLIP-CONFIRMED] Unit {unit_name} Spot ₹{current_spot:.2f} stayed below ₹{bearish_trigger:.2f} for {elapsed:.1f}s (>= {required_stay_sec:.0f}s). Confirmed 5-Min Breakdown! Flipping BULLISH ➔ BEARISH!", "WARN")
+                    else:
+                        new_regime = "BULLISH"
+                        _log(f"[UNIT-AWAITING-CONFIRMATION] Unit {unit_name} Spot ₹{current_spot:.2f} < Bearish Trigger ₹{bearish_trigger:.2f} ({elapsed:.0f}/{required_stay_sec:.0f}s sustained). Maintaining BULLISH until 5-min confirmed.", "INFO")
         else:
+            # Spot recovered back above bearish trigger -> reset timer!
+            raw_ts = db.get(f"breakout_ts_bearish_{block_id}", "0")
+            if raw_ts and raw_ts != "0":
+                db.set(f"breakout_ts_bearish_{block_id}", "0")
+                _log(f"[UNIT-STAY-RESET] Unit {unit_name} Spot ₹{current_spot:.2f} bounced back above Bearish Trigger ₹{bearish_trigger:.2f}. Resetting 5-min timer.", "INFO")
             new_regime = "BULLISH"
+
     elif old_regime == "BEARISH":
         bullish_trigger = anchor + buffer_pts
         if current_spot > bullish_trigger:
-            new_regime = "BULLISH"
-            _log(f"[UNIT-FLIP] Unit {unit_name} Spot ₹{current_spot:.2f} > Bullish Trigger ₹{bullish_trigger:.2f} (Anchor {anchor:.2f} + Buffer {buffer_pts:.2f}). Flipping BEARISH ➔ BULLISH!", "WARN")
+            if force_eval:
+                new_regime = "BULLISH"
+                db.set(f"breakout_ts_bullish_{block_id}", "0")
+                _log(f"[UNIT-FLIP] Unit {unit_name} Spot ₹{current_spot:.2f} > Bullish Trigger ₹{bullish_trigger:.2f} (Force Eval). Flipping BEARISH ➔ BULLISH!", "WARN")
+            else:
+                raw_ts = db.get(f"breakout_ts_bullish_{block_id}", "0")
+                b_start = float(raw_ts) if raw_ts and raw_ts != "0" else 0.0
+                if b_start <= 0:
+                    db.set(f"breakout_ts_bullish_{block_id}", str(now_ts))
+                    new_regime = "BEARISH"
+                    _log(f"[UNIT-STAY-TIMER] Unit {unit_name} Spot ₹{current_spot:.2f} > Bullish Trigger ₹{bullish_trigger:.2f}. Timer started: awaiting {required_stay_sec:.0f}s (5 min) sustained breakout.", "INFO")
+                else:
+                    elapsed = now_ts - b_start
+                    if elapsed >= required_stay_sec:
+                        new_regime = "BULLISH"
+                        db.set(f"breakout_ts_bullish_{block_id}", "0")
+                        _log(f"[UNIT-FLIP-CONFIRMED] Unit {unit_name} Spot ₹{current_spot:.2f} stayed above ₹{bullish_trigger:.2f} for {elapsed:.1f}s (>= {required_stay_sec:.0f}s). Confirmed 5-Min Breakout! Flipping BEARISH ➔ BULLISH!", "WARN")
+                    else:
+                        new_regime = "BEARISH"
+                        _log(f"[UNIT-AWAITING-CONFIRMATION] Unit {unit_name} Spot ₹{current_spot:.2f} > Bullish Trigger ₹{bullish_trigger:.2f} ({elapsed:.0f}/{required_stay_sec:.0f}s sustained). Maintaining BEARISH until 5-min confirmed.", "INFO")
         else:
+            # Spot fell back below bullish trigger -> reset timer!
+            raw_ts = db.get(f"breakout_ts_bullish_{block_id}", "0")
+            if raw_ts and raw_ts != "0":
+                db.set(f"breakout_ts_bullish_{block_id}", "0")
+                _log(f"[UNIT-STAY-RESET] Unit {unit_name} Spot ₹{current_spot:.2f} fell back below Bullish Trigger ₹{bullish_trigger:.2f}. Resetting 5-min timer.", "INFO")
             new_regime = "BEARISH"
     else:
-        # Initial resolution
-        if current_spot >= anchor:
+        # Initial resolution with Hysteresis Buffer Guard
+        bullish_trigger = anchor + buffer_pts
+        bearish_trigger = anchor - buffer_pts
+        if current_spot >= bullish_trigger:
             new_regime = "BULLISH"
-        else:
+        elif current_spot <= bearish_trigger:
             new_regime = "BEARISH"
-        _log(f"[UNIT-INIT] Unit {unit_name} regime initialized to {new_regime} (Spot ₹{current_spot:.2f} vs Anchor ₹{anchor:.2f})", "REGIME")
+        else:
+            new_regime = "NEUTRAL"
+        _log(f"[UNIT-INIT] Unit {unit_name} regime initialized to {new_regime} (Spot ₹{current_spot:.2f} vs Anchor ₹{anchor:.2f} ± {buffer_pts:.1f}pts)", "REGIME")
 
     db.update_block_regime(block_id, new_regime)
 
-    regime_shifted = (new_regime != old_regime and old_regime in ("BULLISH", "BEARISH")) or force_eval
-
-    # In V5.0 'Old & Gold' Architecture:
-    # 1. Intraday anchor crossings do NOT liquidate open trades (positions breathe for theta decay).
-    # 2. At 15:00 IST (3:00 PM), the Continuation Decision officially continues favorable side and closes counter side.
-    # 3. Kill & Flip is only executed if force_eval is True or if regime_mode is explicitly set to AUTO_FLIP.
-    regime_mode = db.get("regime_mode", "V5_DECOUPLED").upper()
-    allow_intraday_liquidate = (regime_mode == "AUTO_FLIP") or force_eval
+    regime_shifted = (new_regime != old_regime and old_regime in ("BULLISH", "BEARISH", "NEUTRAL") and new_regime in ("BULLISH", "BEARISH")) or force_eval
 
     closed_opposing_count = 0
     deployed_aligned_count = 0
     closed_strike_summaries = []
 
-    if regime_shifted and allow_intraday_liquidate:
-        _log(f"Unit {unit_name} executing Isolated Kill & Flip: {old_regime} ➔ {new_regime} (Spot=₹{current_spot:.2f}, Anchor=₹{anchor:.2f})", "ALERT")
-        opposing_opt = "CE" if new_regime == "BULLISH" else "PE"
-        aligned_opt = "PE" if new_regime == "BULLISH" else "CE"
+    opposing_opt = "CE" if new_regime == "BULLISH" else "PE"
+    aligned_opt = "PE" if new_regime == "BULLISH" else "CE"
 
-        # Phase 1: Emergency cover opposing short legs in this unit ONLY
+    strikes = db.get_strikes_by_block(block_id)
+    has_open_aligned = any(
+        s["leg_type"] == "SELL" and s["status"] == "OPEN" and s["option_type"].upper() == aligned_opt
+        for s in strikes
+    )
+    has_open_opposing = any(
+        s["leg_type"] == "SELL" and s["status"] == "OPEN" and s["option_type"].upper() == opposing_opt
+        for s in strikes
+    )
+
+    now_ist_str = datetime.now(IST).strftime("%H:%M")
+    is_3pm_or_later = (now_ist_str >= "15:00") or force_eval
+
+    # Phase 1: Enforce single-direction for THIS UNIT at 3:00 PM: Auto-close open opposing SELL legs
+    # V5.0 DECOUPLED MASTER ANCHOR RULE: Intraday market crosses of the Master Anchor
+    # do NOT close trades continuously during market hours. Closures are evaluated strictly at 3:00 PM (15:00 IST).
+    if is_3pm_or_later and (regime_shifted or has_open_opposing):
         open_strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
         for s in open_strikes:
             if s["leg_type"] == "SELL" and s["option_type"].upper() == opposing_opt:
                 strike_id = s["strike_id"]
-                _log(f"[UNIT-{unit_name}-KILL] Emergency Market-Cover for opposing strike {s['strike_price']} {s['option_type']}...", "ALERT")
+                _log(f"[UNIT-{unit_name}-KILL] Market-Cover for opposing strike {s['strike_price']} {s['option_type']} (3:00 PM Continuation)...", "ALERT")
                 try:
                     res = bm.close_strike(strike_id, close_hedge=False)
                     if res.get("ok"):
@@ -165,44 +285,75 @@ def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, for
                         closed_strike_summaries.append(f"Unit {unit_name} Block #{block_num} | {s['strike_price']} {s['option_type']} SELL")
                 except Exception as k_err:
                     _log(f"[UNIT-{unit_name}-KILL-EXCEPTION] Error: {k_err}", "ERROR")
+    elif regime_shifted and not is_3pm_or_later:
+        _log(f"[UNIT-{unit_name}] Intraday Spot cross detected ({new_regime}). In V5.0, active trades are held peacefully for theta decay; Master Anchor continuation is evaluated at 3:00 PM IST.", "INFO")
 
-        # Phase 2: Deploy trend-aligned strikes in this unit ONLY
-        strikes = db.get_strikes_by_block(block_id)
-        for s in strikes:
-            if s["leg_type"] == "SELL" and s["option_type"].upper() == aligned_opt:
-                strike_id = s["strike_id"]
-                status = s.get("status")
-                if status in ("PENDING", "CLOSED"):
-                    anchor_p = float(s.get("anchor_price", 0.0))
-                    try:
-                        import pnl_engine as pe
-                        s_ltp = pe.fetch_ltp(s, force_refresh=True)
-                        buffer_tol = float(db.get("buffer_tolerance", "2.0"))
-                        if (0 < s_ltp <= anchor_p + buffer_tol) or anchor_p <= 0 or (status == "PENDING" and s_ltp <= 0):
-                            _log(f"[UNIT-{unit_name}-DEPLOY] Deploying trend-aligned strike {s['strike_price']} {s['option_type']} (LTP ₹{s_ltp:.2f} <= Anchor ₹{anchor_p:.2f})...", "OK")
-                            exec_res = bm.execute_strike(strike_id)
-                            if exec_res.get("ok"):
-                                deployed_aligned_count += 1
-                    except Exception as d_err:
-                        _log(f"[UNIT-{unit_name}-DEPLOY-EXCEPTION] Error: {d_err}", "ERROR")
+    # Phase 2: Asymmetric Trend-Aligned Deployment for THIS UNIT (Before 14:55 Cutoff)
+    # V6.0 / V8.0 ASYMMETRIC EXECUTION RULE:
+    # When Spot crosses Master Anchor / Magical Line, initiate trend-aligned side (e.g. Call sell in Bearish regime).
+    # An existing opposing leg is NOT cut midday and does NOT block initiation; it is protected by its 25% SL.
+    today_ymd = datetime.now(IST).strftime("%Y-%m-%d")
+    is_3pm_frozen = (now_ist_str >= "14:55") or (db.get("last_3pm_decision_date", "") == today_ymd)
+    
+    should_deploy_aligned = (
+        new_regime in ("BULLISH", "BEARISH")
+        and not has_open_aligned
+        and not is_3pm_frozen
+        and not unit_name.startswith("OS")
+    )
 
-        # Telegram Alert for Unit Regime Shift
-        if new_regime != old_regime and old_regime in ("BULLISH", "BEARISH"):
+    if should_deploy_aligned:
+        if has_open_opposing:
+            _log(f"[UNIT-{unit_name}] Asymmetric Directional Initiation: {aligned_opt} triggered under {new_regime} Regime (Spot ₹{current_spot:,.2f} vs Anchor ₹{anchor:,.2f}). Running {opposing_opt} protected by 25% SL until 3:00 PM audit.", "INFO")
+
+        jit_deployed = False
+        if unit_name.startswith("M") and hasattr(bm, "hunt_and_execute_jit_m_strike"):
+            # V6.3 JIT Dynamic Auto-Hunter:
+            # Dynamically find current EVEN 100-multiple closest to target premium (~200) and enforce floor
             try:
-                alert_text = (
-                    f"🧭 <b>UNIT {unit_name} REGIME SHIFT</b> 🧭\n"
-                    f"Unit: <b>{unit_name}</b> (Block #{block_num})\n"
-                    f"Transition: <b>{old_regime} ➔ {new_regime}</b>\n"
-                    f"Live Spot: ₹{current_spot:,.2f} | Unit Anchor: ₹{anchor:,.2f} (±{buffer_pts:.1f}pts)\n"
-                    f"Opposing Covered: {closed_opposing_count} leg(s)\n"
-                    f"Trend-Aligned Deployed: {deployed_aligned_count} leg(s)\n"
-                    f"<i>Unit Pod Isolation: Other units unaffected.</i>"
-                )
-                tg.send(alert_text)
-            except Exception as tg_err:
-                _log(f"Error sending unit regime shift alert: {tg_err}", "WARN")
-    elif regime_shifted:
-        _log(f"Unit {unit_name} Regime shifted {old_regime} ➔ {new_regime} (Spot ₹{current_spot:.2f} vs Anchor ₹{anchor:.2f}). V5 Intraday Decoupled: Positions held peacefully for theta decay.", "INFO")
+                jit_res = bm.hunt_and_execute_jit_m_strike(block_id, aligned_opt)
+                if jit_res.get("ok"):
+                    deployed_aligned_count += 1
+                    jit_deployed = True
+                    _log(f"✅ [ASYMMETRIC_DEPLOY] Trend-aligned {aligned_opt} spread executed via JIT Hunter under {new_regime} regime.", "OK")
+            except Exception as j_err:
+                _log(f"[JIT-M-HUNTER-ERROR] {j_err}. Falling back to pre-drafted strike...", "WARN")
+
+        if not jit_deployed:
+            # Fallback to pre-drafted PENDING strike in block
+            for s in strikes:
+                if s["leg_type"] == "SELL" and s["option_type"].upper() == aligned_opt:
+                    strike_id = s["strike_id"]
+                    status = s.get("status")
+                    if status in ("PENDING", "CLOSED"):
+                        anchor_p = float(s.get("anchor_price", 0.0))
+                        try:
+                            import pnl_engine as pe
+                            s_ltp = pe.fetch_ltp(s, force_refresh=True)
+                            buffer_tol = float(db.get("buffer_tolerance", "2.0"))
+                            if (0 < s_ltp <= anchor_p + buffer_tol) or anchor_p <= 0 or (status == "PENDING" and s_ltp <= 0):
+                                _log(f"[UNIT-{unit_name}-DEPLOY] Deploying trend-aligned pre-drafted strike {s['strike_price']} {s['option_type']} (LTP ₹{s_ltp:.2f} <= Anchor ₹{anchor_p:.2f})...", "OK")
+                                exec_res = bm.execute_strike(strike_id)
+                                if exec_res.get("ok"):
+                                    deployed_aligned_count += 1
+                        except Exception as d_err:
+                            _log(f"[UNIT-{unit_name}-DEPLOY-EXCEPTION] Error: {d_err}", "ERROR")
+
+    # Telegram Alert for Unit Regime Shift or Asymmetric Deployment
+    if (new_regime != old_regime and old_regime in ("BULLISH", "BEARISH")) or deployed_aligned_count > 0:
+        try:
+            alert_text = (
+                f"🧭 <b>UNIT {unit_name} REGIME UPDATE</b> 🧭\n"
+                f"Unit: <b>{unit_name}</b> (Block #{block_num})\n"
+                f"Regime: <b>{new_regime}</b> (Anchor: ₹{anchor:,.2f})\n"
+                f"Live Spot: ₹{current_spot:,.2f} | Distance: {current_spot - anchor:+.2f} pts\n"
+                f"Opposing Covered: {closed_opposing_count} leg(s)\n"
+                f"Trend-Aligned Deployed: {deployed_aligned_count} leg(s)\n"
+                f"<i>Unit Pod Isolation: Other units unaffected.</i>"
+            )
+            tg.send(alert_text)
+        except Exception as tg_err:
+            _log(f"Error sending unit regime shift alert: {tg_err}", "WARN")
 
     return {
         "block_id": block_id,
@@ -214,131 +365,6 @@ def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, for
         "shifted": regime_shifted,
         "closed_opposing": closed_opposing_count,
         "deployed_aligned": deployed_aligned_count,
-    }
-
-
-def execute_3pm_master_anchor_decision(current_spot: Optional[float] = None, force_decision: bool = False) -> Dict[str, Any]:
-    """
-    V5.0 'Old & Gold' Architecture: 3:00 PM Master Anchor Continuation Decision (15:00 IST).
-    At 15:00 IST:
-    1. Fetches live NIFTY Spot.
-    2. For each active unit:
-       - Compares Spot vs Unit Master Anchor.
-       - If Bullish (Spot >= Anchor):
-           * Put Sell marked CONTINUED (held overnight).
-           * Call Sell closed on broker + marked CLOSED.
-           * Active Call Hedge closed on broker + marked CLOSED.
-           * Orphan Hedges preserved untouched.
-       - If Bearish (Spot < Anchor):
-           * Call Sell marked CONTINUED (held overnight).
-           * Put Sell closed on broker + marked CLOSED.
-           * Active Put Hedge closed on broker + marked CLOSED.
-           * Orphan Hedges preserved untouched.
-       - Dispatches Telegram alert with decision and summary.
-    """
-    import block_manager as bm
-
-    if current_spot is None or current_spot <= 0:
-        current_spot = get_current_nifty_spot()
-
-    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-    results = []
-
-    for b in active_blocks:
-        block_id = b["block_id"]
-        block_num = b.get("block_number", block_id)
-        unit_name = b.get("anchor_unit_name") or f"M{block_num}"
-        anchor = float(b.get("master_anchor_price") or 0.0)
-
-        if anchor <= 0:
-            continue
-
-        is_bullish = current_spot >= anchor
-        decision_direction = "BULLISH" if is_bullish else "BEARISH"
-        continued_opt = "PE" if is_bullish else "CE"
-        closed_opt = "CE" if is_bullish else "PE"
-
-        continued_count = 0
-        closed_sell_count = 0
-        closed_hedge_count = 0
-        orphan_preserved_count = 0
-
-        # Get all strikes in this block
-        strikes = db.get_strikes_by_block(block_id)
-        for s in strikes:
-            s_id = s["strike_id"]
-            status = s["status"]
-            opt_type = s["option_type"].upper()
-            leg_type = s["leg_type"].upper()
-
-            # Winning side sell leg -> Mark CONTINUED (Positional overnight carry forward)
-            if leg_type == "SELL" and opt_type == continued_opt and status == "OPEN":
-                db.update_strike_trade_state(s_id, "CONTINUED")
-                h_id = s.get("hedge_strike_id")
-                if h_id:
-                    db.update_strike_trade_state(h_id, "CONTINUED")
-                continued_count += 1
-                _log(f"[3PM-DECISION] Unit {unit_name}: {s['strike_price']} {opt_type} SELL & Hedge marked CONTINUED for overnight holding.", "OK")
-
-            # Winning side hedge leg -> Mark CONTINUED
-            elif leg_type == "HEDGE_BUY" and opt_type == continued_opt and status == "OPEN":
-                db.update_strike_trade_state(s_id, "CONTINUED")
-
-            # Losing side sell leg -> Close gracefully
-            elif leg_type == "SELL" and opt_type == closed_opt and status == "OPEN":
-                res = bm.close_strike(s_id, close_hedge=False)
-                if res.get("ok"):
-                    closed_sell_count += 1
-                    db.update_strike_trade_state(s_id, "CLOSED")
-                    _log(f"[3PM-DECISION] Unit {unit_name}: {s['strike_price']} {opt_type} SELL squared off.", "ALERT")
-
-            # Losing side active hedge -> Close gracefully
-            elif leg_type == "HEDGE_BUY" and opt_type == closed_opt and status == "OPEN":
-                # Check if it's an orphan or paired
-                is_orphan = not db.get_strike(s.get("hedge_strike_id", 0)) or db.get_strike(s.get("hedge_strike_id", 0)).get("status") != "OPEN"
-                if is_orphan:
-                    # Invariant 5: Preserve orphan hedges untouched!
-                    db.update_strike_trade_state(s_id, "ORPHAN")
-                    orphan_preserved_count += 1
-                    _log(f"[3PM-DECISION] Unit {unit_name}: Orphan Hedge {s['strike_price']} {opt_type} PRESERVED untouched.", "INFO")
-                else:
-                    res = bm.close_strike(s_id, close_hedge=False)
-                    if res.get("ok"):
-                        closed_hedge_count += 1
-                        db.update_strike_trade_state(s_id, "CLOSED")
-
-        # Dispatched Telegram decision
-        try:
-            tg.send(
-                f"⏰ <b>3:00 PM MASTER ANCHOR CONTINUATION DECISION</b> ⏰\n"
-                f"Unit: <b>{unit_name}</b> (Block #{block_num})\n"
-                f"Live Spot: ₹<b>{current_spot:,.2f}</b> | Master Anchor: ₹<b>{anchor:,.2f}</b>\n"
-                f"Outcome: <b>{decision_direction}</b> ({continued_opt} CONTINUED)\n"
-                f"✅ Overnight Continued: <b>{continued_count}</b> leg(s) ({continued_opt})\n"
-                f"🛑 Counter Closed: <b>{closed_sell_count}</b> sell(s), <b>{closed_hedge_count}</b> hedge(s)\n"
-                f"🛡️ Orphan Hedges Preserved: <b>{orphan_preserved_count}</b>\n"
-                f"<i>V5.0 'Old & Gold' Architecture</i>"
-            )
-        except Exception as e:
-            _log(f"Error sending 3PM Telegram alert: {e}", "WARN")
-
-        results.append({
-            "block_id": block_id,
-            "unit_name": unit_name,
-            "anchor": anchor,
-            "spot": current_spot,
-            "decision": decision_direction,
-            "continued_count": continued_count,
-            "closed_sell_count": closed_sell_count,
-            "closed_hedge_count": closed_hedge_count,
-            "orphan_preserved_count": orphan_preserved_count
-        })
-
-    return {
-        "ok": True,
-        "spot": current_spot,
-        "results": results,
-        "message": f"3:00 PM Continuation decision executed across {len(results)} active unit(s)."
     }
 
 
@@ -359,6 +385,9 @@ def evaluate_all_block_regimes(current_spot: Optional[float] = None, force_eval:
     for b in active_blocks:
         if not b.get("is_enabled", 1):
             continue
+        uname = (b.get("anchor_unit_name") or "").strip().upper()
+        if uname.startswith("OS"):
+            continue  # OS blocks are strictly manual / 3:00 PM option decay driven; NEVER evaluate under spot regime!
         try:
             res = evaluate_block_regime(b, current_spot=current_spot, force_eval=force_eval)
             unit_results.append(res)
@@ -440,38 +469,44 @@ def evaluate_master_regime(current_spot: Optional[float] = None, force_eval: boo
         opposing_opt = "CE" if new_regime == "BULLISH" else "PE"
         aligned_opt = "PE" if new_regime == "BULLISH" else "CE"
 
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-        for b in active_blocks:
-            if not b.get("is_enabled", 1):
-                continue
-            open_strikes = db.get_strikes_by_block(b["block_id"], status_filter="OPEN")
-            for s in open_strikes:
-                if s["leg_type"] == "SELL" and s["option_type"].upper() == opposing_opt:
-                    strike_id = s["strike_id"]
-                    try:
-                        res = bm.close_strike(strike_id, close_hedge=False)
-                        if res.get("ok"):
-                            closed_opposing_count += 1
-                    except Exception:
-                        pass
-
-            strikes = db.get_strikes_by_block(b["block_id"])
-            for s in strikes:
-                if s["leg_type"] == "SELL" and s["option_type"].upper() == aligned_opt:
-                    strike_id = s["strike_id"]
-                    status = s.get("status")
-                    if status in ("PENDING", "CLOSED"):
-                        anchor_p = float(s.get("anchor_price", 0.0))
+        now_ist_str = datetime.now(IST).strftime("%H:%M")
+        is_3pm_or_later = (now_ist_str >= "15:00") or force_eval
+        if is_3pm_or_later:
+            active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+            for b in active_blocks:
+                if not b.get("is_enabled", 1):
+                    continue
+                open_strikes = db.get_strikes_by_block(b["block_id"], status_filter="OPEN")
+                for s in open_strikes:
+                    if s["leg_type"] == "SELL" and s["option_type"].upper() == opposing_opt:
+                        strike_id = s["strike_id"]
                         try:
-                            import pnl_engine as pe
-                            s_ltp = pe.fetch_ltp(s, force_refresh=True)
-                            buffer_tol = float(db.get("buffer_tolerance", "2.0"))
-                            if (0 < s_ltp <= anchor_p + buffer_tol) or anchor_p <= 0 or (status == "PENDING" and s_ltp <= 0):
-                                exec_res = bm.execute_strike(strike_id)
-                                if exec_res.get("ok"):
-                                    deployed_aligned_count += 1
+                            res = bm.close_strike(strike_id, close_hedge=False)
+                            if res.get("ok"):
+                                closed_opposing_count += 1
                         except Exception:
                             pass
+
+                # Phase 2: Deploy trend-aligned side at 3:00 PM decision window
+                strikes = db.get_strikes_by_block(b["block_id"])
+                for s in strikes:
+                    if s["leg_type"] == "SELL" and s["option_type"].upper() == aligned_opt:
+                        strike_id = s["strike_id"]
+                        status = s.get("status")
+                        if status in ("PENDING", "CLOSED"):
+                            anchor_p = float(s.get("anchor_price", 0.0))
+                            try:
+                                import pnl_engine as pe
+                                s_ltp = pe.fetch_ltp(s, force_refresh=True)
+                                buffer_tol = float(db.get("buffer_tolerance", "2.0"))
+                                if (0 < s_ltp <= anchor_p + buffer_tol) or anchor_p <= 0 or (status == "PENDING" and s_ltp <= 0):
+                                    exec_res = bm.execute_strike(strike_id)
+                                    if exec_res.get("ok"):
+                                        deployed_aligned_count += 1
+                            except Exception:
+                                pass
+        else:
+            _log(f"[GLOBAL-REGIME] Intraday Spot cross detected ({new_regime}). In V5.0, active trades are held peacefully for theta decay; Master Anchor continuation is evaluated at 3:00 PM IST.", "INFO")
 
     return {
         "mode": mode,

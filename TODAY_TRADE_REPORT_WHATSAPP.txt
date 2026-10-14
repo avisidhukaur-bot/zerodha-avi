@@ -1,0 +1,49 @@
+📊 *ZERODHA OPTION SELLING (V5.0) — DAILY TRADE & AUDIT REPORT* 📊
+━━━━━━━━━━━━━━━━━━━━━━
+📅 *Date*: 21 September 2026 (Monday)
+⏰ *Market Close Time*: 03:30 PM IST
+👤 *Account*: Avinash Kaur (XK7125)
+🛡️ *Status*: 100% Safe, Hedged & Active
+━━━━━━━━━━━━━━━━━━━━━━
+
+📈 *MARKET & FUNDS OVERVIEW*
+• *NIFTY Spot*: ~23,440
+• *Total Net Margin*: ₹5,02,910.01
+• *Margin Utilised*: ₹2,08,642.60
+• *Available Cash*: Safe & Sufficient
+
+━━━━━━━━━━━━━━━━━━━━━━
+⏱️ *TODAY'S 3:00 PM EVENTS & RE-ENTRY TIMELINE*
+
+1️⃣ *15:02 IST — 3:00 PM Line Audit Triggered:*
+• *22700 PE (Sell)*: Price decayed to ₹82.30 (< ₹99.50 line) ➔ *CONTINUED* overnight.
+• *24000 CE (Sell)*: Price rose to ₹119.55 (≥ ₹114.00 line) ➔ Rule ke hisab se *Auto-Closed* (Covered @ ₹119.30).
+
+2️⃣ *15:07 to 15:12 IST — 5-Minute Cool Down Rule:*
+• Exit ke baad `24000 CE` ka premium gir kar ₹118.30 ho gaya (Anchor ₹127.45 ke neeche).
+• Price lagatar 5 minute (300 seconds) tak anchor ke neeche sustain raha.
+
+3️⃣ *15:12 IST — 5-Minute Auto Re-Entry Executed:*
+• 🛡️ *Hedge Leg (24500 CE)*: Bought 130 qty @ ₹34.35
+• 📉 *Sell Leg (24000 CE)*: Sold 130 qty @ ₹116.275
+• *Benefit*: ₹119.30 par exit karke ₹116.275 par dobara becha gaya (Better entry rate).
+
+━━━━━━━━━━━━━━━━━━━━━━
+📦 *CURRENT OPEN BROKER POSITIONS (OVERNIGHT HOLD)*
+
+🔹 *OCTOBER MONTHLY EXPIRY (27-Oct-2026) — 2 Lots (130 Qty):*
+• 22200 PE (Buy Hedge) : +130 Qty
+• 22700 PE (Sell Leg)  : -130 Qty (In Profit ✅)
+• 24000 CE (Sell Leg)  : -130 Qty (In Profit ✅)
+• 24500 CE (Buy Hedge) : +130 Qty
+
+🔹 *SEPTEMBER MONTHLY EXPIRY (29-Sep-2026) — 1 Lot (65 Qty):*
+• 22600 PE (Buy Hedge) : +65 Qty
+• 23100 PE (Sell Leg)  : -65 Qty (In Profit ✅)
+
+━━━━━━━━━━━━━━━━━━━━━━
+✅ *SUMMARY & VERIFICATION*
+1. Saari trades aur re-entries strictly V5 "Old & Gold" algorithms ke rules ke mutabiq execute hui hain.
+2. Sabhi positions dono taraf 500-point hedges se fully protected hain (Zero overnight unhedged risk).
+3. Software VPS par smoothly chal raha hai aur kal subah 09:15 AM ke liye fully ready hai.
+━━━━━━━━━━━━━━━━━━━━━━

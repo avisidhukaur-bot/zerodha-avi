@@ -839,3 +839,33 @@ def test_telegram_connection() -> dict:
     if sent:
         return {"ok": True, "message": f"Test message sent to chat_id {chat_id}."}
     return {"ok": False, "message": "Failed to send test message. Check token and chat_id."}
+
+
+def alert_3pm_continuation_decision(
+    unit_name: str,
+    spot_price: float,
+    anchor_price: float,
+    continued_side: str,
+    closed_count: int = 0
+) -> bool:
+    """
+    Sends an alert for the 3:00 PM (15:00 IST) Master Anchor Side Continuation Decision.
+    """
+    icon = "🟢" if continued_side == "PUT" else "🔴"
+    today_date = datetime.now(IST).strftime("%Y-%m-%d")
+    msg = (
+        f"⏰ {icon} <b>3:00 PM MASTER ANCHOR DECISION [{unit_name}]</b> {icon}\n"
+        f"{'='*32}\n"
+        f"Live Spot: <b>₹{spot_price:,.2f}</b> | Anchor: <b>₹{anchor_price:,.2f}</b>\n"
+        f"Market Condition: <b>{'SPOT ABOVE ANCHOR' if spot_price >= anchor_price else 'SPOT BELOW ANCHOR'}</b>\n\n"
+        f"🏆 <b>CONTINUED SIDE: {continued_side} SELL</b> (Holding overnight/into close)\n"
+        + (f"⚡ Auto-Closed: <b>{closed_count} opposing trade(s) & associated hedges</b>\n" if closed_count > 0 else "⚡ Opposing side was clean (0 positions closed)\n") +
+        f"🕊️ Orphan Hedges: <b>Preserved untouched</b>\n"
+        f"Time: {_ist_now()}"
+    )
+    return send(
+        msg,
+        alert_key=f"3pm_decision_{unit_name}_{today_date}",
+        cooldown_sec=3600,
+    )
+
