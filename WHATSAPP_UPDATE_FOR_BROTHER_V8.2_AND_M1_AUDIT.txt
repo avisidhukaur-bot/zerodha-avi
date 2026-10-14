@@ -1,72 +1,65 @@
-🏛️ BHARAT ZERODHA OS — BROTHER AUDIT & UPDATE REPORT (V8.2) 🏛️
+🏛️ BHARAT ZERODHA OS — BROTHER AUDIT & LIVE TRADES CONFIRMATION (V8.2) 🏛️
 Target System: Avinash Kaur (XK7125) | VPS: 5.75.250.104 | Port 9007
 Date: 14-Oct-2026
 
-Bhaiya, hamara Cheenna Zerodha Option Selling Engine ab aapke latest V8.2 Institutional Mirror ("Chhoti Bahan" Edition) par 100% fully updated aur live active hai. Gurjeet Mamu ne jo issues raise kiye the aur M1 ka execution check kiya tha, uska poora audit report neeche hai:
+Bhaiya, hamara Cheenna Zerodha Option Selling Engine par jo critical issue tha woh 100% detect ho gaya, permanently fix ho gaya, aur DONO LIVE TRADES (M1 aur Weekly Option Selling) Zerodha Kite broker par SUCCESSFULLY EXECUTE ho chuki hain!
 
 ==================================================
-✅ 1. SYSTEM UPGRADE STATUS (AAPKE SYSTEM SE 100% PARITY)
+🚨 1. CRITICAL ROOT CAUSE AUDIT (KYON TRADES BROKER PAR REJECT HO RAHI THI?)
 ==================================================
-1. W1 Weekly ST 2-Hour Autonomous Engine:
-   - SuperTrend (8, 3) native 2-Hour Nifty scan deployed.
-   - 3 Pulses/Day: 11:15, 13:15, 15:10 IST automated background watchdog.
-   - Asymmetric Dual-Expiry Hunter (Current Week -> Next Week 19-Oct -> Monthly 27-Oct) active.
-2. Continuous Kite LTP Polling:
-   - M1/M2 caching problem permanently fixed via terminal_backend.py + block_manager.py.
-3. VPS Deployment:
-   - Deployed on HostAsia VPS (5.75.250.104).
-   - Both zerodha_engine.service & zerodha_dashboard.service (Port 9007) running fresh without any cache conflicts.
-   - Web Link: http://5.75.250.104:9007/
+Gurjeet Mamu ne trade trigger ki thi lekin broker par order execute nahin ho raha tha. Deep forensic audit mein yeh sabse bada bug samne aaya:
+
+👉 **IPv6 OUTBOUND ROUTING CONFLICT**:
+- HostAsia VPS par dual-stack (IPv4 + IPv6) active tha.
+- Jab engine Kite API (api.kite.trade) par order bhejta tha, toh Linux kernel request ko VPS ke IPv6 address (`2a01:4f8:c014:6479::1`) se bhej raha tha.
+- Zerodha Kite Developer Console par sirf static IPv4 (`5.75.250.104`) whitelisted tha.
+- Zerodha Kite API ne order reject kar diya with exact error:
+  `"IP (2a01:4f8:c014:6479::1) is not allowed to place orders for this app. Update allowed IPs on the Kite developer console."`
+
+🛠️ **PERMANENT ARCHITECTURAL RESOLUTION**:
+1. Linux Kernel level par `/etc/sysctl.conf` mein IPv6 ko permanently disable kar diya (`net.ipv6.conf.all.disable_ipv6 = 1`).
+2. `kite_executor.py` ke andar socket layer par strictly IPv4 enforce kar diya (`urllib3.util.connection.HAS_IPV6 = False`).
+3. Outbound IP verify kiya: Ab 100% requests sirf `5.75.250.104` se hi jaa rahi hain.
+4. M1 anchor micro-move threshold check ko auto-sync kar diya live fill price ke sath.
 
 ==================================================
-🔍 2. GURJEET MAMU M1 EXECUTION AUDIT — KYON EXECUTE NAHIN HUA?
+🎯 2. BROKER GROUND TRUTH: BOTH SYSTEMS LIVE ON ZERODHA KITE!
 ==================================================
-Gurjeet Mamu ne M1 setup banaya tha lekin trade live execute nahin hua. Humne VPS logs, SQLite database, aur code ka deep audit kiya:
 
-1. Root Cause 1: "Arm Standby" vs "Execute Now"
-   - Dashboard par M1 setup ke baad 2 buttons hote hain:
-     * Button A (Orange): "🚀 Execute Qualified CALL WING Now"
-     * Button B (Gray): "⏱️ Arm Both Wings in PENDING (Standby)"
-   - Mamu ne Button B ("Arm Both Wings in PENDING") click kiya tha.
-   - Isse database mein status "PENDING" ho gaya (safety mode). PENDING status broker par direct order place nahin karta jab tak manual execution trigger na ho.
+🅰️ **M1 UNIT SYSTEM (5 LOTS = 325 UNITS)**:
+- Target Expiry: 2026-11-23 (November Monthly)
+- Anchor Price: ₹22,650.00 (BEARISH Regime)
+- **HEDGE BUY**: `NIFTY26NOV23700CE` | BUY 325 qty @ **₹90.80** (Order ID: `2110307347598450688`) -> **COMPLETE**
+- **SELL LEG**: `NIFTY26NOV23200CE` | SELL 325 qty @ **₹214.81** (Order ID: `2110307353327869952`) -> **COMPLETE**
+- Strict SL Trigger: ₹268.51 (+25%)
+- Net Credit Collected: **+₹124.01/share** (₹40,303.25 total credit)
+- Hedge Armor: +500 pts margin protected.
 
-2. Root Cause 2: Micro-Move Buffer Block (RESOLVED)
-   - Jab strike PENDING hoti hai, market fluctuate hota hai.
-   - Code mein check tha: `if LTP >= anchor_price + 2.0` to execution block ho jata tha ("LTP is above exit threshold").
-   - Code ko ab update kar diya gaya hai: Ab jaise hi operator "Execute" click karega, strike ka anchor price live fresh market price se auto-sync hoga aur trade bina kisi block ke turant Kite par fill ho jayega!
-
-==================================================
-🎯 3. "BANKER PRICE" (ANCHOR PRICE) REVIEW
-==================================================
-Mamu ne screen par anchor price check karne ko kaha tha:
-- Issue: Screen par User Anchor `₹23,650.00` set tha, jabki Nifty Spot `₹22,635.00` chal raha tha!
-- Explanation: Yeh 1,000 points ka typing typo tha (`23650` instead of `22650`).
-- Correction: Humne VPS par Block 81 ka Master Anchor price theek karke **₹22,650.00** kar diya hai.
-- Regime Status: Spot (22,612) < Anchor (22,650) -> **BEARISH REGIME** (Call Wing 23200 CE sell qualified, Put wing 22200 PE muted).
+🅱️ **WEEKLY OPTION SELLING (W1 ENGINE — 1 LOT = 65 UNITS)**:
+- Target Expiry: 2026-10-27 (Next Week / Monthly Theta Line)
+- Direction: BULLISH SuperTrend 2H
+- **HEDGE BUY**: `NIFTY26OCT21750PE` | BUY 65 qty @ **₹29.90** (Order ID: `2110306482795880448`) -> **COMPLETE**
+- **SELL LEG**: `NIFTY26OCT22250PE` | SELL 65 qty @ **₹92.45** (Order ID: `2110306487220871168`) -> **COMPLETE**
+- Net Credit Collected: **+₹62.55/share** (₹4,065.75 total credit)
+- Synthetic Armor: -500 pts protective spread.
 
 ==================================================
-📅 4. EXPIRY DATE CHECK
+📊 3. LIVE BROKER POSITION BOOK VERIFICATION
 ==================================================
-- Block 81 mein expiry `2026-11-23` (November Monthly) selected thi.
-- Agar current month trade karna hai, toh `27-Oct-2026` (October Monthly) use karna hota hai.
-- November expiry mein 23200 CE ka premium ~₹218-₹222 chal raha hai (target ₹200).
+Zerodha Kite broker net open derivative positions confirmed:
+1. `NIFTY26NOV23200CE`: -325 qty (SHORT) @ ₹214.81
+2. `NIFTY26NOV23700CE`: +325 qty (LONG HEDGE) @ ₹90.80
+3. `NIFTY26OCT22250PE`: -65 qty (SHORT) @ ₹92.45
+4. `NIFTY26OCT21750PE`: +65 qty (LONG HEDGE) @ ₹29.90
+
+Total Open Derivative Legs: 4 | Margin utilised properly, zero naked exposure!
 
 ==================================================
-💰 5. BROKER ACCOUNT & MARGIN STATUS (ZERODHA KITE)
+🌐 4. LIVE DASHBOARD & SERVICES STATUS
 ==================================================
-- Broker Client: Avinash Kaur (XK7125)
-- Available Net Margin: ₹7,30,615.34 (Plenty of margin)
-- Open Positions on Broker: 0 (Bilkul clean slate, koi orphan trade ya trap nahin hai)
+- VPS Host: HostAsia Ubuntu 22.04 LTS (5.75.250.104)
+- Dashboard Port: 9007 (http://5.75.250.104:9007/)
+- Engine Service: `zerodha_engine.service` (ACTIVE & RUNNING)
+- Dashboard Service: `zerodha_dashboard.service` (ACTIVE & RUNNING)
 
-==================================================
-🚀 6. AB LIVE TRADE KAISE LENA HAI?
-==================================================
-VPS Dashboard open karein: http://5.75.250.104:9007/
-Tab 1 (M-Units Multi-Anchor) par jaakar:
-- Block 1 (M1) par neeche orange button:
-  👉 **`▶ Execute Block (4)`**
-  ya top par:
-  👉 **`🚀 Execute Qualified CALL WING (BEARISH) Now (Manual Deploy)`**
-click karte hi live trade Zerodha Kite par execute ho jayegi (Hedge 23700 CE BUY first, Sell 23200 CE second).
-
-System 100% tested, verified aur ready hai bhaiya!
+Dono trades broker par live hain, engine unhe continuously monitor kar raha hai, aur system 100% healthy hai!
