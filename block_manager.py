@@ -775,15 +775,20 @@ def execute_strike(strike_id: int, ignore_cooldown: bool = False, **kwargs) -> d
                 current_ltp = kite_executor.get_live_ltp(symbol_info["token"], symbol_info["trading_symbol"])
             
             if current_ltp > 0:
-                anchor_price = float(strike["anchor_price"])
-                buffer_tolerance = float(db.get("buffer_tolerance", "2.0"))
-                exit_threshold = anchor_price + buffer_tolerance
-                if current_ltp >= exit_threshold:
-                    _log(f"Execution blocked: Current LTP (Rs {current_ltp:.2f}) is above the exit threshold (Rs {exit_threshold:.2f}) for strike {strike_id}.", "WARN")
-                    return {
-                        "ok": False,
-                        "message": f"Execution blocked: Current LTP (Rs {current_ltp:.2f}) is above the exit threshold (Rs {exit_threshold:.2f}). Please update your anchor price first.",
-                    }
+                # If strike is being deployed from PENDING or explicit trigger, auto-sync anchor to live market LTP
+                if strike["status"] == "PENDING" or ignore_cooldown:
+                    db.update_strike_anchor_price(strike_id, current_ltp, auto_recalc_sl=True)
+                    anchor_price = current_ltp
+                else:
+                    anchor_price = float(strike["anchor_price"])
+                    buffer_tolerance = float(db.get("buffer_tolerance", "2.0"))
+                    exit_threshold = anchor_price + buffer_tolerance
+                    if current_ltp >= exit_threshold:
+                        _log(f"Execution blocked: Current LTP (Rs {current_ltp:.2f}) is above the exit threshold (Rs {exit_threshold:.2f}) for strike {strike_id}.", "WARN")
+                        return {
+                            "ok": False,
+                            "message": f"Execution blocked: Current LTP (Rs {current_ltp:.2f}) is above the exit threshold (Rs {exit_threshold:.2f}). Please update your anchor price first.",
+                        }
 
     if strike["status"] not in ("PENDING", "CLOSED"):
         return {"ok": False, "message": f"Strike {strike_id} status is {strike['status']} -- only PENDING or CLOSED strikes can be executed."}
@@ -1228,7 +1233,7 @@ def execute_block(block_id: int) -> dict:
             _log(f"[REGIME-GUARD] SELL Strike #{s['strike_id']} {s['strike_price']} {s['option_type']} is MUTED under Unit {unit_name} {block.get('current_regime')} regime. Retaining PENDING (Armed).", "WARN")
             muted_pending.append(s["strike_id"])
             continue
-        result = execute_strike(s["strike_id"])
+        result = execute_strike(s["strike_id"], ignore_cooldown=True)
         if result["ok"]:
             executed.append(s["strike_id"])
         elif result.get("blocked_by_regime"):
