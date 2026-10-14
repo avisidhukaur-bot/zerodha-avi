@@ -888,6 +888,16 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
      * Corrected Block 81 Master Anchor from `23,650.00` (1,000 pt typo) to `22,650.00`.
      * Live Spot (`22,612`) < Anchor (`22,650`) -> `BEARISH` Regime confirmed.
      * Deployed and verified on VPS `5.75.250.104:9007`.
+3. **Critical Outbound IPv6 Broker Rejection Bug & Resolution**:
+   - **Root Cause**: HostAsia VPS dual-stack routed HTTPS requests to `api.kite.trade` via IPv6 (`2a01:4f8:c014:6479::1`).
+   - **Broker Rejection**: Kite Connect API only whitelisted IPv4 `5.75.250.104`, throwing: `IP (2a01:4f8:c014:6479::1) is not allowed to place orders for this app`.
+   - **Resolution**:
+     * Disabled IPv6 permanently via sysctl (`net.ipv6.conf.all.disable_ipv6 = 1`) in `/etc/sysctl.conf`.
+     * Added `urllib3.util.connection.HAS_IPV6 = False` in `kite_executor.py`.
+   - **Broker Ground Truth Verified**:
+     * Weekly ST Engine: `NIFTY26OCT22250PE` (-65 qty) / `NIFTY26OCT21750PE` (+65 qty) -> **STATUS: COMPLETE**.
+     * M1 Unit: `NIFTY26NOV23200CE` (-325 qty) / `NIFTY26NOV23700CE` (+325 qty) -> **STATUS: COMPLETE**.
+     * Total Active Broker Legs: 4 (Both systems live with protective armor).
 
 
 
