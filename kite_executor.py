@@ -14,6 +14,11 @@ import sys
 import os
 import time
 import requests
+try:
+    import urllib3.util.connection as urllib3_conn
+    urllib3_conn.HAS_IPV6 = False
+except Exception:
+    pass
 import pyotp
 import pandas as pd
 from typing import Optional
