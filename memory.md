@@ -872,4 +872,22 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
    - Never add a strike preview button to Row 5 or anywhere outside Row 2.5.
    - Always display `[ 🚀 V7.5 MASTER EDITION ]` branding in the cockpit header.
 
+---
+
+### 12. Forensic Audit & Product Upgradation: V8.2 Institutional Mirror & M1 Execution (14-Oct-2026)
+1. **V8.2 Institutional Parity ("Chhoti Bahan" Edition)**:
+   - Full integration of brother's release bundle (`ZERODHA_OS_UPDATED_VERSION_CHHOTI_BAHAN.zip`).
+   - Added W1 Weekly ST 2-Hour Autonomous Engine (`weekly_st_engine.py`, `ui_weekly_st.py`) with 3 pulses/day (`11:15`, `13:15`, `15:10 IST`) and Asymmetric Dual-Expiry Hunter.
+   - Fixed M-Units LTP polling with continuous live streaming via `terminal_backend.py` + `block_manager.py`.
+   - Dedicated Sister VPS: `5.75.250.104` (Port `9007`).
+2. **M1 Execution Failure Forensic Root-Cause**:
+   - **Primary Cause**: Arming via `"Arm Both Wings in PENDING (Standby)"` safely sets strike status to `PENDING` without placing orders on Zerodha Kite.
+   - **Secondary Cause**: In `execute_strike()`, a micro-move check `if current_ltp >= anchor_price + 2.0` blocked execution whenever option price fluctuated higher than stale anchor.
+   - **Resolution**:
+     * Modified `execute_strike()` and `execute_block()` to auto-sync anchor price to `fresh_ltp` right before execution when deploying from `PENDING` or explicit manual trigger (`ignore_cooldown=True`).
+     * Corrected Block 81 Master Anchor from `23,650.00` (1,000 pt typo) to `22,650.00`.
+     * Live Spot (`22,612`) < Anchor (`22,650`) -> `BEARISH` Regime confirmed.
+     * Deployed and verified on VPS `5.75.250.104:9007`.
+
+
 
