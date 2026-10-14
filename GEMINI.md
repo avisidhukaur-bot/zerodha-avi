@@ -163,3 +163,38 @@
 | **Weekly ST Addition** | V8.2 Asymmetric Dual-Expiry Hunter (`weekly_st_engine.py`) | Autonomous 2H SuperTrend 3-pulse trading engine |
 | **Security Invariant** | `ALLOWED_TRADING_IP=ANY` pre-configured in local template | Zero IP lockouts on local broadband / home WiFi |
 | **1-Click Launchers** | `RUN_CHHOTI_BAHAN_ZERODHA_OS.bat`, `START_CHHOTI_BAHAN_AUTO_UPDATE.bat` | Streamlit Dashboard on Port `9007` |
+
+---
+
+## 🚨 8. 14-OCT-2026 BROKER EXECUTION FORENSIC AUDIT & PERMANENT INVARIANTS
+
+### 1. The Outbound IPv6 Broker Rejection Bug (Root Cause)
+- **Symptom**: Orders for both M1 and Weekly ST (W1) failed to appear on the broker order book, silently failing with `[ABORT] Hedge BUY order failed or unfilled`.
+- **Root Cause**: The HostAsia Linux VPS has dual-stack networking enabled. Python `requests` resolved `api.kite.trade`'s AAAA record and routed outbound traffic via IPv6 (`2a01:4f8:c014:6479::1`). Zerodha Kite API developer console only had the static IPv4 (`5.75.250.104`) whitelisted, causing Kite to reject orders with:
+  > `IP (2a01:4f8:c014:6479::1) is not allowed to place orders for this app. Update allowed IPs on the Kite developer console.`
+- **Permanent Invariant Enforced**:
+  1. Disabled IPv6 at Linux kernel level via `/etc/sysctl.conf`:
+     ```ini
+     net.ipv6.conf.all.disable_ipv6 = 1
+     net.ipv6.conf.default.disable_ipv6 = 1
+     net.ipv6.conf.lo.disable_ipv6 = 1
+     ```
+  2. Forced IPv4 socket binding in [kite_executor.py](file:///c:/Users/Dell/Desktop/cheenna%20zerodha/kite_executor.py):
+     ```python
+     import urllib3.util.connection as urllib3_conn
+     urllib3_conn.HAS_IPV6 = False
+     ```
+
+### 2. M1 Staging Buffer & Anchor Refresh Invariant
+- **Staging State**: Clicking `"Arm Both Wings in PENDING (Standby)"` stages strikes in SQLite in `PENDING` mode for operator review without routing market orders.
+- **Stale Anchor Check Elimination**: In [block_manager.py](file:///c:/Users/Dell/Desktop/cheenna%20zerodha/block_manager.py), the `if current_ltp >= anchor_price + 2.0` guard previously blocked orders if prices moved ₹2 during staging. Now, on manual trigger or `execute_block()`, the strike anchor auto-syncs to `fresh_ltp` right before execution (`ignore_cooldown=True`).
+- **Anchor Typo Correction**: Corrected Block 81 Master Anchor from `₹23,650.00` (1,000 pt typo) to **`₹22,650.00`**. Spot (`22,612`) < Anchor (`22,650`) $\implies$ `BEARISH` Regime confirmed.
+
+### 3. Verified Broker Ground Truth (14-Oct-2026 EOD)
+| System | Position Type | Leg | Strike & Contract | Lots / Qty | Fill Price | Broker Order ID | Status |
+|---|---|---|---|---|---|---|---|
+| **M1 Unit** | Short Call Spread | **Hedge Buy** | `NIFTY26NOV23700CE` | `5` Lots / `325` | **₹90.80** | `2110307347598450688` | **COMPLETE** |
+| **M1 Unit** | Short Call Spread | **Sell Short**| `NIFTY26NOV23200CE` | `5` Lots / `325` | **₹214.81**| `2110307353327869952` | **COMPLETE** |
+| **Weekly W1**| Bull Put Spread | **Hedge Buy** | `NIFTY26OCT21750PE` | `1` Lot / `65` | **₹29.90** | `2110306482795880448` | **COMPLETE** |
+| **Weekly W1**| Bull Put Spread | **Sell Short**| `NIFTY26OCT22250PE` | `1` Lot / `65` | **₹92.45** | `2110306487220871168` | **COMPLETE** |
+
