@@ -58,6 +58,9 @@ FILES = [
     "ui_commodity.py",
     "ui_equity.py",
     "app.py",
+    "super_sukhoi_engine.py",
+    "test_super_sukhoi_cheenna_v7.py",
+    "PRODUCT_DEVELOPMENT_SUPER_SUKHOI_CHEENNA_V7.md",
     "chhoti_bahan_auto_update.py",
     "lego2_rollover.py",
     "requirements.txt",
@@ -69,6 +72,7 @@ FILES = [
     "PRODUCT_UPGRADATION_CHHOTI_BAHAN_MIRROR.md",
     "CHHOTI_BAHAN_UPDATE_GUIDE.md",
 ]
+
 
 print("=" * 60)
 print("  LEGO 1 — ZERODHA OPTION SELLING V5.0 DEPLOY")
@@ -130,9 +134,11 @@ for fname in FILES:
         print(f"  [--] {fname} not found locally, skipping")
 sftp.close()
 
-# ── Install dependencies & run V5 DB migrations ──────────────
+# ── Install dependencies & run DB migrations ──────────────
+run_ssh(f"find {REMOTE_DIR} -type d -name '__pycache__' -exec rm -rf {{}} + 2>/dev/null || true", "Cleaning Python Bytecode Cache")
 run_ssh(f"pip3 install -r {REMOTE_DIR}/requirements.txt", "Installing Dependencies on VPS")
-run_ssh(f"cd {REMOTE_DIR} && python3 -c 'import db; db.init_db(); print(\"V5 DB Migration Verified on VPS.\")'", "Running V5 DB Migrations on VPS")
+run_ssh(f"cd {REMOTE_DIR} && python3 -c 'import db; db.init_db(); print(\"DB Migration Verified on VPS.\")'", "Running DB Migrations on VPS")
+
 
 # ── STEP 2: Create systemd service files ─────────────────────
 engine_service_code = f"""[Unit]

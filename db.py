@@ -1850,10 +1850,69 @@ def init_db() -> None:
         "comm_stop_loss_pct"   : "0.0",
         "comm_carry_forward"   : "NO",
         "comm_last_check_candle_time": "",
+        "m_stoploss_mode"      : "DISABLED",
+        "super_sukhoi_active"  : "0",
+        "super_sukhoi_m1_anchor": "",
+        "super_sukhoi_m1_expiry": "",
+        "super_sukhoi_m1_lots" : "1",
+        "super_sukhoi_m2_deployed": "0",
+        "super_sukhoi_m2_direction": "",
+        "super_sukhoi_m3_deployed": "0",
+        "super_sukhoi_m3_direction": "",
+        "super_sukhoi_activated_at": "",
     }
     for k, v in defaults.items():
         if not get(k):
             set(k, v)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SUPER SUKHOI V7.0 CONFIGURATION HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_super_sukhoi_state() -> dict:
+    """Returns current Super Sukhoi Autonomous Laddering configuration and status."""
+    return {
+        "active": get("super_sukhoi_active", "0") == "1",
+        "m1_anchor": float(get("super_sukhoi_m1_anchor", "0.0") or "0.0"),
+        "m1_expiry": get("super_sukhoi_m1_expiry", ""),
+        "m1_lots": int(get("super_sukhoi_m1_lots", "1") or "1"),
+        "m2_deployed": get("super_sukhoi_m2_deployed", "0") == "1",
+        "m2_direction": get("super_sukhoi_m2_direction", ""),
+        "m3_deployed": get("super_sukhoi_m3_deployed", "0") == "1",
+        "m3_direction": get("super_sukhoi_m3_direction", ""),
+        "activated_at": get("super_sukhoi_activated_at", ""),
+        "stoploss_mode": get("m_stoploss_mode", "DISABLED")
+    }
+
+
+def set_super_sukhoi_state(
+    active: bool = False,
+    m1_anchor: float = 0.0,
+    m1_expiry: str = "",
+    m1_lots: int = 1,
+    m2_deployed: bool = False,
+    m2_direction: str = "",
+    m3_deployed: bool = False,
+    m3_direction: str = ""
+) -> None:
+    """Updates Super Sukhoi autonomous state in settings table."""
+    set("super_sukhoi_active", "1" if active else "0")
+    if m1_anchor > 0:
+        set("super_sukhoi_m1_anchor", str(round(float(m1_anchor), 2)))
+    if m1_expiry:
+        set("super_sukhoi_m1_expiry", str(m1_expiry))
+    if m1_lots > 0:
+        set("super_sukhoi_m1_lots", str(int(m1_lots)))
+    set("super_sukhoi_m2_deployed", "1" if m2_deployed else "0")
+    set("super_sukhoi_m2_direction", str(m2_direction))
+    set("super_sukhoi_m3_deployed", "1" if m3_deployed else "0")
+    set("super_sukhoi_m3_direction", str(m3_direction))
+    if active and not get("super_sukhoi_activated_at"):
+        set("super_sukhoi_activated_at", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
+    elif not active:
+        set("super_sukhoi_activated_at", "")
+
 
     # ── Upgrade max_strikes_per_block from 5 to 50 if currently set to 5 ────
     if get("max_strikes_per_block") == "5":

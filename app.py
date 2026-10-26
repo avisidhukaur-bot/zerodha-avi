@@ -2404,9 +2404,133 @@ def render_master_regime_controller():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# V7.0 SUPER SUKHOI AUTONOMOUS LADDERING HUD (BRICK 5)
+# ─────────────────────────────────────────────────────────────────────────────
+def render_super_sukhoi_radar_hud():
+    """
+    Renders V7.0 Super Sukhoi Autonomous Directional Laddering HUD & Telemetry Card.
+    Provides 1-Click Fire-and-Forget auto scaling for M1, M2, M3.
+    """
+    try:
+        import super_sukhoi_engine as sukhoi
+    except Exception as e:
+        st.error(f"Super Sukhoi Module load error: {e}")
+        return
+
+    st_data = sukhoi.get_super_sukhoi_status()
+    is_active = st_data["active"]
+    live_spot = st_data["live_spot"]
+    m1_anchor = st_data["m1_anchor"]
+    triggers = st_data["triggers"]
+    m2_deployed = st_data["m2_deployed"]
+    m2_dir = st_data["m2_direction"]
+    m3_deployed = st_data["m3_deployed"]
+    m3_dir = st_data["m3_direction"]
+    sl_mode = st_data["stoploss_mode"]
+
+    hud_border = "#10b981" if is_active else "#334155"
+    hud_bg = "linear-gradient(135deg, rgba(6, 78, 59, 0.4) 0%, rgba(15, 23, 42, 0.95) 100%)" if is_active else "linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%)"
+    badge_color = "#34d399" if is_active else "#94a3b8"
+    badge_bg = "rgba(52, 211, 153, 0.2)" if is_active else "rgba(148, 163, 184, 0.15)"
+    badge_text = "🟢 AUTONOMOUS AUTO-PILOT ON" if is_active else "⚪ MANUAL COCKPIT MODE"
+
+    st.markdown(f"""
+    <div style="background: {hud_bg}; border: 1.5px solid {hud_border}; border-radius: 14px; padding: 18px 22px; margin-bottom: 18px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 1.25rem; font-weight: 800; color: #ffffff; letter-spacing: 0.5px;">
+                    🦅 SUPER SUKHOI V7.0 — AUTONOMOUS DIRECTIONAL LADDERING
+                </span>
+            </div>
+            <span style="background: {badge_bg}; border: 1px solid {badge_color}; color: {badge_color}; font-size: 0.82rem; padding: 4px 14px; border-radius: 20px; font-weight: 800; letter-spacing: 0.5px;">
+                {badge_text}
+            </span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px;">
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px;">
+                <div style="font-size: 0.75rem; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Seed Unit M1 Anchor</div>
+                <div style="font-size: 1.3rem; font-weight: 800; color: #38bdf8; font-family: monospace;">₹{m1_anchor:,.2f}</div>
+                <div style="font-size: 0.78rem; color: #cbd5e1; margin-top: 2px;">Lots: {st_data['m1_lots']} | Spot: ₹{live_spot:,.2f}</div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px;">
+                <div style="font-size: 0.75rem; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Tier 1: M2 Triggers (±2.00%)</div>
+                <div style="font-size: 0.95rem; font-family: monospace; margin-top: 2px;">
+                    📈 UP: <b style="color: #34d399;">₹{triggers['m2_up']:,.2f}</b><br/>
+                    📉 DOWN: <b style="color: #f87171;">₹{triggers['m2_down']:,.2f}</b>
+                </div>
+                <div style="font-size: 0.78rem; color: {'#34d399' if m2_deployed else '#94a3b8'}; margin-top: 3px; font-weight: 600;">
+                    Status: {'✅ DEPLOYED (' + m2_dir + ')' if m2_deployed else '⏳ Standby Radar'}
+                </div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 12px;">
+                <div style="font-size: 0.75rem; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Tier 2: M3 Triggers (±4.00%)</div>
+                <div style="font-size: 0.95rem; font-family: monospace; margin-top: 2px;">
+                    📈 UP: <b style="color: #34d399;">₹{triggers['m3_up']:,.2f}</b><br/>
+                    📉 DOWN: <b style="color: #f87171;">₹{triggers['m3_down']:,.2f}</b>
+                </div>
+                <div style="font-size: 0.78rem; color: {'#34d399' if m3_deployed else '#94a3b8'}; margin-top: 3px; font-weight: 600;">
+                    Status: {'✅ DEPLOYED (' + m3_dir + ')' if m3_deployed else '⏳ Standby Radar'}
+                </div>
+            </div>
+        </div>
+        <div style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; color: #cbd5e1; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 8px;">
+            <span>🛡️ <b>Compulsory Hedge Helmet:</b> 100% ACTIVE (±500 pts)</span>
+            <span>✂️ <b>25% Midday Stop-Loss:</b> <b style="color: {'#34d399' if sl_mode == 'DISABLED' else '#fbbf24'};">{sl_mode} (Theta Harvest)</b></span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Confirmation Modal state
+    if st.session_state.get("confirm_activate_super_sukhoi"):
+        st.warning(
+            f"⚠️ **CONFIRM SUPER SUKHOI ACTIVATION**\n\n"
+            f"Are you sure you want to activate Full Autonomous Super Sukhoi Mode?\n\n"
+            f"• **Seed Anchor (M1)**: ₹{m1_anchor:,.2f}\n"
+            f"• **Tier 1 (M2)**: Auto-deploys Bull Put Spread at ≥ ₹{triggers['m2_up']:,.2f} OR Bear Call Spread at ≤ ₹{triggers['m2_down']:,.2f}\n"
+            f"• **Tier 2 (M3)**: Auto-deploys at ±4.00% if M1 is still active.\n"
+            f"• **Compulsory Hedge Helmet**: Zerodha pre-buys 500-pt hedge FIRST, sells short SECOND.\n\n"
+            f"Once activated, the engine will manage directional scaling autonomously without requiring screen time."
+        )
+        col_yes, col_no = st.columns(2)
+        with col_yes:
+            if st.button("🚀 YES, START SUPER SUKHOI NOW", type="primary", use_container_width=True, key="btn_confirm_sukhoi_yes"):
+                res = sukhoi.activate_super_sukhoi(m1_anchor=m1_anchor)
+                st.session_state["confirm_activate_super_sukhoi"] = False
+                _flash(res.get("message", "Super Sukhoi Activated"), "success" if res.get("ok") else "error")
+                st.rerun()
+        with col_no:
+            if st.button("❌ Cancel", use_container_width=True, key="btn_confirm_sukhoi_no"):
+                st.session_state["confirm_activate_super_sukhoi"] = False
+                st.rerun()
+    elif not is_active:
+        if st.button("🚀 ACTIVATE SUPER SUKHOI AUTO-MODE (M2/M3 FIRE & FORGET)", type="primary", use_container_width=True, key="btn_req_sukhoi_activate"):
+            st.session_state["confirm_activate_super_sukhoi"] = True
+            st.rerun()
+    else:
+        col_d1, col_d2, col_d3 = st.columns([2, 1, 1])
+        with col_d1:
+            st.success("🦅 **Super Sukhoi Auto-Pilot is Running**: Continuously monitoring Nifty Spot every 30 seconds.")
+        with col_d2:
+            if st.button("🛑 Deactivate Auto-Mode", use_container_width=True, key="btn_sukhoi_deact"):
+                sukhoi.deactivate_super_sukhoi()
+                _flash("Super Sukhoi Deactivated back to Manual Cockpit.", "info")
+                st.rerun()
+        with col_d3:
+            if st.button("🔄 Reset M2/M3 Locks", use_container_width=True, key="btn_sukhoi_reset_locks"):
+                sukhoi.reset_super_sukhoi_deployments()
+                _flash("M2/M3 deployment locks reset.", "info")
+                st.rerun()
+
+    st.markdown('<div style="margin-bottom: 16px;"></div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # V5.0 UNIFIED MASTER STRATEGY CONSOLE ("Ek Hi Jagah Saari Chijen")
 # ─────────────────────────────────────────────────────────────────────────────
 def render_unified_v5_master_console():
+    # ── Super Sukhoi Autonomous Directional Radar HUD (Brick 5) ──
+    render_super_sukhoi_radar_hud()
+
     st.markdown("""
     <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1.5px solid #0284c7; border-radius: 12px; padding: 18px 24px; margin-bottom: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
@@ -2432,6 +2556,7 @@ def render_unified_v5_master_console():
 
     m_cfg = db.get_m_unit_settings(selected_pod)
     is_locked = m_cfg.get("locked", False)
+
 
     cat_expiries = os_engine.get_categorized_expiries()
     all_expiries = cat_expiries.get("all", ["2026-10-27"])

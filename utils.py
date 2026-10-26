@@ -70,6 +70,21 @@ def is_market_hours() -> bool:
     market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
     return market_open <= now <= market_close
 
+def is_market_session_active(dt: datetime.datetime = None) -> bool:
+    """
+    V7.0 Super Sukhoi Market Session Guard:
+    Returns True ONLY during active trading hours (09:15 to 15:30 IST) on valid NSE trading days.
+    Guarantees zero alert spam and peaceful sleep during weekends, holidays, and off-hours.
+    """
+    if dt is None:
+        dt = ist_now()
+    if not is_trading_day(dt):
+        return False
+    market_open  = dt.replace(hour=9,  minute=15, second=0, microsecond=0)
+    market_close = dt.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= dt <= market_close
+
+
 def log(msg: str, level: str = "INFO") -> None:
     """Logs a message to the console and to the log file."""
     timestamp = ist_now().strftime("%Y-%m-%d %H:%M:%S")

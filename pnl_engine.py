@@ -687,12 +687,21 @@ def run_pnl_cycle() -> dict:
                         _log(f"[AUTO-EXIT-CHECK] Strike {s['strike_price']} {s['option_type']}: LTP={ltp:.2f} | Threshold={exit_threshold:.2f} ({sl_desc})", "CYCLE")
                         
                         if ltp >= exit_threshold:
+                            # V7.0 Super Sukhoi Invariant: Decoupled Stop-Loss
+                            # When DISABLED (default in Zerodha OS), prevents premature whipsaw exits.
+                            # Trade remains 100% hedged by 500-pt helmet and evaluated at 14:57 IST EOD.
+                            m_sl_mode = db.get("m_stoploss_mode", "DISABLED").strip().upper()
+                            if m_sl_mode == "DISABLED":
+                                _log(f"[THETA-HARVEST-GUARD] Strike {s['strike_price']} {s['option_type']}: LTP {ltp:.2f} >= Threshold {exit_threshold:.2f} ({sl_desc}), but Stop-Loss mode is DISABLED. Position held safely behind 500-pt hedge helmet.", "THETA")
+                                continue
+
                             _log(f"[AUTO-EXIT] LTP {ltp:.2f} >= Threshold {exit_threshold:.2f} ({sl_desc}) for Strike {s['strike_price']} {s['option_type']}. Triggering close...", "WARN")
                             
                             # V5.0 Orphan Hedge Invariant: Never auto-close the hedge on parent SL hit.
                             # Preserve orphan hedge as capital shield!
                             res = bm.close_strike(strike_id, close_hedge=False)
                             db.update_strike_trade_state(strike_id, "SL_HIT")
+
                             block_num = b["block_number"]
                             
                             # Determine hedge status for the alert

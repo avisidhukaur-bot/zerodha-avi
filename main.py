@@ -328,7 +328,18 @@ def start_engine_loop() -> None:
                 if time.time() - last_pnl_cycle_time >= check_interval or once_mode:
                     utils.log(f"Running P&L update cycle (Interval: {check_interval}s)...", "CYCLE")
                     pe.run_pnl_cycle()
+
+                    # ── V7.0 SUPER SUKHOI AUTONOMOUS LADDERING CYCLE (BRICK 4) ──
+                    try:
+                        import super_sukhoi_engine as sukhoi
+                        sukhoi_res = sukhoi.evaluate_super_sukhoi_cycle(force_eval=once_mode)
+                        if sukhoi_res and sukhoi_res.get("action"):
+                            utils.log(f"Super Sukhoi Action: {sukhoi_res.get('action')}", "SUKHOI")
+                    except Exception as s_err:
+                        utils.log(f"Super Sukhoi cycle error: {s_err}", "ERROR")
+
                     last_pnl_cycle_time = time.time()
+
 
             if once_mode:
                 utils.log("Dry run / --once execution complete. Exiting.", "INFO")
