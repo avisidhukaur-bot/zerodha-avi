@@ -214,3 +214,71 @@
 | **Verification** | `test_super_sukhoi_cheenna_v7.py` | 100% Green test suite passed |
 
 
+
+
+---
+
+## 🦅 10. SUPER SUKHOI V7.1 DYNAMIC EXECUTION-ANCHORED UPGRADE (03-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **Super Sukhoi V7.1** (Chhoti Bahan Edition) | Gap-Up & Dynamic Re-Anchoring Production Release |
+| **Core Architecture** | Execution-Anchored Multi-Tier Supervisor | `super_sukhoi_engine.py` |
+| **Mom's Invariant** | Dynamic Re-Anchoring on Execution | $A_2 = \text{RoundTo50}(\text{Spot}_{\text{entry}})$. Eliminates theoretical gap disconnect & reversal blindness |
+| **Chained Trigger Matrix** | Sequential Chaining | $M2 = A_1 \pm 2.00\%$; $M3 = \mathbf{A_2} \pm 2.00\%$. $M3$ can NEVER double-trigger on gap days |
+| **Lot Inheritance** | Dynamic Mirroring from $M1$ | Inherits active $M1$ lots (e.g. 3 Lots / 195 Qty); zero fallback to 1 |
+| **Directional Parity** | Single-Directional Lock | $M2$ and $M3$ strictly follow $M1$ trend regime; opposing cross-strangles blocked |
+| **Block Lock Guard** | JIT Auto-Hunter Muted | `regime_engine.py` skips JIT auto-strike hunting on Super Sukhoi units |
+| **Dashboard Radar** | Updated Cockpit HUD (Port `9007`) | Displays active inherited lots, dynamic $A_2$, and chained $M3$ bounds |
+| **Verification** | `test_super_sukhoi_cheenna_v7_1.py` | 100% Green test suite passed |
+
+
+---
+
+## 🌸 11. CHHOTI BAHAN 3-STEP SEQUENTIAL PIPELINE UPGRADE (03-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **3-Step Sequential Operator Flow** (Chhoti Bahan Edition) | Foolproof UI workflow eliminating side-by-side button confusion |
+| **Premature Lock Guard** | Gated Linear State Machine | Step 2 Lock button is hidden/disabled until Step 1 Fetch succeeds |
+| **Step 1 (Input & Fetch)** | Inputs: Lots, Horizon, Premium, Anchor | Single active button: 🔍 STEP 1: FETCH & PREVIEW LIVE STRIKES |
+| **Step 2 (Review & Lock)** | Inspection cards (CE/PE strikes, LTPs, SL, Net Credit) | Gated unlock: 🔒 STEP 2: CONFIRM & LOCK STRATEGY PARAMETERS |
+| **Step 3 (Dual Route)** | Two mutually exclusive choices | 🚀 Option A: Execute Now (Instant Fill) vs ⏱️ Option B: Arm in Standby (3 PM Pulse) |
+| **Tri-Module Parity** | pp.py, os_engine.py, weekly_st_engine.py | Universal 3-Step sequential parity across M-Units, OS, and Weekly ST |
+| **Backend Invariant** | 0% change to execution calculus | lock_manager.py, super_sukhoi_engine.py, kite_executor.py 100% untouched |
+| **Broker State at Deploy** | Zerodha Kite (XK7125): **100% FLAT** | 0 open positions, **+₹20,179.25 gross (+₹19,577.77 net)** secured |
+
+
+---
+
+## 🛒 12. BHARAT OPTION BUYING ENGINE (NSL v6.1 — NON-MONTHLY BREAKOUT & CHHOTI BAHAN INVARIANTS)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **Bharat Option Buying (NSL v6.1)** | Non-Monthly Weekly Reference Breakout Engine |
+| **Asset & Base Sizing**| NIFTY 50 • **Strictly 1 Lot (65 Qty)** | Zero overtrading; capital risk capped at ~₹10k–₹13k |
+| **Target Expiry Rule** | **Strictly Non-Monthly Expiries** | Avoids last Thursday; prevents collision with Option Selling M-Units |
+| **Expiry Distance** | **~3rd to 4th Week Forward (~14–28 Days)** | If 4th week is monthly, auto-cascades to 3rd week for peak liquidity |
+| **Strike Series Filter**| **Modulo 100 Only (`strike % 100 == 0`)**| Banish 50-ending strikes; eliminates illiquid fills & wide bid-ask spread |
+| **Target Premium** | **₹160.00 to ₹200.00** (closest to ₹160) | Low theta decay curve with responsive directional delta ($\Delta pprox 0.38$) |
+| **Gate 1 (Morning)** | **10:45 AM IST** Breakout Evaluation | Buys only if $LTP_{1045} > Ref_{930}$ (1-min historical candle close) |
+| **Watchdog Loop** | **5-Minute Boundary Monitor** | At $+50\%$ profit $\implies$ **Sell Active $
+ightarrow$ Sleep 30s $
+ightarrow$ Rollover** |
+| **Gate 2 (Afternoon)** | **03:00 PM IST** Trend Check | Hold overnight if $LTP > Ref_{930}$; Exit immediately if $LTP \le Ref_{930}$ |
+| **Long-Only Shield** | `qty > 0` AND token match AND tag `NSLBUY` | All short selling positions (`qty < 0`) are 100% invisible & untouchable |
+| **UI & DB Isolation** | Dedicated Standalone Page & `zerodha_buying.db` | Zero cognitive clutter ("bhashan"); zero interference with Port `9007` |
+
+---
+
+## 🛑 13. EMERGENCY EXIT & BROKER GROUND TRUTH RECONCILIATION UPGRADE (04-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **Broker Ground Truth Emergency Exit** | Direct Broker Square-Off & Unit Desync Resolution |
+| **Root Cause Resolved** | Unit Name & Status Desync | wipe_out_and_reset_m_unit() checked only anchor_unit_name == u; missed auto-spawned blocks with notes or non-OPEN statuses |
+| **M3 Button Parity** | 4-Column UI Exit Strip | Added dedicated M3 emergency close button to app.py Cockpit |
+| **Broker Ground Truth Loop** | Direct Kite API Cross-Check | After closing DB records, checks kite.positions()['net'] and places market exit orders for any hanging legs |
+| **Master Kill-Switch** | 1-Click Account Square-Off | Directly flattens ALL open derivative contracts on Zerodha Kite API (Shorts covered first -> Hedges sold second) |
+| **Margin Safety Invariant** | Margin-Safe Execution Order | **Buy-to-Cover Shorts FIRST -> Sell Long Hedges SECOND**; 100% margin-call proof |
+| **Deployment Target** | HostAsia VPS (5.75.250.104:9007) | Dual service restart: zerodha_engine.service & zerodha_dashboard.service |

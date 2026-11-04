@@ -2483,18 +2483,24 @@ def render_super_sukhoi_radar_hud():
     # Confirmation Modal state
     if st.session_state.get("confirm_activate_super_sukhoi"):
         st.warning(
-            f"⚠️ **CONFIRM SUPER SUKHOI ACTIVATION**\n\n"
+            f"⚠️ **CONFIRM SUPER SUKHOI V7.1 ACTIVATION**\n\n"
             f"Are you sure you want to activate Full Autonomous Super Sukhoi Mode?\n\n"
             f"• **Seed Anchor (M1)**: ₹{m1_anchor:,.2f}\n"
+            f"• **Inherited Lot Size**: {st_data['m1_lots']} Lots ({st_data['m1_lots'] * 65} Qty)\n"
             f"• **Tier 1 (M2)**: Auto-deploys Bull Put Spread at ≥ ₹{triggers['m2_up']:,.2f} OR Bear Call Spread at ≤ ₹{triggers['m2_down']:,.2f}\n"
-            f"• **Tier 2 (M3)**: Auto-deploys at ±4.00% if M1 is still active.\n"
+            f"• **Dynamic Re-Anchoring**: At fill, M2 anchor locks to actual execution spot price (Round to nearest 50).\n"
+            f"• **Sequential Chaining**: M3 derives exclusively from M2 actual anchor (never double-triggers with M2).\n"
             f"• **Compulsory Hedge Helmet**: Zerodha pre-buys 500-pt hedge FIRST, sells short SECOND.\n\n"
             f"Once activated, the engine will manage directional scaling autonomously without requiring screen time."
         )
         col_yes, col_no = st.columns(2)
         with col_yes:
             if st.button("🚀 YES, START SUPER SUKHOI NOW", type="primary", use_container_width=True, key="btn_confirm_sukhoi_yes"):
-                res = sukhoi.activate_super_sukhoi(m1_anchor=m1_anchor)
+                res = sukhoi.activate_super_sukhoi(
+                    m1_anchor=m1_anchor,
+                    expiry_date=st_data.get("m1_expiry", ""),
+                    lots=int(st_data.get("m1_lots", 3))
+                )
                 st.session_state["confirm_activate_super_sukhoi"] = False
                 _flash(res.get("message", "Super Sukhoi Activated"), "success" if res.get("ok") else "error")
                 st.rerun()
@@ -2749,11 +2755,7 @@ def render_unified_v5_master_console():
                         m_pe = st.number_input("Manual PE Strike", value=int(def_pe), step=100, key=f"m_tab_man_pe_{selected_pod}")
 
             st.markdown("<hr style='margin: 12px 0;'/>", unsafe_allow_html=True)
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                btn_fetch = st.button("🔍 Fetch & Preview Strikes", key=f"btn_m_fetch_{selected_pod}", use_container_width=True)
-            with col_b2:
-                btn_lock = st.button(f"🔒 Lock & Arm {selected_pod} Settings", key=f"btn_m_lock_{selected_pod}", use_container_width=True, type="primary")
+            btn_fetch = st.button(f"🔍 STEP 1: FETCH & PREVIEW LIVE STRIKES FOR {selected_pod}", key=f"btn_m_fetch_{selected_pod}", use_container_width=True, type="primary")
 
             if btn_fetch:
                 with st.spinner(f"Scanning option chain for {selected_pod}..."):
@@ -2767,23 +2769,6 @@ def render_unified_v5_master_console():
                         hedge_dist=500
                     )
 
-            if btn_lock:
-                db.set_m_unit_settings(
-                    unit_name=selected_pod,
-                    locked=True,
-                    anchor_price=user_anchor,
-                    horizon=horizon,
-                    expiry_date=selected_exp,
-                    lots=lots,
-                    lot_size=user_lot_size,
-                    mode="MANUAL" if stk_mode == "Manual Strike Override" else "AUTO",
-                    manual_ce=m_ce or 0,
-                    manual_pe=m_pe or 0,
-                    target_premium=target_prem
-                )
-                _flash(f"✅ {selected_pod} Settings LOCKED & ARMED with Anchor ₹{user_anchor:,.2f}!", "success")
-                st.rerun()
-
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -2795,13 +2780,28 @@ def render_unified_v5_master_console():
         h_pe = inspection.get("pe", {})
         unit_regime = inspection.get("regime", "BEARISH")
 
+        col_prev_head, col_prev_clear = st.columns([3.2, 1.2])
+        with col_prev_head:
+            st.markdown(
+                '<div style="background: rgba(14, 165, 233, 0.12); border-left: 4px solid #0284c7; padding: 8px 14px; border-radius: 6px; font-size: 0.84rem; color: #bae6fd; margin-top: 10px;">'
+                '🔍 <b>LIVE SCANNER PREVIEW ONLY:</b> These candidate strikes are fetched from Kite for inspection. '
+                '<b style="color: #fde047;">Zero orders are active or placed on your broker.</b>'
+                '</div>',
+                unsafe_allow_html=True
+            )
+        with col_prev_clear:
+            st.markdown('<div style="margin-top: 10px;"></div>', unsafe_allow_html=True)
+            if st.button("🧹 Clear Preview", key=f"btn_clear_prev_{selected_pod}", use_container_width=True, help="Removes these scanner cards and clears the screen."):
+                st.session_state.pop(f"m_inspection_{selected_pod}", None)
+                st.rerun()
+
         col_ce_box, col_pe_box = st.columns(2)
 
         with col_ce_box:
             if h_ce.get("sell_strike"):
                 is_qual_ce = (unit_regime == "BEARISH")
                 ce_border = "#3b82f6" if is_qual_ce else "#94a3b8"
-                ce_badge = "🟢 QUALIFIED TO SELL (BEARISH REGIME)" if is_qual_ce else "⚪ ARMED IN PENDING (STANDBY)"
+                ce_badge = "🟢 RECOMMENDED (BEARISH REGIME)" if is_qual_ce else "⚪ INACTIVE CANDIDATE (STANDBY)"
 
                 st.markdown(f'''
                 <div style="background: #0f172a; border: 2px solid {ce_border}; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
@@ -2828,7 +2828,7 @@ def render_unified_v5_master_console():
             if h_pe.get("sell_strike"):
                 is_qual_pe = (unit_regime == "BULLISH")
                 pe_border = "#10b981" if is_qual_pe else "#94a3b8"
-                pe_badge = "🟢 QUALIFIED TO SELL (BULLISH REGIME)" if is_qual_pe else "⚪ ARMED IN PENDING (STANDBY)"
+                pe_badge = "🟢 RECOMMENDED (BULLISH REGIME)" if is_qual_pe else "⚪ INACTIVE CANDIDATE (STANDBY)"
 
                 st.markdown(f'''
                 <div style="background: #0f172a; border: 2px solid {pe_border}; border-radius: 12px; padding: 20px; margin-top: 10px; color: #ffffff; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
@@ -2851,89 +2851,102 @@ def render_unified_v5_master_console():
                 </div>
                 ''', unsafe_allow_html=True)
 
-        # ── STEP 2: EXECUTION ACTION ─────────────────────────────────────────
-        st.markdown(f'<p class="section-title" style="margin-top:20px;">🚀 STEP 2: EXECUTE OR ARM {selected_pod} (TREND DEPLOY)</p>', unsafe_allow_html=True)
+        # ── STEP 2: REVIEW & LOCK STRATEGY PARAMETERS ────────────────────────
+        st.markdown(f'<p class="section-title" style="margin-top:24px;">🔒 STEP 2: REVIEW & LOCK {selected_pod} STRATEGY</p>', unsafe_allow_html=True)
 
-        qual_wing_name = "CALL WING (BEARISH)" if unit_regime == "BEARISH" else "PUT WING (BULLISH)"
-        btn_c1, btn_c2 = st.columns([2, 1])
-
-        with btn_c1:
-            if st.button(f"🚀 Execute Qualified {qual_wing_name} Now (Manual Deploy)", key=f"btn_m_exec_now_{selected_pod}", use_container_width=True, type="primary"):
-                if not is_locked:
-                    db.set_m_unit_settings(
-                        unit_name=selected_pod,
-                        locked=True,
-                        anchor_price=user_anchor,
-                        horizon=horizon if 'horizon' in locals() else "Monthly Expiry",
-                        expiry_date=selected_exp,
-                        lots=lots,
-                        lot_size=user_lot_size,
-                        mode="MANUAL" if ('stk_mode' in locals() and stk_mode == "Manual Strike Override") else "AUTO",
-                        manual_ce=m_ce or 0,
-                        manual_pe=m_pe or 0,
-                        target_premium=target_prem
-                    )
-
-                res = bm.deploy_or_update_m_unit(
+        if not is_locked:
+            st.markdown(
+                f'<div style="background: rgba(245, 158, 11, 0.12); border-left: 4px solid #f59e0b; padding: 10px 16px; border-radius: 8px; font-size: 0.90rem; color: #fde68a; margin-bottom: 12px;">'
+                f'👉 <b>Step 1 Complete!</b> Live candidate strikes fetched from Kite. Review the strikes, SL trigger, and Net Credit above. '
+                f'Click below to lock your parameters and unlock Step 3 Execution choices.'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            if st.button(f"🔒 STEP 2: CONFIRM & LOCK {selected_pod} STRATEGY PARAMETERS", key=f"btn_m_lock_{selected_pod}", use_container_width=True, type="primary"):
+                db.set_m_unit_settings(
                     unit_name=selected_pod,
+                    locked=True,
+                    anchor_price=user_anchor,
+                    horizon=horizon if 'horizon' in locals() else "Monthly Expiry",
                     expiry_date=selected_exp,
-                    master_anchor_price=user_anchor,
                     lots=lots,
-                    ce_sell_strike=h_ce.get("sell_strike", 0),
-                    ce_hedge_strike=h_ce.get("hedge_strike", 0),
-                    ce_sell_ltp=h_ce.get("sell_ltp", 0.0),
-                    ce_hedge_ltp=h_ce.get("hedge_ltp", 0.0),
-                    pe_sell_strike=h_pe.get("sell_strike", 0),
-                    pe_hedge_strike=h_pe.get("hedge_strike", 0),
-                    pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
-                    pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
-                    sl_pct=25.0,
-                    deploy_now=True
+                    lot_size=user_lot_size,
+                    mode="MANUAL" if ('stk_mode' in locals() and stk_mode == "Manual Strike Override") else "AUTO",
+                    manual_ce=m_ce or 0,
+                    manual_pe=m_pe or 0,
+                    target_premium=target_prem
                 )
-                if res.get("ok"):
-                    _flash(f"🚀 {res.get('message')}", "success")
-                else:
-                    _flash(f"Execution note: {res.get('message')}", "error")
+                _flash(f"✅ {selected_pod} Settings LOCKED & ARMED with Anchor ₹{user_anchor:,.2f}!", "success")
                 st.rerun()
+        else:
+            st.markdown(
+                f'<div style="background: rgba(16, 185, 129, 0.12); border-left: 4px solid #10b981; padding: 10px 16px; border-radius: 8px; font-size: 0.90rem; color: #a7f3d0; margin-bottom: 12px;">'
+                f'✅ <b>STEP 2 COMPLETE:</b> {selected_pod} Strategy Parameters are LOCKED in database with Anchor ₹{user_anchor:,.2f}.'
+                f'</div>',
+                unsafe_allow_html=True
+            )
 
-        with btn_c2:
-            if st.button(f"⏱️ Arm Both Wings in PENDING (Standby)", key=f"btn_m_arm_pending_{selected_pod}", use_container_width=True):
-                if not is_locked:
-                    db.set_m_unit_settings(
+        # ── STEP 3: CHOOSE EXECUTION ROUTE ───────────────────────────────────
+        st.markdown(f'<p class="section-title" style="margin-top:20px;">🚀 STEP 3: CHOOSE EXECUTION ROUTE FOR {selected_pod}</p>', unsafe_allow_html=True)
+
+        if not is_locked:
+            st.markdown(
+                '<div style="background: #1e293b; border: 1.5px dashed #64748b; padding: 14px 18px; border-radius: 8px; font-size: 0.90rem; color: #94a3b8; margin-top: 8px; text-align: center;">'
+                '🔒 <b>STEP 3 LOCKED:</b> Complete <b>Step 2 (Confirm & Lock)</b> above to enable Execution Options.'
+                '</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            qual_wing_name = "CALL WING (BEARISH)" if unit_regime == "BEARISH" else "PUT WING (BULLISH)"
+            btn_c1, btn_c2 = st.columns([1.5, 1.5])
+
+            with btn_c1:
+                if st.button(f"🚀 Option A: Execute Qualified {qual_wing_name} Now (Instant Fill)", key=f"btn_m_exec_now_{selected_pod}", use_container_width=True, type="primary"):
+                    res = bm.deploy_or_update_m_unit(
                         unit_name=selected_pod,
-                        locked=True,
-                        anchor_price=user_anchor,
-                        horizon=horizon if 'horizon' in locals() else "Monthly Expiry",
                         expiry_date=selected_exp,
+                        master_anchor_price=user_anchor,
                         lots=lots,
-                        lot_size=user_lot_size,
-                        mode="MANUAL" if ('stk_mode' in locals() and stk_mode == "Manual Strike Override") else "AUTO",
-                        manual_ce=m_ce or 0,
-                        manual_pe=m_pe or 0,
-                        target_premium=target_prem
+                        ce_sell_strike=h_ce.get("sell_strike", 0),
+                        ce_hedge_strike=h_ce.get("hedge_strike", 0),
+                        ce_sell_ltp=h_ce.get("sell_ltp", 0.0),
+                        ce_hedge_ltp=h_ce.get("hedge_ltp", 0.0),
+                        pe_sell_strike=h_pe.get("sell_strike", 0),
+                        pe_hedge_strike=h_pe.get("hedge_strike", 0),
+                        pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
+                        pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
+                        sl_pct=25.0,
+                        deploy_now=True
                     )
+                    if res.get("ok"):
+                        _flash(f"🚀 {res.get('message')}", "success")
+                    else:
+                        _flash(f"Execution note: {res.get('message')}", "error")
+                    st.rerun()
 
-                res = bm.deploy_or_update_m_unit(
-                    unit_name=selected_pod,
-                    expiry_date=selected_exp,
-                    master_anchor_price=user_anchor,
-                    lots=lots,
-                    ce_sell_strike=h_ce.get("sell_strike", 0),
-                    ce_hedge_strike=h_ce.get("hedge_strike", 0),
-                    ce_sell_ltp=h_ce.get("sell_ltp", 0.0),
-                    ce_hedge_ltp=h_ce.get("hedge_ltp", 0.0),
-                    pe_sell_strike=h_pe.get("sell_strike", 0),
-                    pe_hedge_strike=h_pe.get("hedge_strike", 0),
-                    pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
-                    pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
-                    sl_pct=25.0,
-                    deploy_now=False
-                )
-                if res.get("ok"):
-                    _flash(f"⏱️ {selected_pod} both wings armed in PENDING in database.", "info")
-                else:
-                    _flash(f"Arming failed: {res.get('message')}", "error")
-                st.rerun()
+            with btn_c2:
+                if st.button(f"⏱️ Option B: Arm Both Wings in PENDING (Standby for Evening/Pulse)", key=f"btn_m_arm_pending_{selected_pod}", use_container_width=True):
+                    res = bm.deploy_or_update_m_unit(
+                        unit_name=selected_pod,
+                        expiry_date=selected_exp,
+                        master_anchor_price=user_anchor,
+                        lots=lots,
+                        ce_sell_strike=h_ce.get("sell_strike", 0),
+                        ce_hedge_strike=h_ce.get("hedge_strike", 0),
+                        ce_sell_ltp=h_ce.get("sell_ltp", 0.0),
+                        ce_hedge_ltp=h_ce.get("hedge_ltp", 0.0),
+                        pe_sell_strike=h_pe.get("sell_strike", 0),
+                        pe_hedge_strike=h_pe.get("hedge_strike", 0),
+                        pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
+                        pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
+                        sl_pct=25.0,
+                        deploy_now=False
+                    )
+                    if res.get("ok"):
+                        _flash(f"⏱️ {selected_pod} both wings armed in PENDING in database.", "info")
+                    else:
+                        _flash(f"Arming failed: {res.get('message')}", "error")
+                    st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3661,15 +3674,44 @@ def render_emergency_shutdown_bar():
     </div>
     """, unsafe_allow_html=True)
 
-    c_m1, c_m2, c_os = st.columns(3)
+    # ── MASTER DIRECT BROKER SQUARE-OFF (100% FAILSAFE) ──
+    if st.session_state.get("confirm_direct_broker_sqoff"):
+        st.markdown("""
+        <div style="background:#fee2e2; border:2.5px solid #b91c1c; border-radius:10px; padding:14px; margin-bottom:12px; text-align:center;">
+            <b style="color:#7f1d1d; font-size:1.10rem;">🚨 CRITICAL ACTION: MARKET SQUARE-OFF ALL TRADES ON ZERODHA BROKER</b><br/>
+            <span style="color:#991b1b; font-size:0.86rem;">This will query Zerodha Kite API directly and immediately close ALL open derivative positions (Cover Shorts FIRST, Sell Hedges SECOND).</span>
+        </div>
+        """, unsafe_allow_html=True)
+        sq_yes, sq_no = st.columns(2)
+        with sq_yes:
+            if st.button("🔥 YES, CLOSE ALL POSITIONS ON BROKER NOW", key="btn_confirm_direct_sqoff_yes", type="primary", use_container_width=True):
+                with st.spinner("Executing direct broker market square-off on Zerodha Kite..."):
+                    res_sq = bm.emergency_direct_broker_square_off_all()
+                    st.session_state["confirm_direct_broker_sqoff"] = False
+                    if res_sq.get("ok"):
+                        _flash(f"✅ {res_sq.get('message')}", "success")
+                    else:
+                        _flash(f"Square-off: {res_sq.get('message')}", "error")
+                    st.rerun()
+        with sq_no:
+            if st.button("❌ Cancel Full Square-Off", key="btn_confirm_direct_sqoff_no", use_container_width=True):
+                st.session_state["confirm_direct_broker_sqoff"] = False
+                st.rerun()
+    else:
+        if st.button("🛑 1-CLICK EMERGENCY SQUARE-OFF ENTIRE ACCOUNT (DIRECT BROKER EXIT)", key="btn_direct_broker_sqoff", use_container_width=True, type="primary", help="Directly queries Zerodha Kite and places market exit orders for all open contracts. Margin-safe: shorts covered first."):
+            st.session_state["confirm_direct_broker_sqoff"] = True
+            st.rerun()
+
+    st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
+    c_m1, c_m2, c_m3, c_os = st.columns(4)
 
     # ── M1 CLOSE ──
     with c_m1:
         if st.session_state.get("confirm_close_m1"):
             st.markdown("""
-            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:12px; margin-bottom:8px; text-align:center;">
-                <b style="color:#991b1b; font-size:1.0rem;">⚠️ ARE YOU REALLY SURE?</b><br/>
-                <span style="color:#7f1d1d; font-size:0.82rem;">Immediate Market Exit of ALL M1 positions on Zerodha Kite Broker Terminal!</span>
+            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:10px; margin-bottom:8px; text-align:center;">
+                <b style="color:#991b1b; font-size:0.90rem;">⚠️ CLOSE M1?</b><br/>
+                <span style="color:#7f1d1d; font-size:0.75rem;">Market Exit on Zerodha!</span>
             </div>
             """, unsafe_allow_html=True)
             b1, b2 = st.columns(2)
@@ -3685,7 +3727,7 @@ def render_emergency_shutdown_bar():
                     st.session_state["confirm_close_m1"] = False
                     st.rerun()
         else:
-            if st.button("🚨 CLOSE WHOLE M1 SYSTEM", key="btn_req_close_m1", use_container_width=True, type="primary", help="Immediately squares off all M1 trades on Zerodha Kite broker, purges DB records, and resets M1 to idle."):
+            if st.button("🚨 CLOSE WHOLE M1", key="btn_req_close_m1", use_container_width=True, type="primary", help="Immediately squares off all M1 trades on Zerodha Kite broker, purges DB records, and resets M1 to idle."):
                 st.session_state["confirm_close_m1"] = True
                 st.rerun()
 
@@ -3693,9 +3735,9 @@ def render_emergency_shutdown_bar():
     with c_m2:
         if st.session_state.get("confirm_close_m2"):
             st.markdown("""
-            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:12px; margin-bottom:8px; text-align:center;">
-                <b style="color:#991b1b; font-size:1.0rem;">⚠️ ARE YOU REALLY SURE?</b><br/>
-                <span style="color:#7f1d1d; font-size:0.82rem;">Immediate Market Exit of ALL M2 positions on Zerodha Kite Broker Terminal!</span>
+            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:10px; margin-bottom:8px; text-align:center;">
+                <b style="color:#991b1b; font-size:0.90rem;">⚠️ CLOSE M2?</b><br/>
+                <span style="color:#7f1d1d; font-size:0.75rem;">Market Exit on Zerodha!</span>
             </div>
             """, unsafe_allow_html=True)
             b1, b2 = st.columns(2)
@@ -3711,17 +3753,43 @@ def render_emergency_shutdown_bar():
                     st.session_state["confirm_close_m2"] = False
                     st.rerun()
         else:
-            if st.button("🚨 CLOSE WHOLE M2 SYSTEM", key="btn_req_close_m2", use_container_width=True, type="primary", help="Immediately squares off all M2 trades on Zerodha Kite broker, purges DB records, and resets M2 to idle."):
+            if st.button("🚨 CLOSE WHOLE M2", key="btn_req_close_m2", use_container_width=True, type="primary", help="Immediately squares off all M2 trades on Zerodha Kite broker, purges DB records, and resets M2 to idle."):
                 st.session_state["confirm_close_m2"] = True
+                st.rerun()
+
+    # ── M3 CLOSE (NEW!) ──
+    with c_m3:
+        if st.session_state.get("confirm_close_m3"):
+            st.markdown("""
+            <div style="background:#fee2e2; border:2px solid #dc2626; border-radius:10px; padding:10px; margin-bottom:8px; text-align:center;">
+                <b style="color:#991b1b; font-size:0.90rem;">⚠️ CLOSE M3?</b><br/>
+                <span style="color:#7f1d1d; font-size:0.75rem;">Market Exit on Zerodha!</span>
+            </div>
+            """, unsafe_allow_html=True)
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("🔥 YES, CLOSE M3", key="btn_confirm_close_m3_yes", type="primary", use_container_width=True):
+                    with st.spinner("Squaring off M3 on Zerodha Kite..."):
+                        res = bm.wipe_out_and_reset_m_unit("M3")
+                        st.session_state["confirm_close_m3"] = False
+                        _flash(res.get("message", "M3 Closed"), "success" if res.get("ok") else "error")
+                        st.rerun()
+            with b2:
+                if st.button("❌ Cancel", key="btn_confirm_close_m3_no", use_container_width=True):
+                    st.session_state["confirm_close_m3"] = False
+                    st.rerun()
+        else:
+            if st.button("🚨 CLOSE WHOLE M3", key="btn_req_close_m3", use_container_width=True, type="primary", help="Immediately squares off all M3 trades on Zerodha Kite broker, purges DB records, and resets M3 to idle."):
+                st.session_state["confirm_close_m3"] = True
                 st.rerun()
 
     # ── WHOLE OS SYSTEM CLOSE ──
     with c_os:
         if st.session_state.get("confirm_close_os_all"):
             st.markdown("""
-            <div style="background:#fef3c7; border:2px solid #d97706; border-radius:10px; padding:12px; margin-bottom:8px; text-align:center;">
-                <b style="color:#92400e; font-size:1.0rem;">⚠️ ARE YOU REALLY SURE?</b><br/>
-                <span style="color:#78350f; font-size:0.82rem;">Immediate Market Exit of ALL OS units (OS1–OS5) on Zerodha Kite Broker Terminal!</span>
+            <div style="background:#fef3c7; border:2px solid #d97706; border-radius:10px; padding:10px; margin-bottom:8px; text-align:center;">
+                <b style="color:#92400e; font-size:0.90rem;">⚠️ CLOSE OS?</b><br/>
+                <span style="color:#78350f; font-size:0.75rem;">Market Exit on Zerodha!</span>
             </div>
             """, unsafe_allow_html=True)
             b1, b2 = st.columns(2)
@@ -3737,7 +3805,7 @@ def render_emergency_shutdown_bar():
                     st.session_state["confirm_close_os_all"] = False
                     st.rerun()
         else:
-            if st.button("🚨 CLOSE WHOLE OS SYSTEM", key="btn_req_close_os_all", use_container_width=True, type="primary", help="Immediately squares off all OS units (OS1–OS5) on Zerodha Kite broker, purges DB records, and resets OS to idle."):
+            if st.button("🚨 CLOSE WHOLE OS", key="btn_req_close_os_all", use_container_width=True, type="primary", help="Immediately squares off all OS units (OS1–OS5) on Zerodha Kite broker, purges DB records, and resets OS to idle."):
                 st.session_state["confirm_close_os_all"] = True
                 st.rerun()
 

@@ -1,5 +1,5 @@
 """
-weekly_st_engine.py -- Weekly SuperTrend (8,3) 2-Hour Autonomous Option Selling Engine
+weekly_st_engine.py -- Weekly SuperTrend (8,2) 2-Hour Autonomous Option Selling Engine
 ======================================================================================
 System: Bharat Systems — Zerodha OS Extension
 Architecture: W-Unit (W1) Autonomous Spread Engine
@@ -109,7 +109,7 @@ except Exception as e:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2-HOUR NATIVE CANDLES & DYNAMIC SUPERTREND (8, 3) (ZERODHA PARITY)
+# 2-HOUR NATIVE CANDLES & DYNAMIC SUPERTREND (8, 2) (ZERODHA PARITY)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _candles_cache = {"timestamp": 0.0, "df": None}
@@ -185,9 +185,9 @@ def fetch_2h_candles(lookback_days: int = 120, force_refresh: bool = False) -> p
     return df
 
 
-def calculate_supertrend_2h(period: int = 8, multiplier: float = 3.0, force_refresh: bool = False) -> Dict[str, Any]:
+def calculate_supertrend_2h(period: int = 8, multiplier: float = 2.0, force_refresh: bool = False) -> Dict[str, Any]:
     """
-    Computes SuperTrend (8, 3) on official native 2-Hour Zerodha Kite candles.
+    Computes SuperTrend (8, 2) on official native 2-Hour Zerodha Kite candles.
     Uses Wilder's RMA (alpha = 1/period) matching ChartIQ/TradingView on Zerodha Kite.
     Returns real-time dynamic spot, supertrend value, distance, and regime.
     """
@@ -406,7 +406,7 @@ def hunt_weekly_st_spread(
     st_val = float(st_value) if (st_value is not None and st_value > 0) else 0.0
 
     if not live_spot or live_spot <= 0 or st_val <= 0:
-        st_res = calculate_supertrend_2h(period=8, multiplier=3.0)
+        st_res = calculate_supertrend_2h(period=8, multiplier=2.0)
         if not live_spot or live_spot <= 0:
             live_spot = float(st_res.get("spot", 22800.0) or 22800.0)
         if st_val <= 0:
@@ -711,7 +711,7 @@ def execute_weekly_st_entry(candidate: Dict[str, Any], lots: int = 1) -> Dict[st
         tg_msg = (
             f"⚡ *[WEEKLY ST-2H ENGINE] NEW SPREAD DEPLOYED (W1)*\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🧭 *Regime*: `{candidate['direction']}` (ST 8,3)\n"
+            f"🧭 *Regime*: `{candidate['direction']}` (ST 8,2)\n"
             f"📅 *Expiry*: `{candidate['expiry']}`\n"
             f"🔴 *SELL*: `{sell_sym}` @ Rs{sell_fill:.2f} ({lots} Lot/{qty} Qty)\n"
             f"🟢 *HEDGE*: `{hedge_sym}` @ Rs{hedge_fill:.2f} (Armor +500)\n"
@@ -883,7 +883,7 @@ def evaluate_weekly_st_pulse(force_pulse: bool = False) -> Dict[str, Any]:
     """
     Core Autonomous Cycle executed at each 2-Hour pulse:
       1. Verifies if autonomous trading switch is ON.
-      2. Audits SuperTrend (8, 3) on 2H timeframe.
+      2. Audits SuperTrend (8, 2) on 2H timeframe.
       3. Checks for Monday First-Signal Rollover (rolls Tuesday weekly contracts to next week at Pulse 1).
       4. If trend flipped, closes existing position and opens opposite spread.
       5. If flat, deploys fresh spread matching current regime.
@@ -903,7 +903,7 @@ def evaluate_weekly_st_pulse(force_pulse: bool = False) -> Dict[str, Any]:
     _log(f"Executing Pulse Audit: {pulse_desc} (Forced: {force_pulse})", "PULSE")
 
     # 1. SuperTrend 2H Evaluation
-    st_data = calculate_supertrend_2h(period=8, multiplier=3.0)
+    st_data = calculate_supertrend_2h(period=8, multiplier=2.0)
     if not st_data.get("ok"):
         return {"ok": False, "message": "Failed to compute 2H SuperTrend."}
 
@@ -1085,7 +1085,7 @@ def render_weekly_st_tab(portfolio: Optional[Dict[str, Any]] = None):
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <div>
                     <h2 style="color:#ffffff; margin:0; font-size:1.4rem; font-weight:700;">
-                        ⚡ WEEKLY SUPERTREND (8,3) 2-HOUR ENGINE (W1 COCKPIT)
+                        ⚡ WEEKLY SUPERTREND (8,2) 2-HOUR ENGINE (W1 COCKPIT)
                         <span style="font-size:0.75rem; background:#4338ca; color:#a5b4fc; padding:3px 10px; border-radius:12px; margin-left:8px; border:1px solid #6366f1;">
                             🚀 V7.5 MASTER EDITION
                         </span>
@@ -1153,9 +1153,9 @@ def render_weekly_st_tab(portfolio: Optional[Dict[str, Any]] = None):
 
     st.markdown("<br/>", unsafe_allow_html=True)
 
-    # ── ROW 2: LIVE SUPERTREND (8,3) 2H METRICS & TIMELINE CLOCK ──
+    # ── ROW 2: LIVE SUPERTREND (8,2) 2H METRICS & TIMELINE CLOCK ──
     force_ref = st.session_state.pop("w_force_st_refresh", False)
-    st_info = calculate_supertrend_2h(period=8, multiplier=3.0, force_refresh=force_ref)
+    st_info = calculate_supertrend_2h(period=8, multiplier=2.0, force_refresh=force_ref)
     in_pulse, pulse_text = is_pulse_time()
 
     col_title_left, col_title_right = st.columns([3, 1])
@@ -1178,7 +1178,7 @@ def render_weekly_st_tab(portfolio: Optional[Dict[str, Any]] = None):
     with col_m2:
         regime = st_info.get("regime", "NEUTRAL")
         r_color = "🟢" if regime == "BULLISH" else "🔴"
-        st.metric("SUPERTREND (8, 3)", f"₹{st_info.get('supertrend', 0.0):,.2f}", f"{r_color} {regime}")
+        st.metric("SUPERTREND (8, 2)", f"₹{st_info.get('supertrend', 0.0):,.2f}", f"{r_color} {regime}")
     with col_m3:
         st.metric("SPOT DISTANCE", f"{st_info.get('distance', 0.0):+,.2f} pts", f"{st_info.get('distance_pct', 0.0):+,.2f}%")
     with col_m4:
@@ -1349,9 +1349,30 @@ def render_weekly_st_tab(portfolio: Optional[Dict[str, Any]] = None):
             </div>
         """, unsafe_allow_html=True)
 
-        c_act1, c_act2 = st.columns([1.5, 1.5])
-        with c_act1:
-            if st.button("🔒 LOCK & ARM EXPIRY STRATEGY", key="btn_w_lock", type="primary", use_container_width=True):
+        # ── STEP 1: PREVIEW & HUNT CANDIDATE SPREAD ──────────────────────────
+        if st.button("🎯 STEP 1: PREVIEW & HUNT STRIKES WITH THIS STRATEGY", key="btn_w_test_preview", use_container_width=True, type="primary"):
+            with st.spinner("Hunting compliant strikes..."):
+                preview_res = hunt_weekly_st_spread(
+                    direction=cur_regime,
+                    min_prem=cfg_st["min_prem"],
+                    max_prem=cfg_st["max_prem"],
+                    hedge_distance=cfg_st["hedge_dist"],
+                    expiry_mode=new_mode,
+                    target_expiry=sel_target_exp,
+                    min_spot_buffer=float(new_spot_buf),
+                    st_clearance=float(new_st_moat),
+                    st_value=cur_st,
+                    spot_val=cur_spot
+                )
+                st.session_state["w_hunter_preview"] = preview_res
+                st.rerun()
+
+        # In-Place Strategy Preview Display Card in Row 2.5 (Draft Mode)
+        prev_draft = st.session_state.get("w_hunter_preview")
+        if prev_draft:
+            _render_strike_preview_card(prev_draft, all_weekly_expiries, cfg_st, mode_label=new_mode)
+            st.markdown('<div style="margin-top:12px;"></div>', unsafe_allow_html=True)
+            if st.button("🔒 STEP 2: CONFIRM & LOCK EXPIRY STRATEGY", key="btn_w_lock", type="primary", use_container_width=True):
                 set_weekly_st_settings(
                     locked=True,
                     expiry_mode=new_mode,
@@ -1361,28 +1382,6 @@ def render_weekly_st_tab(portfolio: Optional[Dict[str, Any]] = None):
                 )
                 st.toast(f"✅ Expiry Strategy LOCKED: {new_mode}", icon="🔒")
                 st.rerun()
-        with c_act2:
-            if st.button("🎯 Preview Strike Selection with this Strategy", key="btn_w_test_preview", use_container_width=True):
-                with st.spinner("Hunting compliant strikes..."):
-                    preview_res = hunt_weekly_st_spread(
-                        direction=cur_regime,
-                        min_prem=cfg_st["min_prem"],
-                        max_prem=cfg_st["max_prem"],
-                        hedge_distance=cfg_st["hedge_dist"],
-                        expiry_mode=new_mode,
-                        target_expiry=sel_target_exp,
-                        min_spot_buffer=float(new_spot_buf),
-                        st_clearance=float(new_st_moat),
-                        st_value=cur_st,
-                        spot_val=cur_spot
-                    )
-                    st.session_state["w_hunter_preview"] = preview_res
-                    st.rerun()
-
-        # In-Place Strategy Preview Display Card in Row 2.5 (Draft Mode)
-        prev_draft = st.session_state.get("w_hunter_preview")
-        if prev_draft:
-            _render_strike_preview_card(prev_draft, all_weekly_expiries, cfg_st, mode_label=new_mode)
 
 
     st.markdown("<br/>", unsafe_allow_html=True)

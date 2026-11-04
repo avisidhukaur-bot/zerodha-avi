@@ -389,9 +389,9 @@ def get_os_unit_cockpit_data(unit_name: str = "OS1") -> Dict[str, Any]:
 # 6. TAB 3: WEEKLY ST-2H COCKPIT (W1 — V7.5 MASTER EDITION)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_weekly_st_cockpit_data() -> Dict[str, Any]:
-    """Provides Weekly ST metrics, SuperTrend (8,3), and Decide & Lock state."""
+    """Provides Weekly ST metrics, SuperTrend (8,2), and Decide & Lock state."""
     cfg_st = wst_engine.get_weekly_st_settings()
-    st_res = wst_engine.calculate_supertrend_2h(period=8, multiplier=3.0)
+    st_res = wst_engine.calculate_supertrend_2h(period=8, multiplier=2.0)
     w_pos = wst_engine.get_active_w_position()
 
     live_spot = get_live_spot()

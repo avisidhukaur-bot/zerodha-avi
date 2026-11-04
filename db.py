@@ -1876,11 +1876,13 @@ def get_super_sukhoi_state() -> dict:
         "active": get("super_sukhoi_active", "0") == "1",
         "m1_anchor": float(get("super_sukhoi_m1_anchor", "0.0") or "0.0"),
         "m1_expiry": get("super_sukhoi_m1_expiry", ""),
-        "m1_lots": int(get("super_sukhoi_m1_lots", "1") or "1"),
+        "m1_lots": int(get("super_sukhoi_m1_lots", "3") or "3"),
         "m2_deployed": get("super_sukhoi_m2_deployed", "0") == "1",
         "m2_direction": get("super_sukhoi_m2_direction", ""),
+        "m2_anchor": float(get("super_sukhoi_m2_anchor", "0.0") or "0.0"),
         "m3_deployed": get("super_sukhoi_m3_deployed", "0") == "1",
         "m3_direction": get("super_sukhoi_m3_direction", ""),
+        "m3_anchor": float(get("super_sukhoi_m3_anchor", "0.0") or "0.0"),
         "activated_at": get("super_sukhoi_activated_at", ""),
         "stoploss_mode": get("m_stoploss_mode", "DISABLED")
     }
@@ -1890,11 +1892,13 @@ def set_super_sukhoi_state(
     active: bool = False,
     m1_anchor: float = 0.0,
     m1_expiry: str = "",
-    m1_lots: int = 1,
+    m1_lots: int = 3,
     m2_deployed: bool = False,
     m2_direction: str = "",
+    m2_anchor: float = 0.0,
     m3_deployed: bool = False,
-    m3_direction: str = ""
+    m3_direction: str = "",
+    m3_anchor: float = 0.0
 ) -> None:
     """Updates Super Sukhoi autonomous state in settings table."""
     set("super_sukhoi_active", "1" if active else "0")
@@ -1906,8 +1910,16 @@ def set_super_sukhoi_state(
         set("super_sukhoi_m1_lots", str(int(m1_lots)))
     set("super_sukhoi_m2_deployed", "1" if m2_deployed else "0")
     set("super_sukhoi_m2_direction", str(m2_direction))
+    if m2_anchor > 0:
+        set("super_sukhoi_m2_anchor", str(round(float(m2_anchor), 2)))
+    elif not m2_deployed:
+        set("super_sukhoi_m2_anchor", "0.0")
     set("super_sukhoi_m3_deployed", "1" if m3_deployed else "0")
     set("super_sukhoi_m3_direction", str(m3_direction))
+    if m3_anchor > 0:
+        set("super_sukhoi_m3_anchor", str(round(float(m3_anchor), 2)))
+    elif not m3_deployed:
+        set("super_sukhoi_m3_anchor", "0.0")
     if active and not get("super_sukhoi_activated_at"):
         set("super_sukhoi_activated_at", datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
     elif not active:

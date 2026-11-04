@@ -1248,11 +1248,7 @@ def render_os_tab(portfolio: dict) -> None:
                         m_pe = st.number_input("Manual PE Strike", value=int(def_pe), step=50, key="os_tab_man_pe")
 
             st.markdown("<hr style='margin: 12px 0;'/>", unsafe_allow_html=True)
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                btn_fetch = st.button("🔍 Fetch & Preview Strikes", key="btn_os_fetch_strikes", use_container_width=True)
-            with col_b2:
-                btn_lock = st.button("🔒 Lock & Arm Pod Settings", key="btn_os_lock_settings", use_container_width=True)
+            btn_fetch = st.button("🔍 STEP 1: FETCH & PREVIEW LIVE STRIKES", key="btn_os_fetch_strikes", use_container_width=True, type="primary")
 
             if btn_fetch:
                 with st.spinner("Fetching strikes..."):
@@ -1263,22 +1259,6 @@ def render_os_tab(portfolio: dict) -> None:
                         manual_pe_strike=m_pe,
                         hedge_dist=DEFAULT_HEDGE_DISTANCE
                     )
-
-            if btn_lock:
-                db.set_os_settings(
-                    locked=True,
-                    horizon=horizon,
-                    expiry_date=selected_exp,
-                    lots=lots,
-                    lot_size=user_lot_size,
-                    mode="MANUAL" if stk_mode == "Manual Strike Override" else "AUTO",
-                    manual_ce=m_ce or 0,
-                    manual_pe=m_pe or 0,
-                    target_premium=target_prem
-                )
-                db.set_os_lot_size(user_lot_size)
-                st.success("✅ Settings LOCKED & ARMED! System is now active.")
-                st.rerun()
 
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1387,8 +1367,40 @@ def render_os_tab(portfolio: dict) -> None:
         </div>
         ''', unsafe_allow_html=True)
 
-    # STEP 2: EXECUTION BUTTONS (AUTO & MANUAL DEPLOY)
-    st.markdown('<p class="section-title" style="margin-top:16px;">🚀 STEP 2: EXECUTE OR ARM POD (AUTO & MANUAL DEPLOY)</p>', unsafe_allow_html=True)
+    # ── STEP 2: REVIEW & LOCK OS POD SETTINGS ─────────────────────────────
+    st.markdown('<p class="section-title" style="margin-top:24px;">🔒 STEP 2: REVIEW & LOCK OS POD SETTINGS</p>', unsafe_allow_html=True)
+    if not is_locked:
+        st.markdown(
+            '<div style="background: rgba(245, 158, 11, 0.12); border-left: 4px solid #f59e0b; padding: 10px 16px; border-radius: 8px; font-size: 0.90rem; color: #fde68a; margin-bottom: 12px;">'
+            '👉 <b>Step 1 Complete!</b> Review decaying candidate contracts above. Click below to lock settings and unlock Step 3 Execution options.'
+            '</div>',
+            unsafe_allow_html=True
+        )
+        if st.button("🔒 STEP 2: CONFIRM & LOCK OS POD SETTINGS", key="btn_os_lock_settings", use_container_width=True, type="primary"):
+            db.set_os_settings(
+                locked=True,
+                horizon=horizon if 'horizon' in locals() else "Weekly Expiry",
+                expiry_date=selected_exp,
+                lots=lots,
+                lot_size=user_lot_size,
+                mode="MANUAL" if ('stk_mode' in locals() and stk_mode == "Manual Strike Override") else "AUTO",
+                manual_ce=m_ce or 0,
+                manual_pe=m_pe or 0,
+                target_premium=target_prem
+            )
+            db.set_os_lot_size(user_lot_size)
+            st.success("✅ Settings LOCKED! You can now proceed to Step 3.")
+            st.rerun()
+    else:
+        st.markdown(
+            '<div style="background: rgba(16, 185, 129, 0.12); border-left: 4px solid #10b981; padding: 10px 16px; border-radius: 8px; font-size: 0.90rem; color: #a7f3d0; margin-bottom: 12px;">'
+            '✅ <b>STEP 2 COMPLETE:</b> OS Pod Settings are LOCKED in database.'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+    # ── STEP 3: EXECUTION ROUTING ─────────────────────────────────────────
+    st.markdown('<p class="section-title" style="margin-top:20px;">🚀 STEP 3: EXECUTE OR ARM OS POD</p>', unsafe_allow_html=True)
 
     pod_unit = st.selectbox("Assign to Pod Identifier", ["OS1", "OS2", "OS3", "OS4", "OS5"], index=0, key="os_tab_pod_select")
     auto_traded = db.has_os_auto_traded_today(pod_unit)
