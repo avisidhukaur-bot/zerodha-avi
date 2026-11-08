@@ -7,6 +7,20 @@
 
 ## ⚡ SYSTEM BEHAVIOR & OUTPUT PROTOCOL
 
+### 0. MANDATORY PRE-TASK RESEARCH & MEMORY INVARIANT (GURJEET MAMU'S LAW)
+> 🚨 **PERMANENT SYSTEM INVARIANT — ZERO EXCEPTION PROTOCOL:**  
+> Before executing, proposing, or answering ANY task or question, the agent MUST forcefully read and inspect `GEMINI.md` and `memory.md`.
+- **Zero Improvisation / Zero Hallucination**: Never guess, assume, or invent rules from memory.
+- **Strict Ground Truth Verification**: Every operational logic, buffer rule, execution trigger, and invariant must be cross-verified against `GEMINI.md` and `memory.md` first.
+- **Discrepancy Guard**: If a user request or newly encountered state differs from established memory invariants, the agent must explicitly cite the memory rule and ask/confirm before proceeding.
+- **Lego Protocol Gate**: Always diagnose first, present the blueprint, obtain explicit approval, and then execute via the single-brick Lego Protocol.
+
+### 0b. PERMANENT NO-DESKTOP-FILES & IN-CHAT WHATSAPP PROTOCOL (CHHOTI BAHAN'S RULE)
+> 🚨 **PERMANENT USER INVARIANT — NEVER WRITE FILES TO USER'S DESKTOP:**  
+> - **NEVER** save or dump `.txt`, `.html`, or report files to the user's Desktop (`C:\Users\Dell\Desktop\`) or local computer screen. The user cannot track them there.
+> - **ALWAYS** deliver all answers, audit reports, trade status, and explanations directly **RIGHT HERE IN THE CHAT WINDOW**.
+> - Every answer must contain a clean, formatted, full-detail **WhatsApp Copy-Paste Block** (` ```text `) so the user can 1-click copy and send it directly to her brother.
+
 ### 1. CORE OPERATING PRINCIPLE (CLAUDE-STYLE PARITY)
 - **Tone**: Institutional, hyper-concise, technical, and deterministic.
 - **Zero Fluff**: Never include introductory filler (e.g., "Sure, I can help with that", "Here is the summary"), polite sign-offs, or generic disclaimers unless explicitly asked.
@@ -62,6 +76,7 @@
 | **Futures** | `/root/BHARAT-SYSTEMS/FUTURES/` | **Port 9005** | `futures_dashboard.service`, `futures_engine.service` |
 | **BTC Theta** | `/root/BHARAT-SYSTEMS/BTC-THETADECAY/` | **Port 9006** | `btc_dashboard.service`, `btc_engine.service` |
 | **ZERODHA OS** | `/root/BHARAT-SYSTEMS/ZERODHA-OS/` | **Port 9007** | **`zerodha_dashboard.service`**, **`zerodha_engine.service`** |
+| **ZERODHA BUYING** | `/root/BHARAT-SYSTEMS/ZERODHA-OPTION-BUYING/` | **Port 9008** | **`zerodha_buying_dashboard.service`**, **`zerodha_buying_engine.service`** |
 | **Zerodha AVI** | `/root/BHARAT-SYSTEMS/ZERODHA-AVI-OPTION-SELLING/` | **Port 9011** | `zerodha_avi_dashboard.service`, `zerodha_avi_engine.service` |
 
 > ⚠️ **HARD RULE:** Never hallucinate or confuse ports. Zerodha OS Dashboard is permanently **Port 9007**.
@@ -282,3 +297,19 @@ ightarrow$ Rollover** |
 | **Master Kill-Switch** | 1-Click Account Square-Off | Directly flattens ALL open derivative contracts on Zerodha Kite API (Shorts covered first -> Hedges sold second) |
 | **Margin Safety Invariant** | Margin-Safe Execution Order | **Buy-to-Cover Shorts FIRST -> Sell Long Hedges SECOND**; 100% margin-call proof |
 | **Deployment Target** | HostAsia VPS (5.75.250.104:9007) | Dual service restart: zerodha_engine.service & zerodha_dashboard.service |
+
+---
+
+## 🏛️ 14. M1 ASYMMETRIC DUAL-WING EXECUTION & BUFFER HYSTERESIS PROTOCOL (06-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **V6.0 / V8.0 Asymmetric Dual-Wing Engine** | Directional Trend Following with Hedged Dual-Side Capacity |
+| **Dual-Wing Execution Rule**| **Simultaneous Dual-Wing Allowed** | When Spot crosses Anchor + Buffer, Put wing initiates. Existing opposing Call leg is NOT closed midday |
+| **Stop-Loss Policy** | **Midday Stop-Loss 100% DISABLED** | `m_stoploss_mode = "DISABLED"`. No 25% midday whipsaw cuts; natural theta decay harvested |
+| **Wrong Trade Exit Rule** | **Automatic 3:00 PM Evening Removal** | Opposing/wrong side is NOT cut midday; at 15:00 IST Continuation Pulse, engine auto-squares off opposing leg |
+| **Buffer Wall Calculus** | **$\text{Anchor} \pm \text{Buffer}$ (Default: $\pm 15.0\text{ pt}$)** | Bullish Trigger = $A + B$; Bearish Trigger = $A - B$. Inside zone = NEUTRAL |
+| **Sustained Stay Timer** | **5-Minute Confirmation (300 seconds)** | Spot must remain beyond trigger for 300s continuously before auto-deploy |
+| **Engine Execution Guard** | **`algo_running = 'ON'` in SQLite settings** | When `algo_running = 'OFF'`, background service enters PAUSED loop; no auto-orders placed |
+| **Protective Armor** | **100% 500-pt OTM Hedge Helmet** | Buy Hedge FIRST $\rightarrow$ Sell Leg SECOND; zero naked exposure at any time |
+| **Mandatory Pre-Task Rule** | **Forcefully Read `GEMINI.md` & `memory.md`** | Zero guessing; cross-check ground truth before any proposal or execution |

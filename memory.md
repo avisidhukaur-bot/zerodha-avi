@@ -926,3 +926,37 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
   - Database: Private `zerodha_buying.db` (isolated from `zerodha_trader.db`).
 - **UI Architecture Decision:**
   - Dedicated standalone page/dashboard rather than cramming into Port 9007 to eliminate cognitive clutter ("bhashan") and prevent cross-app state corruption.
+
+
+---
+
+## 🏛️ 13. 06-NOV-2026: M1 ASYMMETRIC DUAL-WING LIVE EXECUTION & GURJEET MAMU'S INVARIANT
+
+### 📋 1. Incident & Execution Summary
+- **M1 Dual-Wing Invariant**: M1 allows simultaneous Call and Put wings when Spot trends across Anchor + Buffer (₹24,560 ± 15 pt).
+- **Midday Stop-Loss Policy**: Midday 25% SL is **DISABLED** (m_stoploss_mode = 'DISABLED'). No whipsaw cutting midday; positions are protected by compulsory 500-pt OTM Hedge Helmets.
+- **Opposing Wing Exit**: Opposing Call wing is **NOT** cut midday. At 15:00 IST (3:00 PM Continuation Pulse), the engine evaluates market trend and automatically squares off the opposing wrong-side leg.
+- **Execution Timestamp**: 06-Nov-2026 11:21:40 IST on Zerodha Kite (XK7125):
+  1. **Hedge Buy FIRST**: NIFTY26NOV23900PE × 195 Qty (3 Lots) @ ₹115.75 (Order ID: 2118582055787864064 -> **COMPLETE**).
+  2. **Short Sell SECOND**: NIFTY26NOV24400PE × 195 Qty (3 Lots) @ ₹241.90 (Order ID: 2118582061123018752 -> **COMPLETE**).
+  3. **Net Cash Inflow Collected**: **+₹126.15/share (+₹24,599.25 cash credit)**.
+
+---
+
+## 🌅 14. 06-NOV-2026: AUTOMATED 07:00 AM & 08:00 AM IST MORNING SENTINEL & HEALTH REFRESH DEPLOYMENT
+
+### 📋 1. Architectural Mandate
+- **Problem**: Operator identified past human/pause oversights (e.g. algo_running = OFF left paused after manual tests, stale instrument caches, expired TOTP sessions).
+- **Resolution**: Autonomous dual-pulse morning sentinel deployed directly to HostAsia Linux VPS crontab:
+  - **Pulse 1 (07:00 AM IST / 01:30 UTC)**: Primary morning preparation and system audit.
+  - **Pulse 2 (08:00 AM IST / 02:30 UTC)**: Secondary backup verification 75 minutes before market open.
+
+### ⚙️ 2. Automated Refresh Actions Performed (Daily Mon–Fri)
+1. **Engine Enforcement**: Automatically sets algo_running = 'ON', super_sukhoi_active = '1', and m_stoploss_mode = 'DISABLED'.
+2. **Kite TOTP Verification**: Verifies active Zerodha session; auto-reauthenticates if expired.
+3. **Master NFO Instruments Cache**: Downloads fresh zerodha_instruments.csv (~41,000+ contracts).
+4. **Daily Strike Reset**: Resets closed strikes back to PENDING mode for the new day.
+5. **Countdown Timer Zeroing**: Clears all breakout timestamps and entry timers to 0 (entry_delay_seconds = 300).
+6. **Margin & Position Audit**: Verifies broker available margin and active derivative contracts.
+7. **Cache Clean & Service Restart**: Cleans Python bytecode cache (__pycache__) and restarts zerodha_engine.service and zerodha_dashboard.service (Port 9007).
+8. **Telegram Readiness Broadcast**: Delivers full readiness report to operator Telegram channel.
