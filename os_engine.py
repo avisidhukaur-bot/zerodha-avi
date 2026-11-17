@@ -1559,7 +1559,7 @@ def render_os_tab(portfolio: dict) -> None:
                     st.rerun()
             with act_c2:
                 if st.button("🛑 Square Off Pod", key=f"btn_sqoff_{b['block_id']}", use_container_width=True):
-                    bm.kill_block_now(b["block_id"])
+                    bm.kill_block(b["block_id"])
                     st.warning(f"Pod {unit_id} squared off!")
                     st.rerun()
             with act_c3:

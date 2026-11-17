@@ -960,3 +960,74 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
 6. **Margin & Position Audit**: Verifies broker available margin and active derivative contracts.
 7. **Cache Clean & Service Restart**: Cleans Python bytecode cache (__pycache__) and restarts zerodha_engine.service and zerodha_dashboard.service (Port 9007).
 8. **Telegram Readiness Broadcast**: Delivers full readiness report to operator Telegram channel.
+
+
+---
+
+## 🏛️ 16. 09-NOV-2026: M1 EXECUTION HOLIDAY FILTER RESOLUTION & 3-LOT DEPLOYMENT AUDIT
+
+### 📋 1. Incident Root-Cause Analysis
+- **Symptom**: User attempted to execute M1 Bear Call Spread from Streamlit Cockpit HUD (Port 9007), but orders failed to reach Zerodha Kite terminal.
+- **Root Cause**: `utils.py` had `2026-11-09` erroneously hardcoded in `NSE_HOLIDAYS_2026` as "Diwali Laxmi Pujan".
+- **Impact**: `kite_executor.py` off-market safety guard blocked live order routing (`ORDER BLOCKED: Cannot place live order on non-trading day`), and `zerodha_engine.service` went to sleep.
+
+### ⚙️ 2. Architectural Resolution
+1. **Holiday Calendar Correction**: Removed `2026-11-09` from `NSE_HOLIDAYS_2026` in `utils.py`.
+2. **Dual Service Restart**: Bytecode cache cleared; `zerodha_engine.service` and `zerodha_dashboard.service` restarted cleanly on HostAsia Linux VPS.
+3. **Execution Verification**: Verified `utils.is_trading_day()` returns `True`.
+
+### 🛡️ 3. Live Execution Ground Truth (Zerodha Kite XK7125 @ 13:55 IST)
+| Leg | Trading Symbol | Order ID | Side | Lots / Qty | Fill Price | Status | Margin Sequence |
+|---|---|---|---|---|---|---|---|
+| **Hedge Helmet** | `NIFTY26NOV25700CE` | `2119707936270884864` | **BUY** | 3 Lots / 195 | **₹80.25** | **COMPLETE** | **FIRST (13:55:28)** |
+| **Short Leg** | `NIFTY26NOV25200CE` | `2119707942843363328` | **SELL** | 3 Lots / 195 | **₹210.53** | **COMPLETE** | **SECOND (13:55:30)** |
+- **Net Credit Captured**: ₹210.53 - ₹80.25 = **+₹130.28 / pt (+₹25,404.60 gross premium)**.
+- **Modulo 100 Invariant**: `25200 CE` ends in `00` (`25200 % 100 == 0`).
+- **Armor Distance**: Exactly 500-pt OTM (`25700 CE` vs `25200 CE`).
+
+---
+
+## 🏛️ 15. 09-NOV-2026: BHARAT OPTION BUYING 3-HALT CADENCE UPGRADE (NSL v6.2 — MIDDAY 01:15 PM DECISION GATE)
+
+### 📋 1. Incident Motivation & Problem Statement (Gurjeet Mamu's Invariant)
+- **Current Limitation (v6.1)**: Only 2 daily decision halts exist: Gate 1 at `10:45 AM IST` and Gate 2 at `03:00 PM IST`.
+- **The Gap Vulnerability**: If the morning market trends strongly at 10:45 AM but experiences a sharp midday reversal or momentum exhaustion between 11:30 AM and 01:30 PM, holding without an evaluation gate leads to theta decay and unnecessary profit erosion before 03:00 PM.
+- **Mamu's Mandate**: Introduce a **Midday Halt at 01:15 PM IST (`13:15 IST`)** to compare current price with the 09:30 AM reference candle close ($Ref_{930}$).
+
+### ⚙️ 2. Architectural Specification (NSL v6.2 — 3 Decision Halts)
+| Decision Halt | Exact Timing | Trigger Condition vs $Ref_{930}$ | Action Taken |
+|---|---|---|---|
+| **Halt 1 (Morning Gate)** | **`10:45 AM IST`** | $LTP_{1045} > Ref_{930}$ | Initial Directional Entry (1 Lot / 65 Qty) |
+| **Halt 2 (Midday Halt)** | **`01:15 PM IST`** | If Held: $LTP_{1315} \le Ref_{930}$<br>If Opposing: $LTP_{1315}^{Opp} > Ref_{930}^{Opp}$<br>If Flat: $LTP_{1315} > Ref_{930}$ | **Momentum Exhaustion Guard**:<br>1. Exit running leg if below $Ref_{930}$<br>2. Flip to opposing trend if breakout verified (with 30s cash settlement buffer)<br>3. Enter fresh if account was flat |
+| **Halt 3 (Afternoon Gate)** | **`03:00 PM IST`** | $LTP_{1500} > Ref_{930}$ | Overnight Carry vs Same-Day Cash-Out Review |
+| **Continuous Watchdog** | **Every 5 Minutes** | $+50\%$ Profit Hit ($LTP \ge Entry \times 1.50$) | Immediate Limit Sell $\rightarrow$ 30s Buffer $\rightarrow$ Rollover to fresh Modulo 100 strike |
+
+### 🛡️ 3. Invariants & Implementation Protocol
+1. **Lego Protocol Gate**: Spec drafted; ZERO code modification performed until explicit operator/Mamu approval.
+2. **Harmonious Alignment**: 01:15 PM IST synchronizes identically with Weekly ST Engine (W1)'s 2nd daily pulse (`13:15 IST`).
+3. **Coexistence & 1-Lot Cap**: Strictly 1 Lot (65 Qty); Triple Long-Only Shield; Modulo 100 strikes (`strike % 100 == 0`); Non-monthly weekly expiries (~3rd to 4th week forward).
+
+---
+
+## 🏛️ 17. 11-NOV-2026: OPTION BUYING EXECUTOR KEY NORMALIZATION REPAIR & LIVE NSL v6.2 MIDDAY HALT AUDIT
+
+### 📋 1. Incident Root-Cause Analysis (`ZERODHA-OPTION-BUYING/executor.py`)
+- **Symptom**: On gap-up open, held `NIFTY26D0125500CE` (+65 Qty @ ₹170.85) crossed `+50%` profit target (`₹256.28`) hitting `+94.4%` (`₹332.05`), but the 5-minute watchdog logged `Exit failed during rollover. Aborting rollover buy` at `09:20` and `09:25 IST`.
+- **Root Cause (2 Key Mismatches)**:
+  1. **DB Key Prefix Mismatch**: `engine.py` & `dashboard.py` call `executor` functions passing `leg="CALL"` or `"PUT"`, while `zerodha_buying.db` (`system_state`) and `startup_sync()` store keys under **`ce_*`** and **`pe_*`** (`ce_active_symbol`, `ce_active_token`, etc.). `executor.py` formatted `f"{leg.lower()}_active_symbol"` $\rightarrow$ **`"call_active_symbol"`** (empty), failing exit immediately.
+  2. **Rollover Strike Filter Mismatch**: Line 226 of `executor.py` called `market_data.find_best_100_modulo_strike(kite, leg, target_expiry)` passing `"CALL"`/`"PUT"` instead of `"CE"`/`"PE"`.
+
+### ⚙️ 2. Single-Brick Architectural Repair Deployed (Approved `ok repair`)
+- Added canonical normalization helpers `_leg_prefix(leg)` (`"CALL"|"CE" -> "ce"`, `"PUT"|"PE" -> "pe"`) and `_opt_type(leg)` (`"CALL"|"CE" -> "CE"`, `"PUT"|"PE" -> "PE"`) inside `/root/BHARAT-SYSTEMS/ZERODHA-OPTION-BUYING/executor.py`.
+- Standardized all DB key reads/writes and rollover strike scans onto normalized prefixes, verified syntax (`py_compile`) + assertions, purged `__pycache__`, and restarted dual services (`zerodha_buying_engine.service`, `zerodha_buying_dashboard.service`).
+
+### 🛡️ 3. Live Broker Verification & NSL v6.2 Validation (11-Nov-2026)
+| Event Time | Strategy Event | Trading Symbol | Side & Qty | Fill Price | Result / Impact |
+|---|---|---|---|---|---|
+| `09:36:58 IST` | **+50% Watchdog Exit (Repaired)** | `NIFTY26D0125500CE` | **SELL 65** | **₹343.60** | **`+₹11,228.75` (`+101.1%`) Profit Booked** 🟢 |
+| `09:37:29 IST` | **30s Buffer + Rollover Entry** | `NIFTY26D0826100CE` | **BUY 65** | **₹173.80** | Modulo-100 Non-Monthly Rollover Active |
+| `13:15:02 IST` | **NSL v6.2 Midday Halt Exit** | `NIFTY26D0826100CE` | **SELL 65** | **₹155.25** | Below 09:30 Ref; protected against further decay |
+| `13:15:33 IST` | **30s Buffer + Midday Flip PUT** | `NIFTY26D0824600PE` | **BUY 65** | **₹160.95** | Breakout `₹161.00 > Ref ₹150.65` captured |
+- **Verified Overall Kite MTM (`14:16 IST`)**: **`+₹25,600.25` NET GREEN** (Option Selling M1/OS1/W1 all cleanly exited in morning profit; only 1 Lot `24600 PE` Long running cleanly in Option Buying).
+
+

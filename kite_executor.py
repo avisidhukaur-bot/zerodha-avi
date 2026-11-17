@@ -603,6 +603,19 @@ class KiteExecutor:
             return False, "Failed to submit client credentials for login request."
         return self.complete_login_with_otp(res["request_id"], res["session"], otp_code, res["twofa_type"])
 
+    def _is_exchange_live_today(self, now_dt: datetime) -> bool:
+        """Checks live NIFTY 50 quote timestamp so a static holiday typo cannot block active trading."""
+        try:
+            q = self.kite.quote(["NSE:NIFTY 50"]).get("NSE:NIFTY 50", {})
+            ts = q.get("timestamp")
+            last_p = float(q.get("last_price", 0.0) or 0.0)
+            if ts and last_p > 0:
+                ts_date = ts.date() if hasattr(ts, "date") else datetime.strptime(str(ts)[:10], "%Y-%m-%d").date()
+                return ts_date == now_dt.date()
+        except Exception:
+            pass
+        return False
+
     # ─────────────────────────────────────────────────────────────────────────
     # PLACE ORDER
     # ─────────────────────────────────────────────────────────────────────────
@@ -667,8 +680,12 @@ class KiteExecutor:
         now_t = now_dt.time()
         import utils
         if not utils.is_trading_day(now_dt):
-            print(f"[EXECUTOR] 🛑 ORDER BLOCKED: Cannot place live order on non-trading day ({now_dt.strftime('%Y-%m-%d')} is Weekend/Holiday). Order aborted.")
-            return None
+            # Fallback: verify live exchange timestamp before blocking if weekday during market hours
+            if now_dt.weekday() < 5 and (dt_time(9, 15, 0) <= now_t <= dt_time(15, 32, 0)) and self._is_exchange_live_today(now_dt):
+                print(f"[EXECUTOR] ⚠️ Static calendar matched {now_dt.strftime('%Y-%m-%d')}, but NSE quote timestamp is LIVE today. Permitting order.")
+            else:
+                print(f"[EXECUTOR] 🛑 ORDER BLOCKED: Cannot place live order on non-trading day ({now_dt.strftime('%Y-%m-%d')} is Weekend/Holiday). Order aborted.")
+                return None
 
         # Allow 09:15 to 15:32 (buffer for square-off/EOD)
         if not (dt_time(9, 15, 0) <= now_t <= dt_time(15, 32, 0)):

@@ -32,7 +32,7 @@ NSE_HOLIDAYS_2026 = {
     "2026-09-04",  # Milad-un-Nabi
     "2026-10-02",  # Mahatma Gandhi Jayanti
     "2026-10-20",  # Dussehra
-    "2026-11-09",  # Diwali Laxmi Pujan
+    # "2026-11-09",  # Removed: NSE is active today (09-Nov-2026)
     "2026-11-10",  # Diwali Balipratipada
     "2026-11-24",  # Gurunanak Jayanti
     "2026-12-25",  # Christmas
