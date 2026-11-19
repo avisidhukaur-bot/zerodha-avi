@@ -1510,10 +1510,10 @@ def close_strike(strike_id: int, close_hedge: bool = True, is_manual: bool = Fal
     ]
     if not remaining_open and block:
         u_name = (block.get("anchor_unit_name") or "").strip().upper()
-        if u_name.startswith("M"):
-            db.unlock_m_unit_settings(u_name)
-        elif u_name.startswith("OS"):
-            db.unlock_os_settings()
+        # [INVARIANT]: Do NOT auto-unlock pod settings on trade closure!
+        # Pod settings must remain locked so subsequent continuation / auto-reentry operates autonomously.
+        # Unlocking is only done manually via the Dashboard UI or during wipe_out_and_reset.
+        pass
 
     return {
         "ok":               True,
@@ -1652,10 +1652,10 @@ def close_hedge_strike_now(strike_id: int) -> dict:
     ]
     if not remaining_open and block:
         u_name = (block.get("anchor_unit_name") or "").strip().upper()
-        if u_name.startswith("M"):
-            db.unlock_m_unit_settings(u_name)
-        elif u_name.startswith("OS"):
-            db.unlock_os_settings()
+        # [INVARIANT]: Do NOT auto-unlock pod settings on trade closure!
+        # Pod settings must remain locked so subsequent continuation / auto-reentry operates autonomously.
+        # Unlocking is only done manually via the Dashboard UI or during wipe_out_and_reset.
+        pass
 
     return {
         "ok":         True,

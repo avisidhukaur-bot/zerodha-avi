@@ -381,14 +381,14 @@ def hunt_os_strike(
         if live_spot > 0:
             if opt_type == "CE":
                 candidates = candidates_pool[candidates_pool["strike"] >= live_spot - 300].copy()
-                candidates = candidates.sort_values("strike").head(10)
+                candidates = candidates.sort_values("strike").head(25)
             else:
                 candidates = candidates_pool[candidates_pool["strike"] <= live_spot + 300].copy()
-                candidates = candidates.sort_values("strike", ascending=False).head(10)
+                candidates = candidates.sort_values("strike", ascending=False).head(25)
             if candidates.empty:
-                candidates = candidates_pool.head(10)
+                candidates = candidates_pool.head(25)
         else:
-            candidates = candidates_pool.head(10)
+            candidates = candidates_pool.head(25)
 
         queries = [f"NFO:{ts}" for ts in candidates["tradingsymbol"]]
         ltp_dict = {}
