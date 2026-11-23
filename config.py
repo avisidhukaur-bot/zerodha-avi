@@ -30,16 +30,16 @@ DEFAULT_MAX_REENTRIES_PER_DAY = 0  # 0 = Unlimited re-entries per day
 DEFAULT_REENTRY_COOLDOWN_SEC = 300  # 5 minutes cooldown after exit
 DEFAULT_REENTRY_DISCOUNT_BUFFER = 1.0  # ₹1.00 below anchor price for re-entry
 
-# Time Windows (IST) — Uniform 15:13 Cutoff & Positional Integrity Protocol
+# Time Windows (IST) — Uniform 15:02 Cutoff & Clean-Sweep Protocol (Gurjeet Mamu's Law)
 MARKET_START_TIME = "09:15"
 MASTER_DECISION_TIME = "14:57"      # 2:57 PM Master Anchor Continuation Decision (M1, M2, M3)
 OS_DECISION_TIME = "15:01"          # 3:01 PM OS Option Selling Line Audit & Momentum Decision (OS1, OS2, OS3)
-ACTIVE_TRADING_CUTOFF_TIME = "15:13" # 15:13 IST: Strict cutoff for all new entries & re-entries
-TRADING_CUTOFF_TIME = "15:13"       # 15:13 IST cutoff
-REENTRY_CUTOFF_TIME = "15:13"       # 15:13 IST re-entry cutoff
-ORPHAN_SWEEP_START = "15:13"        # 15:13 IST EOD Orphan Hedge Watchdog sweep
-EOD_EXPIRY_AND_ORPHAN_CLEANUP_TIME = "15:13"
-FORCE_CLOSE_TIME = "15:13"          # Square off / EOD cutoff time
+ACTIVE_TRADING_CUTOFF_TIME = "15:02" # 15:02 IST: Strict cutoff for all new entries & re-entries (Gurjeet Mamu's Law)
+TRADING_CUTOFF_TIME = "15:02"       # 15:02 IST cutoff
+REENTRY_CUTOFF_TIME = "15:02"       # 15:02 IST re-entry cutoff
+ORPHAN_SWEEP_START = "15:02"        # 15:02 IST EOD Orphan Hedge Watchdog sweep
+EOD_EXPIRY_AND_ORPHAN_CLEANUP_TIME = "15:02"
+FORCE_CLOSE_TIME = "15:02"          # Square off / EOD cutoff time
 MARKET_END_TIME = "15:30"           # Market operational window close at 15:30 IST
 DAILY_SUMMARY_TIME = "15:30"        # EOD Daily Summary delivery
 ROLLOVER_TIME = "14:00"             # Monday hedge rollover check time

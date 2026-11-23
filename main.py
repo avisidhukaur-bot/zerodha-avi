@@ -243,7 +243,7 @@ def start_engine_loop() -> None:
 
             # E1. 14:57 IST Master Anchor Continuation Decision for M-Units (V5.0)
             anchor_decision_time = getattr(cfg, "MASTER_DECISION_TIME", "14:57")
-            trading_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:13")
+            trading_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:02")
             if (anchor_decision_time <= now_time_str < trading_cutoff):
                 last_3pm_decision_date = db.get("last_3pm_decision_date", "")
                 if last_3pm_decision_date != today_str:
@@ -289,8 +289,8 @@ def start_engine_loop() -> None:
             except Exception as w_err:
                 utils.log(f"Error in Weekly ST-2H Pulse watchdog: {w_err}", "ERROR")
 
-            # E2. 15:13 IST EOD Orphan Hedge Watchdog Protocol (V5.1)
-            orphan_sweep_time = getattr(cfg, "ORPHAN_SWEEP_START", "15:13")
+            # E2. 15:02 IST EOD Orphan Hedge Watchdog Protocol (Gurjeet Mamu's Clean-Sweep Law)
+            orphan_sweep_time = getattr(cfg, "ORPHAN_SWEEP_START", "15:02")
             if (orphan_sweep_time <= now_time_str <= cfg.MARKET_END_TIME):
                 last_sweep_date = db.get("last_eod_hedge_sweep_date", "")
                 if last_sweep_date != today_str:

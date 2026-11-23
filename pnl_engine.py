@@ -739,13 +739,13 @@ def run_pnl_cycle() -> dict:
                 # GUARD (Fix #2): Only consider re-entry for:
                 #   a) Strikes closed TODAY (same trading day)
                 #   b) Block has not yet expired
-                #   c) We are still within active trading hours (before 15:13 IST)
+                #   c) We are still within active trading hours (before 15:02 IST)
                 #   d) Master Regime ALLOWS this option type (PE in Bullish, CE in Bearish)
-                active_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:13")
+                active_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:02")
                 is_market_open_for_reentry = now_time_str < active_cutoff
                 is_os_unit = (b.get("anchor_unit_name") or "").strip().upper().startswith("OS")
                 if not is_market_open_for_reentry or is_os_unit:
-                    pass  # Skip re-entry after 15:13 or for OS units (OS units do not use spot re-entry)
+                    pass  # Skip re-entry after 15:02 or for OS units (OS units do not use spot re-entry)
                 else:
                     closed_strikes = db.get_strikes_by_block(b["block_id"], status_filter="CLOSED")
                     for s in closed_strikes:
@@ -857,7 +857,7 @@ def run_pnl_cycle() -> dict:
 
                     # 2b. Auto-Entry for Pending Strikes (Runs every cycle / every 30 seconds)
                     # If a strike is PENDING, we auto-execute it if LTP < anchor_price AND Master Regime permits it.
-                    # STRICT CUTOFF: No new pending entries allowed at or after 15:13 IST
+                    # STRICT CUTOFF: No new pending entries allowed at or after 15:02 IST
                     # STRICT FIREWALL: OS units NEVER auto-execute from 30s cycle; only manual or 15:00 IST audit!
                     uname = (b.get("anchor_unit_name") or "").strip().upper()
                     if uname.startswith("OS"):
@@ -944,7 +944,7 @@ def run_pnl_cycle() -> dict:
             # Cardinal Law: Under ZERO circumstances may the system square off a Long Hedge
             # if there is ANY live Short position on the Zerodha broker terminal.
             # Delegated to bm.sweep_orphan_hedges_now() which enforces live broker cross-matching.
-            orphan_sweep_time = getattr(cfg, "ORPHAN_SWEEP_START", "15:13")
+            orphan_sweep_time = getattr(cfg, "ORPHAN_SWEEP_START", "15:02")
             if now_time_str >= orphan_sweep_time:
                 last_sweep = db.get("last_eod_hedge_sweep_date", "")
                 if last_sweep != today_str:

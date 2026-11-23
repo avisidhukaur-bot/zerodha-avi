@@ -295,21 +295,14 @@ def evaluate_block_regime(block: dict, current_spot: Optional[float] = None, for
     today_ymd = datetime.now(IST).strftime("%Y-%m-%d")
     is_3pm_frozen = (now_ist_str >= "14:55") or (db.get("last_3pm_decision_date", "") == today_ymd)
     
-    # Guard: Do not allow JIT auto-hunter to interfere with Super Sukhoi governed ladder units
-    is_sukhoi_block = (
-        (db.get("super_sukhoi_active", "0") == "1" and unit_name in ("M2", "M3"))
-        or (db.get(f"block_{block_id}_governed_by") == "SUPER_SUKHOI")
-        or ((block.get("governed_by") or "").strip().upper() == "SUPER_SUKHOI")
-    )
-    if is_sukhoi_block and not has_open_aligned:
-        _log(f"[UNIT-{unit_name}] Block #{block_num} is governed by Super Sukhoi. External JIT Auto-Hunter is MUTED (Zero Collision Guard).", "INFO")
-
+    # Gurjeet Mamu's Law (23-Nov-2026): M2 and M3 are 100% full M-Units!
+    # Super Sukhoi only spawns the unit and sets its Anchor. Once spawned,
+    # M2 and M3 run the exact same Asymmetric Dual-Wing Engine (Call + Put with 3 PM square-off).
     should_deploy_aligned = (
         new_regime in ("BULLISH", "BEARISH")
         and not has_open_aligned
         and not is_3pm_frozen
         and not unit_name.startswith("OS")
-        and not is_sukhoi_block
     )
 
     if should_deploy_aligned:

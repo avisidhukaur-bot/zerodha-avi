@@ -1468,14 +1468,14 @@ def close_strike(strike_id: int, close_hedge: bool = True, is_manual: bool = Fal
     hedge_strike_id   = strike.get("hedge_strike_id")
     hedge_strike      = db.get_strike(hedge_strike_id) if hedge_strike_id else None
 
-    # V8.0 ABSOLUTE ORPHAN HEDGE FIREWALL:
-    # During intraday market hours (< 15:13 IST), automated Stop-Loss exits NEVER close the protective hedge!
+    # V8.0 ABSOLUTE ORPHAN HEDGE FIREWALL (Gurjeet Mamu's 15:02 Clean-Sweep Law):
+    # During intraday market hours (< 15:02 IST), automated Stop-Loss exits NEVER close the protective hedge!
     # The hedge acts as an orphan shield against tail-risk and preserves margin for future re-entries.
-    # Only close hedge if is_manual=True (explicit user button) or at EOD cleanup (>= 15:13 IST).
+    # At 15:02 IST clean-sweep cutoff (or if is_manual=True), orphan hedges are automatically purged.
     from zoneinfo import ZoneInfo
     IST = ZoneInfo("Asia/Kolkata")
     now_ist_str = datetime.now(IST).strftime("%H:%M")
-    eod_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:13")
+    eod_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:02")
     is_eod_time = (now_ist_str >= eod_cutoff)
 
     if not is_manual and not is_eod_time:
@@ -2585,25 +2585,31 @@ def sweep_orphan_hedges_now() -> dict:
                 s_opt = s["option_type"].upper()
                 opt_key = "CE" if s_opt in ("CE", "CALL") else "PE"
 
-                # ── HARD BROKER TERMINAL GUARD (Rule 7) ──
-                # Under ZERO circumstances may the system square off a Long Hedge if there is
-                # ANY live Short position of this side on the broker terminal!
-                has_broker_short = any((sp.get("option_type") or "").upper() in (s_opt, opt_key) for sp in short_opts)
-                if has_broker_short:
-                    _log(f"Sweep: Preserving Hedge Strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) — Active {s_opt} SHORT position confirmed on Zerodha broker terminal!", "OK")
-                    continue
-
                 linked_sells = [sell for sell in sell_strikes_map.values() if sell.get("hedge_strike_id") == s["strike_id"]]
                 is_orphan = True
                 if linked_sells:
                     if any(ls["status"] in ("OPEN", "EXECUTED") for ls in linked_sells):
                         is_orphan = False
 
-                if is_orphan:
-                    _log(f"Sweep: Closing True Orphan Hedge Strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) at Cutoff (No active short)...", "SWEEP")
-                    res = close_hedge_strike_now(s["strike_id"])
-                    if res.get("ok"):
-                        closed_count += 1
+                if not is_orphan:
+                    continue
+
+                # ── LINKED BROKER SHORT GUARD (Gurjeet Mamu's Law) ──
+                # Check if the specific linked sell strike for THIS hedge is still open on Zerodha
+                linked_sell_strikes = [int(ls.get("strike_price", 0)) for ls in linked_sells]
+                has_linked_broker_short = any(
+                    (sp.get("option_type") or "").upper() in (s_opt, opt_key)
+                    and int(float(sp.get("strike", 0))) in linked_sell_strikes
+                    for sp in short_opts
+                )
+                if has_linked_broker_short:
+                    _log(f"Sweep: Preserving Hedge Strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) — Linked short strike still active on Zerodha broker terminal!", "OK")
+                    continue
+
+                _log(f"Sweep: Closing True Orphan Hedge Strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) at 15:02 Clean-Sweep Cutoff (Linked short is closed)...", "SWEEP")
+                res = close_hedge_strike_now(s["strike_id"])
+                if res.get("ok"):
+                    closed_count += 1
 
     return {"ok": True, "closed_count": closed_count}
 
@@ -2946,7 +2952,8 @@ def deploy_or_update_m_unit(
     pe_sell_ltp: float = 0.0,
     pe_hedge_ltp: float = 0.0,
     sl_pct: float = 25.0,
-    deploy_now: bool = True
+    deploy_now: bool = True,
+    force_regime: str = ""
 ) -> dict:
     """
     V6.0 1-Click Lock, Arm & Deploy Engine for M-Units (Zerodha Kite).
@@ -2962,7 +2969,10 @@ def deploy_or_update_m_unit(
     if live_spot <= 0:
         live_spot = float(db.get("last_master_spot_price") or db.get("last_nifty_spot_price", "23250.0") or "23250.0")
 
-    initial_regime = "BULLISH" if live_spot >= master_anchor_price else "BEARISH"
+    if force_regime:
+        initial_regime = force_regime.strip().upper()
+    else:
+        initial_regime = "BULLISH" if live_spot >= master_anchor_price else "BEARISH"
 
     active_blocks = db.get_all_blocks(status_filter="ACTIVE")
     b = next((x for x in active_blocks if (x.get("anchor_unit_name") or "").strip().upper() == unit_name.strip().upper()), None)

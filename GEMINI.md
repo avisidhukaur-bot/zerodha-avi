@@ -313,3 +313,17 @@ ightarrow$ Rollover** |
 | **Engine Execution Guard** | **`algo_running = 'ON'` in SQLite settings** | When `algo_running = 'OFF'`, background service enters PAUSED loop; no auto-orders placed |
 | **Protective Armor** | **100% 500-pt OTM Hedge Helmet** | Buy Hedge FIRST $\rightarrow$ Sell Leg SECOND; zero naked exposure at any time |
 | **Mandatory Pre-Task Rule** | **Forcefully Read `GEMINI.md` & `memory.md`** | Zero guessing; cross-check ground truth before any proposal or execution |
+
+---
+
+## 🧹 15. GURJEET MAMU'S 15:02 IST ORPHAN HEDGE CLEAN-SWEEP PROTOCOL (23-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **15:02 Clean-Sweep Standard** (Gurjeet Mamu's Law) | Eliminates old 15:13 delay; cleans system 28m before close |
+| **Trigger Sequence** | **15:00 Short Exit ➔ 15:02 Hedge Exit** | At 15:00 opposing short covered; at 15:02 linked orphan hedge auto-sold |
+| **Old Timing Abolished**| **No 15:10 or 15:13 Delays** | Old 15:13 cutoff permanently shifted forward to 15:02 IST |
+| **Unit Isolation Rule** | **Block-Level Linked Short Check** | Evaluates linked sell strike of that specific unit; prevents M1/M2 cross-blocking |
+| **Pre-Close Peace Window**| **27 Minutes Quiet Zone (15:03–15:30 IST)** | Entire system 100% neat, clean, and flat well before 15:30 closing bell |
+| **Margin Safety Invariant** | **Short Covered FIRST ➔ Hedge Sold SECOND** | Guaranteed zero naked margin risk during square-off sequence |
+

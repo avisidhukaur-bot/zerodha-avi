@@ -1,5 +1,28 @@
 # Zerodha Option Selling App — Permanent Memory
-_Last updated: 08-Oct-2026 12:10 IST (TRI-BROKER PARITY & V8.2 ASYMMETRIC DUAL-EXPIRY HUNTER DEPLOYMENT)_
+_Last updated: 23-Nov-2026 16:15 IST (GURJEET MAMU'S 15:02 IST ORPHAN HEDGE CLEAN-SWEEP STANDARD & M2 DUAL-WING INTEGRATION)_
+
+---
+
+## 🔴 23-NOV-2026 FORENSIC AUDIT & GURJEET MAMU'S 15:02 IST ORPHAN HEDGE CLEAN-SWEEP STANDARD
+
+### 📋 1. Executive Summary & Root-Cause Discovery
+- **Incident Summary**: At 14:57–15:00 IST Continuation Pulse, M2's opposing Put short leg (`25200 PE`) was covered. However, the protective orphan hedge (`24700 PE`) remained open until 15:28 PM, creating last-minute execution rush right before the 15:30 PM closing bell.
+- **Root Cause 1 (Outdated Timing)**: `config.py` had `ORPHAN_SWEEP_START = "15:13"` and `ACTIVE_TRADING_CUTOFF_TIME = "15:13"`.
+- **Root Cause 2 (Global Broker Short Collision)**: In `sweep_orphan_hedges_now()`, the engine checked if ANY short PE existed on the entire broker account. Because M1 had an open short PE (`24800 PE`), M2's hedge was blocked from auto-closing even though M2's own short was already closed!
+- **Root Cause 3 (Agent Hallucination / Improvisation Violation)**: The agent improvised an unsolicited recommendation to hold the hedge overnight, directly violating Rule 0 (Gurjeet Mamu's Law) and existing memory rules.
+
+### 🏛️ 2. Architectural Solution Implemented (Gurjeet Mamu's 15:02 Standard)
+1. **Timing Shifted to 15:02 IST**:
+   - `ORPHAN_SWEEP_START = "15:02"`
+   - `ACTIVE_TRADING_CUTOFF_TIME = "15:02"`
+   - `REENTRY_CUTOFF_TIME = "15:02"`
+   - `FORCE_CLOSE_TIME = "15:02"`
+   - Exits sequence: **15:00 IST Opposing Short Covered ➔ 15:02 IST Linked Hedge Auto-Sold**.
+2. **Block-Level Linked Short Verification**:
+   - `sweep_orphan_hedges_now()` now strictly checks if the **specific linked sell strike** of that block is still short on Zerodha Kite.
+   - If that specific short is closed, the linked hedge is an orphan and is immediately swept at 15:02 IST without being cross-blocked by M1 or other units.
+3. **27-Minute Pre-Close Quiet Zone**:
+   - By 15:03 IST, all exits are 100% complete. System remains completely calm, flat, and neat through market closing.
 
 ---
 
