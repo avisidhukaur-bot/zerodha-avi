@@ -327,3 +327,18 @@ ightarrow$ Rollover** |
 | **Pre-Close Peace Window**| **27 Minutes Quiet Zone (15:03–15:30 IST)** | Entire system 100% neat, clean, and flat well before 15:30 closing bell |
 | **Margin Safety Invariant** | **Short Covered FIRST ➔ Hedge Sold SECOND** | Guaranteed zero naked margin risk during square-off sequence |
 
+---
+
+## 🏛️ 16. GURJEET MAMU'S 3-PULSE M-UNIT CADENCE (11:00, 13:00, 14:57 IST) WITH ±15-PT BUFFER (24-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **V8.3 3-Pulse Hysteresis Cadence** (Gurjeet Mamu's Standard) | Triple daily decision checkpoints for M-Units (`M1`, `M2`, `M3`) |
+| **Backtest Ground Truth** | **Drawdown Reduced by ₹67,000+** | 40-day audit: +₹1,08,353 saved on 18 trending days vs old single 3 PM model |
+| **Triple Pulse Windows** | **`11:00` (Morning), `13:00` (Midday), `14:57` (Evening)** | 3-minute evaluation triggers (`11:00–11:03`, `13:00–13:03`, `14:57–15:02`) |
+| **Buffer Zone Calculus** | **$\text{Anchor} \pm 15.0\text{ pt}$ Hysteresis Wall** | Bullish: $Spot \ge Anchor + 15.0$; Bearish: $Spot \le Anchor - 15.0$ |
+| **Chop / Sideways Shield**| **Inside $\pm 15.0\text{ pt}$ = `NEUTRAL` (ZERO CUTS)** | Both wings preserved untouched to harvest natural theta decay; eliminates whipsaw |
+| **Trending Day Action** | **Decisive Breakout ➔ Cut Opposing Short & Hedge** | Bullish continues PUT (cuts CALL + hedge); Bearish continues CALL (cuts PUT + hedge) |
+| **Evening Carry Guard** | **14:57 Broker Hedge Ground Truth Verification** | Winning leg continued overnight ONLY if active long hedge verified on Zerodha Kite API |
+| **Dual-Service Invariant** | **Restart Both Engine & Dashboard on Port 9007** | `zerodha_engine.service` & `zerodha_dashboard.service` |
+

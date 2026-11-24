@@ -241,15 +241,25 @@ def start_engine_loop() -> None:
             # E. Monday Rollover check
             run_monday_rollover_check()
 
-            # E1. 14:57 IST Master Anchor Continuation Decision for M-Units (V5.0)
-            anchor_decision_time = getattr(cfg, "MASTER_DECISION_TIME", "14:57")
-            trading_cutoff = getattr(cfg, "ACTIVE_TRADING_CUTOFF_TIME", "15:02")
-            if (anchor_decision_time <= now_time_str < trading_cutoff):
-                last_3pm_decision_date = db.get("last_3pm_decision_date", "")
-                if last_3pm_decision_date != today_str:
-                    utils.log(f"⏰ {anchor_decision_time} IST Watchdog: Running Master Anchor Continuation Decision for M-Units (14:57 - 15:00 window)...", "DECISION")
-                    bm.execute_3pm_master_anchor_decision()
-                    db.set("last_3pm_decision_date", today_str)
+            # E1. Master Anchor 3-Pulse Cadence for M-Units (11:00, 13:00, 14:57 IST — Gurjeet Mamu's Law)
+            m_pulse_schedule = getattr(cfg, "M_PULSE_SCHEDULE", [
+                ("11:00", "11:03", "PULSE_11_00", "11:00 AM Morning Pulse"),
+                ("13:00", "13:03", "PULSE_13_00", "1:00 PM Midday Pulse"),
+                ("14:57", "15:02", "PULSE_14_57", "3:00 PM Evening Decision"),
+            ])
+            for p_start, p_end, p_id, p_label in m_pulse_schedule:
+                if p_start <= now_time_str < p_end:
+                    p_key = f"last_m_pulse_{p_id}"
+                    if db.get(p_key, "") != today_str:
+                        # Lock pulse key BEFORE evaluation to eliminate race conditions
+                        db.set(p_key, today_str)
+                        if p_id == "PULSE_14_57":
+                            db.set("last_3pm_decision_date", today_str)
+                        utils.log(f"⏰ {p_start} IST Watchdog: Running M-Unit Master Anchor Pulse [{p_label}]...", "DECISION")
+                        try:
+                            bm.execute_m_pulse_decision(pulse_id=p_id, pulse_label=p_label)
+                        except Exception as m_pulse_err:
+                            utils.log(f"Error in M-Unit Pulse {p_label}: {m_pulse_err}", "ERROR")
 
             # E1-b. 15:01 IST OS Option Selling Line Audit & Momentum Decision (OS1, OS2, OS3)
             os_decision_time = getattr(cfg, "OS_DECISION_TIME", "15:01")

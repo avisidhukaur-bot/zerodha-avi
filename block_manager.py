@@ -2168,22 +2168,35 @@ def kill_block(block_id: int) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3:00 PM MASTER ANCHOR CONTINUATION & SIDE DECISION ENGINE (V5.0)
+# ─────────────────────────────────────────────────────────────────────────────
+# 3-PULSE MASTER ANCHOR CONTINUATION & BUFFER HYSTERESIS ENGINE (V8.3)
+# Gurjeet Mamu's 3-Pulse Cadence (11:00, 13:00, 14:57 IST) with ±15.0 pt Buffer
 # ─────────────────────────────────────────────────────────────────────────────
 
-def execute_3pm_master_anchor_decision(nifty_spot: float = 0.0) -> dict:
+def execute_m_pulse_decision(
+    pulse_id: str = "PULSE_14_57",
+    pulse_label: str = "3:00 PM Evening Decision",
+    nifty_spot: float = 0.0
+) -> dict:
     """
-    V5.0 Old & Gold 3:00 PM (15:00 IST) Master Anchor Side Continuation Decision.
-    At 3:00 PM, evaluates live Spot against each active unit's Master Anchor Price:
-    - If Spot >= Master Anchor:
-        -> Continue PUT SELL side (marked CONTINUED)
-        -> Close CALL SELL side (and its active hedge if open)
-    - If Spot < Master Anchor:
-        -> Continue CALL SELL side (marked CONTINUED)
-        -> Close PUT SELL side (and its active hedge if open)
-    - NEVER close both sides automatically.
-    - Orphan hedges remain untouched!
+    Gurjeet Mamu's 3-Pulse Master Anchor Cadence (11:00, 13:00, 14:57 IST) with ±15.0 pt Buffer Zone.
+    At 11:00, 13:00, and 14:57 IST, evaluates live Spot against each active unit's Master Anchor Price:
+    - If Spot >= Master Anchor + Buffer (BULLISH):
+        -> Continued side: PUT SELL
+        -> Opposing side: CALL SELL (auto-closed along with its active hedge)
+        -> New regime: BULLISH
+    - If Spot <= Master Anchor - Buffer (BEARISH):
+        -> Continued side: CALL SELL
+        -> Opposing side: PUT SELL (auto-closed along with its active hedge)
+        -> New regime: BEARISH
+    - Inside Buffer Zone (Master Anchor - Buffer < Spot < Master Anchor + Buffer) [NEUTRAL]:
+        -> Continued side: BOTH (Both wings preserved untouched)
+        -> Opposing side: NONE (Zero trades auto-closed; natural theta decay harvested)
+        -> New regime: NEUTRAL
+    In 14:57 Evening Decision:
+    - Validates broker hedge ground truth on surviving short leg before marking CONTINUED overnight.
     """
+    import config as cfg
     import telegram_bot as tg
     from kite_executor import kite_executor
 
@@ -2201,100 +2214,167 @@ def execute_3pm_master_anchor_decision(nifty_spot: float = 0.0) -> dict:
     for b in active_blocks:
         block_id = b["block_id"]
         block_num = b["block_number"]
-        unit_name = b.get("anchor_unit_name") or f"M{block_num}"
+        unit_name = (b.get("anchor_unit_name") or f"M{block_num}").strip().upper()
         auto_regime = b.get("auto_regime_enabled", 1)
         unit_anchor = float(b.get("master_anchor_price") or 0.0)
 
-        if not auto_regime or unit_anchor <= 0.0:
+        # Strictly M-Units with active anchor (OS units handled by OS engine at 15:01)
+        if unit_name.startswith("OS") or not auto_regime or unit_anchor <= 0.0:
             continue
 
-        # Evaluate continuation side vs Master Anchor
-        if nifty_spot >= unit_anchor:
+        regime_buffer = float(b.get("regime_buffer") or getattr(cfg, "MASTER_DECISION_BUFFER", 15.0) or 15.0)
+        bullish_trigger = unit_anchor + regime_buffer
+        bearish_trigger = unit_anchor - regime_buffer
+
+        # Evaluate direction vs Master Anchor + Buffer Hysteresis
+        if nifty_spot >= bullish_trigger:
             continued_side = "PUT"
             opposing_side = "CALL"
             new_regime = "BULLISH"
-        else:
+        elif nifty_spot <= bearish_trigger:
             continued_side = "CALL"
             opposing_side = "PUT"
             new_regime = "BEARISH"
+        else:
+            # INSIDE ±15.0 PT BUFFER ZONE -> NEUTRAL PRESERVATION
+            continued_side = "BOTH"
+            opposing_side = "NONE"
+            new_regime = "NEUTRAL"
 
         db.update_block_regime(block_id, new_regime)
-        _log(f"[3PM_DECISION] Unit {unit_name} (Block {block_num}): Spot ₹{nifty_spot:,.2f} vs Anchor ₹{unit_anchor:,.2f} -> Continued side is {continued_side} SELL under {new_regime} regime.", "DECISION")
+        _log(f"[{pulse_id}] Unit {unit_name} (Block {block_num}): Spot ₹{nifty_spot:,.2f} vs Anchor ₹{unit_anchor:,.2f} (Buffer: ±{regime_buffer:.1f}pt, Range: ₹{bearish_trigger:,.2f} - ₹{bullish_trigger:,.2f}) -> Regime: {new_regime} | Continued: {continued_side} | Opposing: {opposing_side}", "DECISION")
 
         open_strikes = db.get_strikes_by_block(block_id, status_filter="OPEN")
         closed_count = 0
 
-        for s in open_strikes:
-            s_opt = "CALL" if s.get("option_type", "").upper() in ("CE", "CALL") else "PUT"
-            if s.get("leg_type") == "SELL":
-                if s_opt == continued_side:
-                    # RULE 6: Pre-Decision Broker Verification
-                    # Verify on Zerodha Kite broker terminal that this short leg has an active long hedge
-                    broker_hedge_confirmed = True
-                    if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
-                        try:
-                            b_pos = kite_executor.get_net_positions() or []
-                            opt_abbr = "CE" if s_opt == "CALL" else "PE"
-                            long_hedges = [p for p in b_pos if p.get("side") == "LONG" and (p.get("option_type") or "").upper() in (opt_abbr, s_opt)]
-                            if not long_hedges:
-                                broker_hedge_confirmed = False
-                        except Exception as ex_bchk:
-                            _log(f"[3PM_DECISION] Warning checking broker positions: {ex_bchk}", "WARN")
+        if opposing_side == "NONE":
+            # NEUTRAL: Both wings preserved untouched!
+            _log(f"[{pulse_id}] Unit {unit_name}: Spot ₹{nifty_spot:,.2f} is INSIDE ±{regime_buffer:.1f}pt Buffer Zone (₹{bearish_trigger:,.2f} - ₹{bullish_trigger:,.2f}). Preserving BOTH wings peacefully for natural theta decay (Zero trades closed).", "DECISION")
+            if pulse_id == "PULSE_14_57":
+                # At 14:57 evening decision, verify broker hedges for all open short legs
+                for s in open_strikes:
+                    if s.get("leg_type") == "SELL":
+                        broker_hedge_confirmed = True
+                        if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
+                            try:
+                                b_pos = kite_executor.get_net_positions() or []
+                                s_opt = "CE" if s.get("option_type", "").upper() in ("CE", "CALL") else "PE"
+                                long_hedges = [p for p in b_pos if p.get("side") == "LONG" and (p.get("option_type") or "").upper() in (s_opt, s.get("option_type", "").upper())]
+                                if not long_hedges:
+                                    broker_hedge_confirmed = False
+                            except Exception as ex_bchk:
+                                _log(f"[{pulse_id}] Warning checking broker positions: {ex_bchk}", "WARN")
 
-                    if not broker_hedge_confirmed:
-                        # DANGER: No live hedge on broker! Refuse to continue naked overnight!
-                        _log(f"[3PM_DECISION] 🚨 BLOCKED OVERNIGHT CONTINUATION of {s['strike_price']} {s['option_type']} SELL: No live Long Hedge found on Zerodha broker terminal! Auto-closing short leg to prevent naked overnight gap risk.", "ALERT")
+                        if not broker_hedge_confirmed:
+                            _log(f"[{pulse_id}] 🚨 BLOCKED OVERNIGHT CONTINUATION of {s['strike_price']} {s['option_type']} SELL: No live Long Hedge on Zerodha! Auto-closing short leg to prevent naked overnight risk.", "ALERT")
+                            res = close_strike(s["strike_id"], close_hedge=False)
+                            db.update_strike_trade_state(s["strike_id"], "CLOSED")
+                            closed_count += 1
+                        else:
+                            db.update_strike_trade_state(s["strike_id"], "CONTINUED")
+                            _log(f"[{pulse_id}] {unit_name}: {s['strike_price']} {s['option_type']} SELL CONTINUED overnight under NEUTRAL regime (Hedge Verified Active).", "OK")
+        else:
+            # Decisive BULLISH or BEARISH: Cut opposing short leg & its hedge
+            for s in open_strikes:
+                s_opt = "CALL" if s.get("option_type", "").upper() in ("CE", "CALL") else "PUT"
+                if s.get("leg_type") == "SELL":
+                    if s_opt == continued_side:
+                        if pulse_id == "PULSE_14_57":
+                            # Evening carry check
+                            broker_hedge_confirmed = True
+                            if db.get("paper_mode", "NO") == "NO" and kite_executor.ensure_logged_in():
+                                try:
+                                    b_pos = kite_executor.get_net_positions() or []
+                                    opt_abbr = "CE" if s_opt == "CALL" else "PE"
+                                    long_hedges = [p for p in b_pos if p.get("side") == "LONG" and (p.get("option_type") or "").upper() in (opt_abbr, s_opt)]
+                                    if not long_hedges:
+                                        broker_hedge_confirmed = False
+                                except Exception as ex_bchk:
+                                    _log(f"[{pulse_id}] Warning checking broker positions: {ex_bchk}", "WARN")
+
+                            if not broker_hedge_confirmed:
+                                _log(f"[{pulse_id}] 🚨 BLOCKED OVERNIGHT CONTINUATION of {s['strike_price']} {s['option_type']} SELL: No live Long Hedge on Zerodha broker! Auto-closing short leg.", "ALERT")
+                                res = close_strike(s["strike_id"], close_hedge=False)
+                                db.update_strike_trade_state(s["strike_id"], "CLOSED")
+                                closed_count += 1
+                                try:
+                                    tg.send(
+                                        f"🚨 <b>{pulse_label.upper()}: OVERNIGHT CARRYOVER BLOCKED</b> 🚨\n"
+                                        f"Blocked overnight continuation of <b>{s['strike_price']} {s['option_type']} SELL</b>.\n"
+                                        f"Reason: No protective Long Hedge found on Zerodha broker terminal!\n"
+                                        f"Action: Short leg automatically squared off at market to protect capital."
+                                    )
+                                except Exception:
+                                    pass
+                            else:
+                                db.update_strike_trade_state(s["strike_id"], "CONTINUED")
+                                _log(f"[{pulse_id}] {unit_name}: {s['strike_price']} {s['option_type']} SELL CONTINUED overnight under {new_regime} regime (Hedge Verified Active).", "OK")
+                        else:
+                            # Midday pulses (11:00, 13:00): winning short leg stays OPEN
+                            _log(f"[{pulse_id}] {unit_name}: {s['strike_price']} {s['option_type']} SELL CONTINUED under {new_regime} regime (Held Active).", "OK")
+                    elif s_opt == opposing_side:
+                        _log(f"[{pulse_id}] {unit_name}: Auto-closing opposing {s['strike_price']} {s['option_type']} SELL (strike_id={s['strike_id']}) under {pulse_label}...", "EXIT")
                         res = close_strike(s["strike_id"], close_hedge=False)
                         db.update_strike_trade_state(s["strike_id"], "CLOSED")
-                        closed_count += 1
-                        try:
-                            tg.send(
-                                f"🚨 <b>3:00 PM DECISION: OVERNIGHT CARRYOVER BLOCKED</b> 🚨\n"
-                                f"Blocked overnight continuation of <b>{s['strike_price']} {s['option_type']} SELL</b>.\n"
-                                f"Reason: No protective Long Hedge found on Zerodha broker terminal!\n"
-                                f"Action: Short leg automatically squared off at market to protect capital."
-                            )
-                        except Exception:
-                            pass
-                    else:
-                        db.update_strike_trade_state(s["strike_id"], "CONTINUED")
-                        _log(f"[3PM_DECISION] {unit_name}: {s['strike_price']} {s['option_type']} SELL CONTINUED into close/overnight under {new_regime} regime (Hedge Verified Active).", "OK")
-                elif s_opt == opposing_side:
-                    _log(f"[3PM_DECISION] {unit_name}: Auto-closing opposing {s['strike_price']} {s['option_type']} SELL (strike_id={s['strike_id']}) under 3:00 PM decision...", "EXIT")
-                    res = close_strike(s["strike_id"], close_hedge=False)
-                    db.update_strike_trade_state(s["strike_id"], "CLOSED")
-                    if res.get("ok"):
-                        closed_count += 1
-                        # Close active hedge associated with this opposing sell
-                        h_id = s.get("hedge_strike_id")
-                        if h_id:
-                            h_strike = db.get_strike(h_id)
-                            if h_strike and h_strike.get("status") == "OPEN":
-                                _log(f"[3PM_DECISION] {unit_name}: Closing associated hedge {h_strike['strike_price']} {h_strike['option_type']} (strike_id={h_id})...", "EXIT")
-                                close_strike(h_id, close_hedge=False)
-                                db.update_strike_trade_state(h_id, "CLOSED")
+                        if res.get("ok"):
+                            closed_count += 1
+                            # Also close active hedge associated with this opposing sell
+                            h_id = s.get("hedge_strike_id")
+                            if h_id:
+                                h_strike = db.get_strike(h_id)
+                                if h_strike and h_strike.get("status") == "OPEN":
+                                    _log(f"[{pulse_id}] {unit_name}: Closing associated hedge {h_strike['strike_price']} {h_strike['option_type']} (strike_id={h_id})...", "EXIT")
+                                    close_strike(h_id, close_hedge=False)
+                                    db.update_strike_trade_state(h_id, "CLOSED")
 
-        # Send Telegram alert for this unit's 3:00 PM decision
+        # Send Telegram alert for this unit's pulse decision
         try:
-            tg.alert_3pm_continuation_decision(
-                unit_name=unit_name,
-                spot_price=nifty_spot,
-                anchor_price=unit_anchor,
-                continued_side=continued_side,
-                closed_count=closed_count
-            )
+            if hasattr(tg, "alert_m_pulse_decision"):
+                tg.alert_m_pulse_decision(
+                    unit_name=unit_name,
+                    spot_price=nifty_spot,
+                    anchor_price=unit_anchor,
+                    buffer_pts=regime_buffer,
+                    continued_side=continued_side,
+                    regime=new_regime,
+                    pulse_label=pulse_label,
+                    closed_count=closed_count
+                )
+            else:
+                tg.alert_3pm_continuation_decision(
+                    unit_name=unit_name,
+                    spot_price=nifty_spot,
+                    anchor_price=unit_anchor,
+                    continued_side=continued_side,
+                    closed_count=closed_count
+                )
         except Exception as e:
-            _log(f"Failed to send 3PM decision TG alert: {e}", "WARN")
+            _log(f"Failed to send {pulse_id} TG alert: {e}", "WARN")
 
         results.append({
             "block_id": block_id,
             "unit_name": unit_name,
             "anchor": unit_anchor,
+            "buffer": regime_buffer,
+            "regime": new_regime,
             "continued_side": continued_side,
+            "opposing_side": opposing_side,
             "closed_count": closed_count
         })
 
-    return {"ok": True, "results": results, "spot": nifty_spot}
+    return {"ok": True, "pulse_id": pulse_id, "results": results, "spot": nifty_spot}
+
+
+def execute_3pm_master_anchor_decision(nifty_spot: float = 0.0) -> dict:
+    """
+    Backwards-compatible wrapper for Gurjeet Mamu's 3-Pulse Master Anchor Cadence.
+    Directs 3:00 PM calls to the 14:57 Evening Decision pulse.
+    """
+    return execute_m_pulse_decision(
+        pulse_id="PULSE_14_57",
+        pulse_label="3:00 PM Evening Decision",
+        nifty_spot=nifty_spot
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

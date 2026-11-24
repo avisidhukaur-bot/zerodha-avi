@@ -2115,14 +2115,14 @@ def render_all_units_cockpit(portfolio: dict):
         dist_color = "#15803d" if dist_pts >= 0 else "#b91c1c"
 
         if u_reg == "BULLISH":
-            reg_badge = '<span style="background:#ecfdf5;border:1px solid #10b981;color:#065f46;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">🟢 BULLISH (PE Active | CE Muted)</span>'
-            p3m_forecast = "<b>PUT SELL</b> continues overnight; CE Wing covered."
+            reg_badge = '<span style="background:#ecfdf5;border:1px solid #10b981;color:#065f46;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">🟢 BULLISH (PE Active | CE Opposing)</span>'
+            p3m_forecast = "<b>PUT SELL</b> continues; CE Wing covered at next pulse."
         elif u_reg == "BEARISH":
-            reg_badge = '<span style="background:#fef2f2;border:1px solid #ef4444;color:#991b1b;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">🔴 BEARISH (CE Active | PE Muted)</span>'
-            p3m_forecast = "<b>CALL SELL</b> continues overnight; PE Wing covered."
+            reg_badge = '<span style="background:#fef2f2;border:1px solid #ef4444;color:#991b1b;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">🔴 BEARISH (CE Active | PE Opposing)</span>'
+            p3m_forecast = "<b>CALL SELL</b> continues; PE Wing covered at next pulse."
         else:
-            reg_badge = '<span style="background:#f8fafc;border:1px solid #cbd5e1;color:#334155;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">⚪ NEUTRAL / UNSET</span>'
-            p3m_forecast = "Both sides neutral; evaluates at 15:00 IST."
+            reg_badge = f'<span style="background:#f8fafc;border:1px solid #cbd5e1;color:#334155;padding:3px 10px;border-radius:12px;font-size:0.78rem;font-weight:800;">⚪ NEUTRAL (±{u_buf:.1f}pt Buffer Zone)</span>'
+            p3m_forecast = f"Within ±{u_buf:.1f}pt Buffer: Both wings held peacefully for natural theta decay."
 
         # Separate open vs pending vs closed strikes
         strikes = u_data["strike_pnls"]
@@ -2152,7 +2152,7 @@ def render_all_units_cockpit(portfolio: dict):
                 f'Distance: <b style="color:{dist_color};">{dist_str}</b>'
                 f'</div>'
                 f'<div style="color:#475569;font-size:0.82rem;">'
-                f'⏰ 3:00 PM Continuation: {p3m_forecast}'
+                f'⏰ 3-Pulse Cadence (11:00, 13:00, 15:00): {p3m_forecast}'
                 f'</div>'
                 f'</div>'
                 f'</div>'

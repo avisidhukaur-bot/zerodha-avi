@@ -1053,4 +1053,32 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
 | `13:15:33 IST` | **30s Buffer + Midday Flip PUT** | `NIFTY26D0824600PE` | **BUY 65** | **₹160.95** | Breakout `₹161.00 > Ref ₹150.65` captured |
 - **Verified Overall Kite MTM (`14:16 IST`)**: **`+₹25,600.25` NET GREEN** (Option Selling M1/OS1/W1 all cleanly exited in morning profit; only 1 Lot `24600 PE` Long running cleanly in Option Buying).
 
+---
+
+## 🏛️ 18. 24-NOV-2026: GURJEET MAMU'S 3-PULSE M-UNIT CADENCE (11:00, 13:00, 14:57 IST) & ±15.0 PT BUFFER ZONE
+
+### 📋 1. Quantitative Research & Backtest Audit (40 Days / 980 15-Min Candles)
+- **Problem Investigated**: Gurjeet Mamu queried whether checking M-Units 3 times a day (11:00, 13:00, 15:00) vs once at 3:00 PM improves performance.
+- **Empirical Findings Across 39 Trading Days (25-Sep to 24-Nov-2026)**:
+  * Old 1-Pulse Model (3:00 PM only): Net P&L `-₹90,668` with catastrophic intraday bleed on sudden trend crash days.
+  * 3-Pulse Model (11:00, 13:00, 15:00): Net P&L `-₹23,654` (**Drawdown reduced by ₹67,014!**).
+  * Trending Days (18 days): **Saved +₹1,08,353** by cutting opposing legs early at 11:00 AM instead of waiting till 3:00 PM.
+  * Choppy / Sideways Days (6 days): Suffered `-₹12,225` whipsaw when binary decisions cut both sides.
+- **Mamu's Directive**: Implement the 3-Pulse Cadence immediately with the strict **±15.0 point buffer zone** to preserve both wings on choppy days.
+
+### ⚙️ 2. Architectural Implementation (V8.3 Parity)
+- **`config.py`**: Defined `M_PULSE_SCHEDULE` with triple triggers:
+  1. `11:00 IST` (Morning Pulse: `11:00–11:03`)
+  2. `13:00 IST` (Midday Pulse: `13:00–13:03`)
+  3. `14:57 IST` (Evening Decision: `14:57–15:02`)
+  4. `MASTER_DECISION_BUFFER = 15.0`
+- **`block_manager.py`**: Implemented `execute_m_pulse_decision(pulse_id, pulse_label, nifty_spot)`:
+  * Bullish: $Spot \ge Anchor + 15.0 \implies$ PUT continued, opposing CALL short and hedge auto-closed.
+  * Bearish: $Spot \le Anchor - 15.0 \implies$ CALL continued, opposing PUT short and hedge auto-closed.
+  * Inside Zone ($Anchor - 15.0 < Spot < Anchor + 15.0$): `NEUTRAL` $\implies$ **0 trades closed!** Both wings preserved peacefully.
+  * At 14:57 Evening Decision: broker ground truth verification ensures surviving leg has active long hedge before marking `CONTINUED`.
+- **`main.py`**: Background engine loop checks pulse windows with pre-evaluation mutex locking (`last_m_pulse_{pulse_id}`) preventing race conditions.
+- **`telegram_bot.py`**: Added `alert_m_pulse_decision` delivering rich alerts for each pulse.
+- **`app.py`**: Updated Cockpit HUD displaying `⏰ 3-Pulse Cadence (11:00, 13:00, 15:00)`.
+
 

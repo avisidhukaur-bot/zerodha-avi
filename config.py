@@ -32,6 +32,14 @@ DEFAULT_REENTRY_DISCOUNT_BUFFER = 1.0  # ₹1.00 below anchor price for re-entry
 
 # Time Windows (IST) — Uniform 15:02 Cutoff & Clean-Sweep Protocol (Gurjeet Mamu's Law)
 MARKET_START_TIME = "09:15"
+# M-Unit Master Anchor 3-Pulse Cadence (11:00, 13:00, 14:57 IST — Gurjeet Mamu's Law)
+# Triple daily pulses evaluating Spot vs Master Anchor with strict ±15.0 pt Buffer Zone Hysteresis
+M_PULSE_SCHEDULE = [
+    ("11:00", "11:03", "PULSE_11_00", "11:00 AM Morning Pulse"),
+    ("13:00", "13:03", "PULSE_13_00", "1:00 PM Midday Pulse"),
+    ("14:57", "15:02", "PULSE_14_57", "3:00 PM Evening Decision"),
+]
+MASTER_DECISION_BUFFER = 15.0       # Strict ±15.0 pt Buffer Zone
 MASTER_DECISION_TIME = "14:57"      # 2:57 PM Master Anchor Continuation Decision (M1, M2, M3)
 OS_DECISION_TIME = "15:01"          # 3:01 PM OS Option Selling Line Audit & Momentum Decision (OS1, OS2, OS3)
 ACTIVE_TRADING_CUTOFF_TIME = "15:02" # 15:02 IST: Strict cutoff for all new entries & re-entries (Gurjeet Mamu's Law)

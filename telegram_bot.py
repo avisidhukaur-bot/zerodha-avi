@@ -841,6 +841,65 @@ def test_telegram_connection() -> dict:
     return {"ok": False, "message": "Failed to send test message. Check token and chat_id."}
 
 
+def alert_m_pulse_decision(
+    unit_name: str,
+    spot_price: float,
+    anchor_price: float,
+    buffer_pts: float,
+    continued_side: str,
+    regime: str,
+    pulse_label: str = "3:00 PM Evening Decision",
+    closed_count: int = 0
+) -> bool:
+    """
+    Sends an alert for Gurjeet Mamu's 3-Pulse Master Anchor Cadence (11:00, 13:00, 14:57 IST)
+    with ±15.0 pt Buffer Zone Hysteresis.
+    """
+    today_date = datetime.now(IST).strftime("%Y-%m-%d")
+    bullish_trig = anchor_price + buffer_pts
+    bearish_trig = anchor_price - buffer_pts
+
+    if regime == "NEUTRAL":
+        icon = "⚖️"
+        cond_str = f"SPOT INSIDE ±{buffer_pts:.1f} PT BUFFER (₹{bearish_trig:,.2f} - ₹{bullish_trig:,.2f})"
+        cont_str = (
+            f"🕊️ <b>BOTH WINGS PRESERVED</b> (Harvesting natural theta decay)\n"
+            f"⚡ 0 trades closed (Sideways chop protection active)"
+        )
+    elif regime == "BULLISH":
+        icon = "🟢"
+        cond_str = f"SPOT ABOVE BULLISH TRIGGER (≥ ₹{bullish_trig:,.2f})"
+        cont_str = f"🏆 <b>CONTINUED SIDE: {continued_side} SELL</b>"
+        if closed_count > 0:
+            cont_str += f"\n⚡ Auto-Closed: <b>{closed_count} opposing trade(s) & associated hedges</b>"
+        else:
+            cont_str += "\n⚡ Opposing side clean (0 positions closed)"
+    else:  # BEARISH
+        icon = "🔴"
+        cond_str = f"SPOT BELOW BEARISH TRIGGER (≤ ₹{bearish_trig:,.2f})"
+        cont_str = f"🏆 <b>CONTINUED SIDE: {continued_side} SELL</b>"
+        if closed_count > 0:
+            cont_str += f"\n⚡ Auto-Closed: <b>{closed_count} opposing trade(s) & associated hedges</b>"
+        else:
+            cont_str += "\n⚡ Opposing side clean (0 positions closed)"
+
+    msg = (
+        f"⏰ {icon} <b>M-UNIT PULSE: {pulse_label.upper()} [{unit_name}]</b> {icon}\n"
+        f"{'='*34}\n"
+        f"Live Spot: <b>₹{spot_price:,.2f}</b> | Anchor: <b>₹{anchor_price:,.2f}</b> (±{buffer_pts:.1f}pt)\n"
+        f"Market Condition: <b>{cond_str}</b>\n\n"
+        f"{cont_str}\n"
+        f"🛡️ Protective Armor: <b>500-pt Hedge Helmet Active</b>\n"
+        f"Time: {_ist_now()}"
+    )
+    clean_pulse_key = pulse_label.replace(" ", "_").replace(":", "")
+    return send(
+        msg,
+        alert_key=f"m_pulse_{clean_pulse_key}_{unit_name}_{today_date}",
+        cooldown_sec=1800,
+    )
+
+
 def alert_3pm_continuation_decision(
     unit_name: str,
     spot_price: float,
@@ -849,23 +908,17 @@ def alert_3pm_continuation_decision(
     closed_count: int = 0
 ) -> bool:
     """
-    Sends an alert for the 3:00 PM (15:00 IST) Master Anchor Side Continuation Decision.
+    Backwards-compatible wrapper for 3:00 PM (15:00 IST) Master Anchor Side Continuation Decision.
     """
-    icon = "🟢" if continued_side == "PUT" else "🔴"
-    today_date = datetime.now(IST).strftime("%Y-%m-%d")
-    msg = (
-        f"⏰ {icon} <b>3:00 PM MASTER ANCHOR DECISION [{unit_name}]</b> {icon}\n"
-        f"{'='*32}\n"
-        f"Live Spot: <b>₹{spot_price:,.2f}</b> | Anchor: <b>₹{anchor_price:,.2f}</b>\n"
-        f"Market Condition: <b>{'SPOT ABOVE ANCHOR' if spot_price >= anchor_price else 'SPOT BELOW ANCHOR'}</b>\n\n"
-        f"🏆 <b>CONTINUED SIDE: {continued_side} SELL</b> (Holding overnight/into close)\n"
-        + (f"⚡ Auto-Closed: <b>{closed_count} opposing trade(s) & associated hedges</b>\n" if closed_count > 0 else "⚡ Opposing side was clean (0 positions closed)\n") +
-        f"🕊️ Orphan Hedges: <b>Preserved untouched</b>\n"
-        f"Time: {_ist_now()}"
-    )
-    return send(
-        msg,
-        alert_key=f"3pm_decision_{unit_name}_{today_date}",
-        cooldown_sec=3600,
+    regime = "BULLISH" if continued_side == "PUT" else "BEARISH"
+    return alert_m_pulse_decision(
+        unit_name=unit_name,
+        spot_price=spot_price,
+        anchor_price=anchor_price,
+        buffer_pts=15.0,
+        continued_side=continued_side,
+        regime=regime,
+        pulse_label="3:00 PM Evening Decision",
+        closed_count=closed_count
     )
 
