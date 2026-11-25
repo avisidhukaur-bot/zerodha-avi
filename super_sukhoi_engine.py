@@ -334,7 +334,8 @@ def deploy_autonomous_tier(
         target_premium=200.0
     )
 
-    # 3. Deploy via mature block_manager routine
+    # 3. Deploy via mature block_manager routine with explicit directional regime enforcement
+    target_regime = "BULLISH" if dir_clean == "UP" else "BEARISH"
     res = bm.deploy_or_update_m_unit(
         unit_name=u,
         expiry_date=expiry_date,
@@ -349,7 +350,8 @@ def deploy_autonomous_tier(
         pe_sell_ltp=h_pe.get("sell_ltp", 0.0),
         pe_hedge_ltp=h_pe.get("hedge_ltp", 0.0),
         sl_pct=25.0,
-        deploy_now=True
+        deploy_now=True,
+        force_regime=target_regime
     )
 
     if res.get("ok"):
@@ -452,6 +454,11 @@ def evaluate_super_sukhoi_cycle(force_eval: bool = False) -> Dict[str, Any]:
     if b_m1:
         m1_open_strikes = db.get_strikes_by_block(b_m1["block_id"], status_filter="OPEN")
         m1_still_active = len(m1_open_strikes) > 0
+
+    # ── PERMANENT INVARIANT GUARD: M1 MUST BE ACTIVELY RUNNING BEFORE M2 CAN DEPLOY ──
+    if not m1_still_active:
+        _log("Tier 1 Standby Guard: Seed Unit M1 is not active with open positions. M2 autonomous deployment held in standby.", "STANDBY")
+        return {"ok": True, "status": "M1_INACTIVE_FOR_M2"}
 
     # ── TIER 1 EVALUATION: M2 UP / M2 DOWN ──
     if not state.get("m2_deployed", False):
