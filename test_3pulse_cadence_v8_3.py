@@ -22,10 +22,12 @@ def fake_close_strike(strike_id, close_hedge=False):
 class Test3PulseCadence(unittest.TestCase):
     def setUp(self):
         db.init_db()
+        self.orig_paper_mode = db.get("paper_mode", "NO")
         self.cleanup_test_blocks()
 
     def tearDown(self):
         self.cleanup_test_blocks()
+        db.set("paper_mode", self.orig_paper_mode)
 
     def cleanup_test_blocks(self):
         blocks = db.get_all_blocks()
