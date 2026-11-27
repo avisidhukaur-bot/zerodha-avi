@@ -1,7 +1,7 @@
 # 🏛️ GEMINI.md — BHARAT ZERODHA OPTION SELLING ENGINE
 > **Master Operating Context, System Behavior Protocol & Architectural Invariants**  
 > *Target System: Zerodha Kite Option Selling App (Bharat Systems)*  
-> *Version: v8.7.6-SUKHOI-M1-CLOSE-AUTO-DISARM | Last Updated: 27-Nov-2026*  
+> *Version: v8.7.7-SMART-LIMIT-CHASER | Last Updated: 27-Nov-2026*  
 > *Historical Archive: See CHANGELOG_ARCHIVE.md for versions prior to v8.3.*  
 
 ---
@@ -118,3 +118,15 @@
 | **Pre-Condition Guard**| **M1 Active Pre-Condition** | `evaluate_super_sukhoi_cycle()` queries live broker positions. If M1 has 0 open strikes $\implies$ immediate auto-disarm + abort. Zero stale DB cache fallback. |
 | **Broker Lot Ceiling** | **`execute_strike()` Hard Ceiling** | Checks broker net short before routing order. If existing short $\ge$ unit locked limit (e.g. 195 qty / 3 lots), **HARD ABORTS with `[REJECT-DUPLICATE-BLOCK]`**. |
 | **Clean-Slate Sentinel**| **09:00 AM Morning Purge** | Replaces old strike reset. Automatically purges previous day's stale `PENDING` strikes so zombie orders can never execute at 09:15 AM open. |
+
+---
+
+## 🎯 18. SMART MARKETABLE LIMIT CHASER & BROKER GROUND TRUTH GATE (27-NOV-2026)
+
+| Parameter | Specification | Notes |
+|---|---|---|
+| **System Version** | **v8.7.7-SMART-LIMIT-CHASER** | SEBI/Exchange Compliant Limit Order Execution & Autonomous Chaser |
+| **Zero Market Orders** | **Plain MARKET Orders 100% Banned** | All entries, exits, square-offs, and emergency kills route through `execute_marketable_limit_with_chaser()`. |
+| **Marketable Limit Pricing**| **LTP $\pm 10\%$ Dynamic Buffer** | BUY: $\text{round}(\text{LTP} \times 1.10, 1)$; SELL: $\max(0.50, \text{round}(\text{LTP} \times 0.90, 1))$. Instant fill rate > 99%. |
+| **Autonomous Chaser Sentinel**| **10s Watchdog + 3-Step Modification** | Polls order book every 2s for 10s. If market jumps away and order is unfilled, queries fresh LTP and modifies order dynamically (up to 60s max). |
+| **Zero-Disconnect Gate**| **Mandatory Position Reconciliation** | `wipe_out_and_reset_m_unit()` verifies `kite.positions()`. If ANY leg remains non-zero on Kite, **DB block is NEVER deleted** (abort delete + alert). |

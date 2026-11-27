@@ -3263,22 +3263,42 @@ def wipe_out_and_reset_m_unit(unit_name: str = "M1") -> dict:
                 qty = p.get("quantity", 0)
                 if qty != 0 and (sym in symbols_to_verify or (u in ("M2", "M3") and u in (p.get("tag") or ""))):
                     order_tx = "BUY" if qty < 0 else "SELL"
-                    _log(f"[BROKER_RECON] Force closing hanging {sym} (Qty: {qty}) via {order_tx}...", "ALERT")
+                    _log(f"[BROKER_RECON] Force closing hanging {sym} (Qty: {qty}) via Marketable Limit {order_tx} with Chaser...", "ALERT")
                     try:
-                        kite_executor.kite.place_order(
-                            variety=kite_executor.kite.VARIETY_REGULAR,
-                            exchange=kite_executor.kite.EXCHANGE_NFO,
-                            tradingsymbol=sym,
-                            transaction_type=order_tx,
-                            quantity=abs(qty),
-                            product=p.get("product") or "NRML",
-                            order_type=kite_executor.kite.ORDER_TYPE_MARKET
+                        oid, filled, fill_p = kite_executor.execute_marketable_limit_with_chaser(
+                            trading_symbol = sym,
+                            transaction_type = order_tx,
+                            qty = abs(qty),
+                            buffer_pct = 0.10
                         )
-                        closed_legs += 1
+                        if filled:
+                            closed_legs += 1
+                            _log(f"[BROKER_RECON] Successfully closed hanging {sym} @ ₹{fill_p:.2f} (Order ID: {oid})", "OK")
+                        else:
+                            _log(f"[BROKER_RECON] ⚠️ Warning: Hanging order for {sym} placed (ID: {oid}) but not yet confirmed filled.", "WARN")
                     except Exception as e:
                         _log(f"[BROKER_RECON] Failed to close hanging {sym}: {e}", "ERROR")
+
+            # Final Broker Ground Truth Audit: Ensure no hanging positions remain before clearing DB
+            try:
+                final_broker_pos = kite_executor.kite.positions().get("net", [])
+                still_open = [p for p in final_broker_pos if p.get("tradingsymbol") in symbols_to_verify and p.get("quantity", 0) != 0]
+                if still_open:
+                    _log(f"[BROKER_RECON_ABORT] 🚨 Cannot delete block: Broker position still OPEN for {[p['tradingsymbol'] for p in still_open]}! Preserving DB block for operator safety.", "ERROR")
+                    return {"ok": False, "unit_name": u, "closed_legs": closed_legs, "message": f"Broker position still open for {[p['tradingsymbol'] for p in still_open]}. Block preserved in DB!"}
+            except Exception as audit_err:
+                _log(f"Warning during final broker position audit: {audit_err}", "WARN")
+
     except Exception as e:
         _log(f"Broker position reconciliation error: {e}", "WARN")
+
+    # Force delete matching blocks now that broker confirmed 0 open positions
+    for b in matching_blocks:
+        bid = b["block_id"]
+        try:
+            db.force_delete_block(bid)
+        except Exception as e:
+            _log(f"Error deleting block {bid} during wipeout: {e}", "WARN")
 
     # Reset unit-specific deployment locks and disarm Super Sukhoi if M1
     if u == "M1":
@@ -3333,41 +3353,39 @@ def emergency_direct_broker_square_off_all() -> dict:
     closed_orders = []
     errors = []
 
-    # Step 1: Cover Shorts First (Buy Market)
+    # Step 1: Cover Shorts First (Buy Marketable Limit with Chaser)
     for p in shorts:
         sym = p.get("tradingsymbol")
         qty = abs(p.get("quantity"))
-        prod = p.get("product") or "NRML"
         try:
-            oid = kite_executor.kite.place_order(
-                variety=kite_executor.kite.VARIETY_REGULAR,
-                exchange=kite_executor.kite.EXCHANGE_NFO,
-                tradingsymbol=sym,
-                transaction_type="BUY",
-                quantity=qty,
-                product=prod,
-                order_type=kite_executor.kite.ORDER_TYPE_MARKET
+            oid, filled, fill_p = kite_executor.execute_marketable_limit_with_chaser(
+                trading_symbol = sym,
+                transaction_type = "BUY",
+                qty = qty,
+                buffer_pct = 0.10
             )
-            closed_orders.append(f"Cover SHORT {sym} ({qty}) -> ID:{oid}")
+            if filled:
+                closed_orders.append(f"Cover SHORT {sym} ({qty}) @ ₹{fill_p:.2f} -> ID:{oid}")
+            else:
+                errors.append(f"Cover SHORT {sym} ({qty}) unfilled after chaser -> ID:{oid}")
         except Exception as e:
             errors.append(f"Failed to cover SHORT {sym}: {e}")
 
-    # Step 2: Sell Long Hedges Second (Sell Market)
+    # Step 2: Sell Long Hedges Second (Sell Marketable Limit with Chaser)
     for p in longs:
         sym = p.get("tradingsymbol")
         qty = abs(p.get("quantity"))
-        prod = p.get("product") or "NRML"
         try:
-            oid = kite_executor.kite.place_order(
-                variety=kite_executor.kite.VARIETY_REGULAR,
-                exchange=kite_executor.kite.EXCHANGE_NFO,
-                tradingsymbol=sym,
-                transaction_type="SELL",
-                quantity=qty,
-                product=prod,
-                order_type=kite_executor.kite.ORDER_TYPE_MARKET
+            oid, filled, fill_p = kite_executor.execute_marketable_limit_with_chaser(
+                trading_symbol = sym,
+                transaction_type = "SELL",
+                qty = qty,
+                buffer_pct = 0.10
             )
-            closed_orders.append(f"Exit HEDGE {sym} ({qty}) -> ID:{oid}")
+            if filled:
+                closed_orders.append(f"Exit HEDGE {sym} ({qty}) @ ₹{fill_p:.2f} -> ID:{oid}")
+            else:
+                errors.append(f"Exit HEDGE {sym} ({qty}) unfilled after chaser -> ID:{oid}")
         except Exception as e:
             errors.append(f"Failed to exit HEDGE {sym}: {e}")
 

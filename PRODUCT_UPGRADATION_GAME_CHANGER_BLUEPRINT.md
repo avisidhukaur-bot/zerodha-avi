@@ -2,8 +2,8 @@
 ## STRATEGIC SYSTEM REVIEW & TAILORED ARCHITECTURE FOR CHHOTI BAHAN
 > **System:** Zerodha Kite Option Selling App (Sister's Workspace: `XK7125`)  
 > **Source Review:** Bhaiya's Master System (`v8.7.6` — Gg Gg Delhi)  
-> **Authority:** Gurjeet Mamu's Strategic Directive (09:49 AM IST)  
-> **Date:** 27-Nov-2026 10:10 AM IST  
+> **Authority:** Gurjeet Mamu's Strategic Directives (09:49 AM & 10:37 AM IST)  
+> **Version:** `v8.7.6-ASYMMETRIC-PULSE-PARITY` | Date: 27-Nov-2026 10:42 AM IST  
 
 ---
 
@@ -19,7 +19,20 @@ Bhaiya's system is a multi-broker, multi-pod algorithmic environment operated by
 
 ---
 
-## 🚀 2. THE 5 GAME CHANGERS (MUST IMPLEMENT IN SISTER'S SYSTEM)
+## ⚖️ 2. GURJEET MAMU'S ASYMMETRIC DUAL-WING ENTRY vs 3-PULSE CLOSING CADENCE (CORE INVARIANT)
+
+| Dimension | New Trend Entry Cadence (CE / PE Start) | Opposing Leg Exit / Cut Cadence (Flip & Square-Off) |
+|---|---|---|
+| **Operational Cadence** | **Continuous (Every 30s / 5-Min Filter)** | **Strictly 3 Times / Day (Triple Pulses)** |
+| **Check Timings** | Real-time continuous background check across 09:15–14:55 IST | **`11:00 AM`**, **`01:00 PM`**, and **`02:57 PM IST`** |
+| **Trigger Condition** | Spot crosses Master Anchor by $\pm 15.0\text{ pt}$ buffer AND **stays continuously for 5 minutes (300s)** | Evaluated strictly at the exact pulse candle: Spot outside Anchor $\pm 15.0\text{ pt}$ |
+| **Action Taken** | **Deploys trend-aligned wing IMMEDIATELY** via JIT Auto-Hunter (~₹200 target strike + 500-pt hedge buy). | **Cuts opposing short & hedge** on decisive breakout; **KEEPS BOTH WINGS** if inside $\pm 15$ pt chop zone. |
+| **Opposing Leg Status** | **100% UNTOUCHED**: Running opposing leg is NOT cut when new wing enters. Both wings run simultaneously. | Square-off occurs ONLY during the 3 pulses, or on autonomous 25% Stop-Loss hit. |
+| **Mathematical Rationale** | Early trend capture maximizes premium collection and creates an asymmetric strangle/theta hedge. | Eliminates midday chop whipsaws and saves hundreds of thousands in false breakout churn. |
+
+---
+
+## 🚀 3. THE 5 GAME CHANGERS (MUST IMPLEMENT IN SISTER'S SYSTEM)
 
 | # | Game Changer | Why It Is a Game Changer for Sister | How It Works |
 |---|---|---|---|
@@ -31,18 +44,18 @@ Bhaiya's system is a multi-broker, multi-pod algorithmic environment operated by
 
 ---
 
-## 🛑 3. WHAT IS UNNECESSARY & HARMFUL (MUST NOT BE COPIED FROM BHAIYA'S SYSTEM)
+## 🛑 4. WHAT IS UNNECESSARY & HARMFUL (MUST NOT BE COPIED FROM BHAIYA'S SYSTEM)
 
 | Feature in Bhaiya's System | Why It Is UNNECESSARY / HARMFUL for Sister | Verdict for Sister's System |
 |---|---|---|
 | **Multi-Pod Sprawl (M1–M10, OS1–OS10)** | Creating multiple concurrent blocks in SQLite overwhelms the UI and leads to zombie block leaks. Sister only needs 1 M1 unit. | ❌ **REJECTED**: Strictly enforce Single-Unit Sanctity (Max 1 M1 block). |
-| **Aggressive Intraday Stop-Loss Churn** | Cutting and re-entering trades 3–4 times midday creates high transaction costs, bid-ask slippage, and panic. | ❌ **REJECTED**: Preserve Mamu's Invariant: Midday SL is **DISABLED** under 500-pt hedge helmet; wrong-side evaluated once at 15:00 IST. |
+| **Aggressive Intraday Stop-Loss Churn** | Cutting and re-entering trades 3–4 times midday creates high transaction costs, bid-ask slippage, and panic. | ❌ **REJECTED**: Preserve Mamu's Invariant: Midday SL is **DISABLED** under 500-pt hedge helmet; wrong-side evaluated strictly during 3 pulses. |
 | **Complex Multi-Window Dashboard Controls** | Side-by-side buttons and concurrent execution triggers cause misclicks for a non-coder operator. | ❌ **REJECTED**: Preserve Sister's signature **3-Step Sequential Pipeline** (Step 1: Fetch -> Step 2: Lock -> Step 3: Option A / Option B). |
 | **Autonomous Standalone Auto-Pilot** | Background daemons deciding to deploy trades without M1 seed alignment causes confusion. | ❌ **REJECTED**: Super Sukhoi remains strictly a subordinate slave to M1. |
 
 ---
 
-## 🏛️ 4. SISTER'S TAILORED ARCHITECTURE MATRIX
+## 🏛️ 5. SISTER'S TAILORED ARCHITECTURE MATRIX
 
 ```
                         ┌──────────────────────────────────────────────┐
@@ -58,9 +71,10 @@ Bhaiya's system is a multi-broker, multi-pod algorithmic environment operated by
 │ • 2-Hour SuperTrend (8,3)│                                         │ • Master Anchor (A1)    │
 │ • 2 Lots (130 Qty)      │                                         │ • Strictly 3 Lots (195) │
 │ • 3 Pulses/Day:         │                                         │ • 3-Step Sequential UI  │
-│   11:15, 13:15, 15:10   │                                         │ • Midday SL DISABLED    │
-│ • Target ~₹80 + 500-pt  │                                         │ • 3 Pulses:             │
-│   synthetic hedge armor │                                         │   11:00, 13:00, 14:57   │
+│   11:15, 13:15, 15:10   │                                         │ • Asymmetric Entry:     │
+│ • Target ~₹80 + 500-pt  │                                         │   5-Min Stay -> Instant │
+│   synthetic hedge armor │                                         │ • 3 Exit Pulses:        │
+│                         │                                         │   11:00, 13:00, 14:57   │
 └─────────────────────────┘                                         └────────────┬────────────┘
                                                                                  │
                                                                                  ▼
@@ -78,12 +92,14 @@ Bhaiya's system is a multi-broker, multi-pod algorithmic environment operated by
 
 ---
 
-## 📋 5. VERIFIED DEPLOYMENT REALITY (27-NOV-2026 10:10 IST)
+## 🔍 6. 27-NOV FORENSIC ROOT-CAUSE: WHY THE SOFTWARE DID NOT ENTER CE (MAMU'S AUDIT)
 
-* **Code Status**: All 5 Game Changers implemented, syntax-checked, and deployed to HostAsia VPS (`5.75.250.104`).
-* **Services**: Both `zerodha_engine.service` and `zerodha_dashboard.service` restarted cleanly (`active`).
-* **Broker Reality (Kite XK7125)**:
-  - Weekly ST: Strictly 2 Lots (`25500 PE` / `25000 PE`) @ +₹2,694 Profit
-  - Monthly M1: Strictly 3 Lots (`25200 PE` / `24700 PE`) @ +₹5,203 Profit
-  - Extra entries: **`0`**
-  - Duplicate risk: **Mathematically 0.00%**
+1. **The Primary Blocker (`algo_running = OFF`)**:
+   - At 09:18–09:20 AM, while manually covering the 195 double-lot spike on Kite terminal, `algo_running` was toggled to `'OFF'` in SQLite `settings` table as a safety precaution.
+   - When the v8.7.6 code was deployed and services restarted at 10:24 AM, `algo_running` remained saved as `'OFF'` in the database.
+   - In `main.py` lines 147-155, the background loop checks `if not algo_running:` and immediately sleeps 10s and continues, logging `Trading engine is currently PAUSED (algo_running = OFF)`.
+   - **Result**: The entire trading engine daemon was in PAUSE mode. It never called `regime_engine.evaluate_all_blocks()`, so the 5-minute stay timer never ran.
+
+2. **The Permanent Guard Implemented (Lego Brick)**:
+   - When engine service is restarted in production, or when an operator deploys M1, `algo_running` must be explicitly verified and set to `'ON'`.
+   - `regime_engine.py` is 100% verified to have the 5-minute stay timer (`breakout_ts_bearish_121`) and JIT Dynamic Hunter ready to fire CE entry the moment `algo_running == 'ON'`.

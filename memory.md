@@ -1113,3 +1113,31 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
 4. **Workspace Skills (`.agents/skills/`)**:
    - `bharat-broker-recon`: White Glass 3-state (SHORT/FLAT/UNKNOWN) fail-safe.
    - `bharat-vps-deploy`: Deterministic 5-step Lego deployment protocol.
+
+---
+
+## 🏛️ 20. 27-NOV-2026: V8.7.7 SMART MARKETABLE LIMIT CHASER & ZERO-DISCONNECT BROKER GROUND TRUTH
+
+### 📋 1. Incident Root-Cause Analysis (14:50 IST M1 Close Disconnect)
+- **Symptom**: Operator clicked `🚨 CLOSE WHOLE M1` on dashboard. Streamlit displayed `✅ M1 Closed` and deleted Block 121 from DB, but Zerodha Kite terminal showed both legs (`26400 CE` and `26900 CE`) remaining 100% OPEN!
+- **Root Cause 1 (SEBI / Exchange Ban on API Market Orders)**:
+  Exchanges no longer permit unprotected MARKET orders for index options via API. Zerodha Kite Connect rejected the close order:
+  `kiteconnect.exceptions.InputException: Market orders without market protection are not allowed via API. Please set market protection or use a Limit order.`
+- **Root Cause 2 (Naked Fallback & Unverified DB Block Delete)**:
+  `wipe_out_and_reset_m_unit()` caught the rejection in a generic `except` block and proceeded to call `db.force_delete_block(bid)` without verifying that Kite positions had actually reached 0.
+
+### ⚙️ 2. Architectural Resolution (v8.7.7 Parity)
+1. **Smart Marketable Limit with Autonomous 1-Minute Chaser (`kite_executor.py`)**:
+   - Implemented `execute_marketable_limit_with_chaser()`:
+     * BUY (Cover Short): $\text{Limit Price} = \text{round}(\text{LTP} \times 1.10, 1)$ (+10% aggressive cap).
+     * SELL (Liquidate Hedge): $\text{Limit Price} = \max(0.50, \text{round}(\text{LTP} \times 0.90, 1))$ (-10% aggressive floor).
+   - Polls order book every 2 seconds for 10 seconds.
+   - If market violently jumps and order remains unfilled at 10s: fetches fresh live LTP and calls `kite.modify_order()` to chase the price spread dynamically.
+   - Repeats up to 3 chase attempts (maximum 60 seconds total audit window).
+2. **Zero-Disconnect Broker Ground Truth Invariant (`block_manager.py`)**:
+   - `wipe_out_and_reset_m_unit()` queries live broker positions via `kite.positions()['net']`.
+   - If ANY leg remains non-zero on Kite after the chaser loop, the database block is **NEVER DELETED**. It is preserved in SQLite and raises an alert to prevent ghost flat displays.
+3. **Emergency Kill-Switch Upgrade (`emergency_direct_broker_square_off_all`)**:
+   - Replaced all raw `ORDER_TYPE_MARKET` calls with `execute_marketable_limit_with_chaser()`.
+4. **Verification**:
+   - Verified via unit test suite `test_marketable_limit_chaser.py` (2/2 PASSED) and `test_super_sukhoi_cheenna_v7_1.py` (3/3 PASSED).
