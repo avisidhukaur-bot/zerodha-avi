@@ -286,6 +286,8 @@ def kill_block(block_id: int) -> dict:
     u_name = (block.get("anchor_unit_name") or "").strip().upper()
     if u_name.startswith("M"):
         db.unlock_m_unit_settings(u_name)
+        if u_name == "M1":
+            _auto_disarm_sukhoi_if_m1(block_id, unit_name="M1", reason="M1 Block killed via kill_block()")
     elif u_name.startswith("OS"):
         db.unlock_os_settings()
 
@@ -385,6 +387,25 @@ def archive_block(block_id: int) -> dict:
     return {"ok": False, "message": f"Cannot archive block {block_id} -- open strikes exist."}
 
 
+def _auto_disarm_sukhoi_if_m1(block_id: int = None, unit_name: str = "M1", reason: str = "M1 has 0 open strikes"):
+    """
+    Hard-Coded Invariant (v8.7.6 Parity):
+    If M1 is closed/wiped out or has 0 open strikes, automatically disarm Super Sukhoi,
+    purge all anchor keys from settings, and alert Telegram.
+    """
+    try:
+        u = str(unit_name).strip().upper() if unit_name else ""
+        if block_id and not u:
+            b = db.get_block(block_id)
+            if b:
+                u = (b.get("anchor_unit_name") or "").strip().upper()
+        if u == "M1":
+            import super_sukhoi_engine
+            super_sukhoi_engine.auto_disarm_super_sukhoi(reason)
+    except Exception as e:
+        _log(f"Error auto-disarming Super Sukhoi on M1 close: {e}", "WARN")
+
+
 def delete_block(block_id: int) -> dict:
     """
     Deletes a block and all its strikes/legs.
@@ -397,6 +418,8 @@ def delete_block(block_id: int) -> dict:
             u_name = (block.get("anchor_unit_name") or "").strip().upper()
             if u_name.startswith("M"):
                 db.unlock_m_unit_settings(u_name)
+                if u_name == "M1":
+                    _auto_disarm_sukhoi_if_m1(block_id, unit_name="M1", reason="M1 Block deleted via delete_block()")
             elif u_name.startswith("OS"):
                 db.unlock_os_settings()
         return {"ok": True, "message": f"Block {block_id} deleted."}
@@ -792,6 +815,29 @@ def execute_strike(strike_id: int, ignore_cooldown: bool = False, **kwargs) -> d
 
     if strike["status"] not in ("PENDING", "CLOSED"):
         return {"ok": False, "message": f"Strike {strike_id} status is {strike['status']} -- only PENDING or CLOSED strikes can be executed."}
+
+    # ── HARD BROKER LOT CEILING & ANTI-DUPLICATE FIREWALL (v8.7.6 Parity) ──
+    if strike["leg_type"] == "SELL":
+        symbol_info = _resolve_symbol(strike)
+        if symbol_info:
+            target_tsym = symbol_info["trading_symbol"]
+            try:
+                live_positions = kite_executor.get_positions()
+                existing_short_qty = next(
+                    (abs(p.get("quantity", 0)) for p in live_positions if p.get("tradingsymbol") == target_tsym and p.get("quantity", 0) < 0),
+                    0
+                )
+                max_allowed_qty = int(strike.get("lots", 3) or 3) * 65
+                if existing_short_qty >= max_allowed_qty:
+                    _log(f"[ABORT-DUPLICATE] Broker already holds {existing_short_qty} qty short for {target_tsym} (Max allowed: {max_allowed_qty}). Hard aborting duplicate execution!", "ALERT")
+                    db.update_strike_status(strike_id, "CLOSED")
+                    return {
+                        "ok": False,
+                        "reason": "DUPLICATE_POSITION_ALREADY_EXISTS_ON_BROKER",
+                        "message": f"Broker already holds {existing_short_qty} short contracts for {target_tsym}."
+                    }
+            except Exception as e:
+                _log(f"[LOT-CEILING-CHECK-ERR] Error inspecting broker ground truth: {e}", "WARN")
 
     status_before = strike["status"]
 
@@ -1510,6 +1556,8 @@ def close_strike(strike_id: int, close_hedge: bool = True, is_manual: bool = Fal
     ]
     if not remaining_open and block:
         u_name = (block.get("anchor_unit_name") or "").strip().upper()
+        if u_name == "M1":
+            _auto_disarm_sukhoi_if_m1(strike["block_id"], unit_name="M1", reason="M1 has 0 open strikes remaining after close_strike()")
         # [INVARIANT]: Do NOT auto-unlock pod settings on trade closure!
         # Pod settings must remain locked so subsequent continuation / auto-reentry operates autonomously.
         # Unlocking is only done manually via the Dashboard UI or during wipe_out_and_reset.
@@ -1652,6 +1700,8 @@ def close_hedge_strike_now(strike_id: int) -> dict:
     ]
     if not remaining_open and block:
         u_name = (block.get("anchor_unit_name") or "").strip().upper()
+        if u_name == "M1":
+            _auto_disarm_sukhoi_if_m1(strike["block_id"], unit_name="M1", reason="M1 has 0 open strikes remaining after close_strike()")
         # [INVARIANT]: Do NOT auto-unlock pod settings on trade closure!
         # Pod settings must remain locked so subsequent continuation / auto-reentry operates autonomously.
         # Unlocking is only done manually via the Dashboard UI or during wipe_out_and_reset.
@@ -1979,50 +2029,25 @@ def sync_positions_with_broker() -> int:
 
 def run_daily_strike_reset() -> int:
     """
-    At the start of a trading day, scans all ACTIVE blocks.
-    For any strike in these blocks that is in 'CLOSED' status,
-    resets its status (and its linked hedge strike status) back to 'PENDING'.
-    
-    Returns the count of strikes reset.
+    Morning Clean-Slate Sentinel (v8.7.6 Parity):
+    Instead of reviving old closed strikes, purges obsolete PENDING strikes from previous days
+    and cleans empty blocks so zombie trades can NEVER fire at market open!
     """
-    from datetime import datetime
-    import pytz
-    IST = pytz.timezone("Asia/Kolkata")
-    
-    reset_count = 0
+    _log("[DAILY-SENTINEL] Morning Clean-Slate Sentinel: Auditing database for stale pending strikes...", "INFO")
     try:
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-        for b in active_blocks:
-            strikes = db.get_strikes_by_block(b["block_id"])
-            for s in strikes:
-                if s["leg_type"] == "SELL" and s["status"] == "CLOSED":
-                    # Double check: is there any exit time from a previous day?
-                    legs = db.get_legs_by_strike(s["strike_id"])
-                    is_closed_before_today = False
-                    today_str = datetime.now(IST).strftime("%Y-%m-%d")
-                    if legs:
-                        # db.get_legs_by_strike returns legs ordered by leg_id DESC (most recent first)
-                        most_recent_leg = legs[0]
-                        exit_time = most_recent_leg.get("exit_time", "")
-                        if exit_time:
-                            exit_date = exit_time.split(" ")[0]
-                            if exit_date != today_str:
-                                is_closed_before_today = True
-                    
-                    if is_closed_before_today or not legs:
-                        # Reset both the SELL strike and its linked HEDGE_BUY strike to PENDING
-                        db.update_strike_status(s["strike_id"], "PENDING")
-                        reset_count += 1
-                        _log(f"[DAILY-RESET] Reset SELL strike {s['strike_id']} ({s['strike_price']} {s['option_type']}) to PENDING.", "INFO")
-                        
-                        hedge_id = s.get("hedge_strike_id")
-                        if hedge_id:
-                            db.update_strike_status(hedge_id, "PENDING")
-                            reset_count += 1
-                            _log(f"[DAILY-RESET] Reset linked HEDGE strike {hedge_id} to PENDING.", "INFO")
+        conn = db._conn()
+        cur = conn.cursor()
+        # Mark stale PENDING strikes from previous days as EXPIRED
+        cur.execute("UPDATE strikes SET status='EXPIRED', trade_state='EXPIRED' WHERE status='PENDING' AND DATE(created_at) < DATE('now', 'localtime')")
+        expired_count = cur.rowcount
+        conn.commit()
+        conn.close()
+        if expired_count > 0:
+            _log(f"[DAILY-SENTINEL] Purged {expired_count} stale PENDING strike(s) from previous days.", "ALERT")
+        return expired_count
     except Exception as e:
-        _log(f"Error in run_daily_strike_reset: {e}", "ERROR")
-    return reset_count
+        _log(f"Error in morning clean-slate sentinel: {e}", "ERROR")
+        return 0
 
 
 def rearm_block_strikes(block_id: int) -> dict:
@@ -3255,11 +3280,16 @@ def wipe_out_and_reset_m_unit(unit_name: str = "M1") -> dict:
     except Exception as e:
         _log(f"Broker position reconciliation error: {e}", "WARN")
 
-    # Reset unit-specific deployment locks
-    if u == "M2":
+    # Reset unit-specific deployment locks and disarm Super Sukhoi if M1
+    if u == "M1":
+        _auto_disarm_sukhoi_if_m1(unit_name="M1", reason="M1 Unit manually wiped out and reset")
+        db.set("m_locked_anchor_M1", "0.0")
+    elif u == "M2":
         db.set("super_sukhoi_m2_deployed", "0")
+        db.set("m_locked_anchor_M2", "0.0")
     elif u == "M3":
         db.set("super_sukhoi_m3_deployed", "0")
+        db.set("m_locked_anchor_M3", "0.0")
 
     db.unlock_m_unit_settings(u)
     return {"ok": True, "unit_name": u, "closed_legs": closed_legs, "message": f"{u} wiped out and reset to clean Draft Mode."}

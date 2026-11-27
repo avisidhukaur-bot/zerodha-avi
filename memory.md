@@ -1082,3 +1082,34 @@ $$\text{SL Trigger Price} = \text{Actual Broker Fill Price} \times 1.25 \quad (+
 - **`app.py`**: Updated Cockpit HUD displaying `⏰ 3-Pulse Cadence (11:00, 13:00, 15:00)`.
 
 
+
+---
+
+## 🦅 19. 27-NOV-2026: V8.7.6 SUPER SUKHOI M1-CLOSE-AUTO-DISARM & BROKER LOT CEILING PARITY RELEASE
+
+### 📋 1. Executive Summary & Incident Post-Mortem
+- **09:15 AM Incident (27-Nov-2026)**:
+  At market open (09:15:07 IST), Zerodha Kite terminal showed M1 Put positions suddenly double from 3 Lots (195 Qty) to 6 Lots (390 Qty).
+  - Immediate Remediation: At 09:18–09:20 AM, extra 195 Qty of `25200 PE` covered @ 180.1 and `24700 PE` sold @ 89.4 via Marketable Limit orders. Position restored to strictly 3 Lots.
+  - Background engine service stopped (`systemctl stop zerodha_engine.service`), `algo_running = 'OFF'`, `super_sukhoi_active = '0'`.
+
+### 🔍 2. Deep Forensic Root Cause Analysis
+1. **The Ghost Block in SQLite**: On 26-Nov, Super Sukhoi spawned Block 122 (M2) due to a stale anchor (`25225.0`). When Super Sukhoi auto-pilot was turned off, Block 122 remained in `blocks` table with `status = 'ACTIVE'` and Strike 385 in `status = 'PENDING'`.
+2. **The 09:00 AM Strike Resurrect Bug**: Legacy `run_daily_strike_reset()` scanned active blocks every morning at 09:00 AM and reset all `CLOSED` strikes back to `PENDING`!
+3. **Missing Broker Lot Ceiling in `execute_strike()`**: At 09:15:07 AM, `pnl_engine.py` saw Strike 385 in `PENDING` status, evaluated regime as Bullish, and called `execute_strike(385)` without checking whether Zerodha Kite already held 195 Qty.
+
+### 🛡️ 3. Permanent Architectural Solutions (v8.7.6 Parity)
+1. **`super_sukhoi_engine.py`**:
+   - Added `auto_disarm_super_sukhoi(reason)`: Automatically sets `super_sukhoi_active = '0'`, purges all anchor/deployed/cooldown keys from settings, and requires explicit manual restart.
+   - Removed all stale database seed fallbacks in `get_super_sukhoi_status()`.
+   - Hardened `evaluate_super_sukhoi_cycle()`: Queries live active M1 block and verifies open strikes. If M1 is inactive or closed, immediately calls `auto_disarm_super_sukhoi()` and aborts.
+2. **`block_manager.py`**:
+   - Added `_auto_disarm_sukhoi_if_m1()`: Hooked into `close_strike()` (when remaining open strikes == 0), `kill_block()`, `delete_block()`, and `wipe_out_and_reset_m_unit()`.
+   - Hard Broker Lot Ceiling in `execute_strike()`: Queries `kite_executor.get_positions()`. If existing short qty $\ge$ unit locked limit (e.g. 195 qty / 3 lots), hard aborts with `[ABORT-DUPLICATE]`.
+   - Morning Clean-Slate Sentinel: Replaced `run_daily_strike_reset()`. Now audits DB at 09:00 AM and marks stale previous-day `PENDING` strikes as `EXPIRED`.
+3. **Lean Context Architecture**:
+   - `GEMINI.md` made ultra-lean (<150 lines), retaining only operational rules, port map, and v8.3 / v8.7.6.
+   - All older historical changelogs moved to `CHANGELOG_ARCHIVE.md`.
+4. **Workspace Skills (`.agents/skills/`)**:
+   - `bharat-broker-recon`: White Glass 3-state (SHORT/FLAT/UNKNOWN) fail-safe.
+   - `bharat-vps-deploy`: Deterministic 5-step Lego deployment protocol.

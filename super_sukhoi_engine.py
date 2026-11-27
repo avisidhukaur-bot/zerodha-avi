@@ -87,6 +87,27 @@ def compute_triggers(seed_anchor: float, m2_anchor: float = 0.0) -> Dict[str, fl
 # 2. STATUS & TELEMETRY RADAR
 # ─────────────────────────────────────────────────────────────────────────────
 
+def auto_disarm_super_sukhoi(reason: str = "M1 Closed") -> None:
+    """
+    Hard-Coded Invariant (v8.7.6 Parity):
+    Automatically shuts OFF Super Sukhoi, purges all stale anchor/trigger keys from DB,
+    and ensures it will NEVER auto-resume until the operator manually clicks Activate.
+    """
+    db.set("super_sukhoi_active", "0")
+    db.set("super_sukhoi_m1_anchor", "0.0")
+    db.set("super_sukhoi_m2_anchor", "0.0")
+    db.set("super_sukhoi_m3_anchor", "0.0")
+    db.set("super_sukhoi_m2_deployed", "0")
+    db.set("super_sukhoi_m3_deployed", "0")
+    db.set("super_sukhoi_m2_cooldown_until", "0.0")
+    db.set("super_sukhoi_m3_cooldown_until", "0.0")
+    _log(f"[SUPER_SUKHOI] 🛑 AUTO-DISARMED: {reason}. All anchor memory purged.", "ALERT")
+    try:
+        tg.send(f"🛑 <b>[SUPER SUKHOI AUTO-DISARMED]</b>\nReason: {reason}\nStatus: OFF (Manual restart required).")
+    except Exception:
+        pass
+
+
 def get_super_sukhoi_status() -> Dict[str, Any]:
     """Returns complete real-time status and telemetry for the Cockpit HUD card."""
     state = db.get_super_sukhoi_state()
@@ -94,27 +115,22 @@ def get_super_sukhoi_status() -> Dict[str, Any]:
     if live_spot <= 0:
         live_spot = float(db.get("last_nifty_spot_price", "23250.0") or "23250.0")
 
-    # Resolve M1 anchor: from state, or M1 active block, or M1 locked settings
-    m1_anchor = float(state.get("m1_anchor", 0.0))
-    if m1_anchor <= 0:
-        m1_settings = db.get_m_unit_settings("M1") or {}
-        m1_anchor = float(m1_settings.get("anchor_price", 0.0) or 0.0)
-    if m1_anchor <= 0:
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-        b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
-        if b_m1:
-            m1_anchor = float(b_m1.get("master_anchor_price", 0.0) or 0.0)
+    # Resolve M1 anchor: ALWAYS prioritize live active M1 block ground truth first!
+    m1_anchor = 0.0
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+    b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
+    if b_m1:
+        m1_anchor = float(b_m1.get("master_anchor_price", 0.0) or 0.0)
+    elif state.get("active", False):
+        m1_anchor = float(state.get("m1_anchor", 0.0) or 0.0)
 
     # Resolve dynamic M1 lots: check state, settings, active block, fallback to 3
     m1_lots = int(state.get("m1_lots", 0) or 0)
     if m1_lots <= 0:
         m1_settings = db.get_m_unit_settings("M1") or {}
         m1_lots = int(m1_settings.get("lots", 0) or 0)
-    if m1_lots <= 0:
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-        b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
-        if b_m1:
-            m1_lots = int(b_m1.get("lots", 0) or 0)
+    if m1_lots <= 0 and b_m1:
+        m1_lots = int(b_m1.get("lots", 0) or 0)
     if m1_lots <= 0:
         m1_lots = 3
 
@@ -409,56 +425,44 @@ def evaluate_super_sukhoi_cycle(force_eval: bool = False) -> Dict[str, Any]:
     if live_spot <= 0:
         return {"ok": False, "status": "NO_SPOT", "message": "Could not fetch live Nifty Spot."}
 
-    # 4. Resolve M1 Anchor
-    m1_anchor = float(state.get("m1_anchor", 0.0))
+    # 4. Resolve M1 Anchor: ALWAYS prioritize live active M1 block ground truth first!
+    # (v8.7.6 Parity: Hard-Coded Pre-Condition Guard & Auto-Disarm on M1 Inactive)
+    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
+    b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
+    
+    m1_open_strikes = []
+    if b_m1:
+        m1_open_strikes = db.get_strikes_by_block(b_m1["block_id"], status_filter="OPEN")
+
+    if not b_m1 or len(m1_open_strikes) == 0:
+        auto_disarm_super_sukhoi("M1 Unit is closed, missing, or has 0 open strikes on broker.")
+        return {"ok": False, "status": "M1_INACTIVE_DISARMED", "message": "Super Sukhoi auto-disarmed because M1 is not active."}
+
+    m1_anchor = float(b_m1.get("master_anchor_price", 0.0) or 0.0)
     if m1_anchor <= 0:
-        m1_settings = db.get_m_unit_settings("M1") or {}
-        m1_anchor = float(m1_settings.get("anchor_price", 0.0) or 0.0)
-    if m1_anchor <= 0:
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-        b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
-        if b_m1:
-            m1_anchor = float(b_m1.get("master_anchor_price", 0.0) or 0.0)
-    if m1_anchor <= 0:
-        return {"ok": False, "status": "NO_ANCHOR", "message": "M1 Seed Anchor is not set."}
+        auto_disarm_super_sukhoi("M1 Unit anchor price is invalid (<=0).")
+        return {"ok": False, "status": "NO_ANCHOR_DISARMED", "message": "M1 Seed Anchor is invalid."}
 
     # Resolve dynamic M1 lots
-    lots = int(state.get("m1_lots", 0) or 0)
+    lots = int(b_m1.get("lots", 0) or 0)
+    if lots <= 0:
+        lots = int(state.get("m1_lots", 0) or 0)
     if lots <= 0:
         m1_settings = db.get_m_unit_settings("M1") or {}
-        lots = int(m1_settings.get("lots", 0) or 0)
-    if lots <= 0:
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-        b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
-        if b_m1:
-            lots = int(b_m1.get("lots", 0) or 0)
+        lots = int(m1_settings.get("lots", 3) or 3)
     if lots <= 0:
         lots = 3
 
-    exp = state.get("m1_expiry", "")
+    exp = b_m1.get("expiry_date", "") or state.get("m1_expiry", "")
 
     # Resolve M2 anchor if M2 is deployed
     m2_anchor = float(state.get("m2_anchor", 0.0) or 0.0)
     if m2_anchor <= 0 and state.get("m2_deployed", False):
-        active_blocks = db.get_all_blocks(status_filter="ACTIVE")
         b_m2 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M2"), None)
         if b_m2:
             m2_anchor = float(b_m2.get("master_anchor_price", 0.0) or 0.0)
 
     triggers = compute_triggers(m1_anchor, m2_anchor=m2_anchor)
-
-    # 5. Check M1 active status
-    active_blocks = db.get_all_blocks(status_filter="ACTIVE")
-    b_m1 = next((b for b in active_blocks if (b.get("anchor_unit_name") or "").strip().upper() == "M1"), None)
-    m1_still_active = False
-    if b_m1:
-        m1_open_strikes = db.get_strikes_by_block(b_m1["block_id"], status_filter="OPEN")
-        m1_still_active = len(m1_open_strikes) > 0
-
-    # ── PERMANENT INVARIANT GUARD: M1 MUST BE ACTIVELY RUNNING BEFORE M2 CAN DEPLOY ──
-    if not m1_still_active:
-        _log("Tier 1 Standby Guard: Seed Unit M1 is not active with open positions. M2 autonomous deployment held in standby.", "STANDBY")
-        return {"ok": True, "status": "M1_INACTIVE_FOR_M2"}
 
     # ── TIER 1 EVALUATION: M2 UP / M2 DOWN ──
     if not state.get("m2_deployed", False):
